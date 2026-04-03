@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Sora:wght@400;600;800&display=swap');
+
+:root {
+  --red:    #E53935;
+  --blue:   #1A73E8;
+  --green:  #34A853;
+  --yellow: #F9A825;
+  --dark:   #0D1117;
+  --card:   #161B22;
+  --border: #30363D;
+  --text:   #E6EDF3;
+  --muted:  #8B949E;
+
+  --amb:    #E53935;
+  --fire:   #FF6D00;
+  --police: #1565C0;
+  --rescue: #9C27B0;
+  --hazmat: #F57F17;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Sora', sans-serif;
+  background: var(--dark);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── scrollbars ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--dark); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── utility chips ── */
+.chip { padding: 2px 8px; border-radius: 7px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.chip-critical { background: rgba(229,57,53,.12); color: #E53935; }
+.chip-high     { background: rgba(255,109,0,.10);  color: #FF6D00; }
+.chip-medium   { background: rgba(249,168,37,.10); color: #F9A825; }
+.chip-low      { background: rgba(52,168,83,.10);  color: #34A853; }
+.chip-pending  { background: rgba(249,168,37,.12); color: #F9A825; }
+.chip-accepted { background: rgba(52,168,83,.12);  color: var(--green); }
+.chip-rejected { background: rgba(229,57,53,.12);  color: var(--red); }
+.chip-waiting  { background: rgba(139,148,158,.1); color: var(--muted); }
+
+/* ── mono font helper ── */
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ── pulse animation ── */
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+@keyframes selFlash { 0%,100%{box-shadow:0 0 0 0 rgba(26,115,232,.5)} 50%{box-shadow:0 0 0 6px rgba(26,115,232,0)} }
+@keyframes livePulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.6)} }
