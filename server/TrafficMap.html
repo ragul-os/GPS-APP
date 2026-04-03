@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Traffic Route - Real Per-Segment Colors</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+
+    #sidebar {
+      width: 320px; min-width: 280px; background: #fff;
+      border-right: 1px solid #dde1e7; display: flex;
+      flex-direction: column; z-index: 10;
+      box-shadow: 2px 0 12px rgba(0,0,0,0.1);
+    }
+
+    .sidebar-header { background: #1a73e8; color: white; padding: 14px 18px; }
+    .sidebar-header h2 { font-size: 15px; font-weight: 600; }
+    .sidebar-header p  { font-size: 11px; opacity: 0.8; margin-top: 2px; }
+
+    .sidebar-body { padding: 14px 16px; flex: 1; overflow-y: auto; }
+
+    /* API key */
+    .api-section { background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+    .api-section label { display: block; font-size: 10px; font-weight: 700; color: #5d4037; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .api-section input { width: 100%; border: 1.5px solid #ffe082; border-radius: 6px; padding: 7px 9px; font-size: 12px; color: #333; outline: none; font-family: monospace; background: #fffde7; }
+
+    /* Info box */
+    .info-box { border-radius: 8px; padding: 9px 11px; font-size: 11px; line-height: 1.65; margin-bottom: 12px; }
+    .info-box.blue  { background: #e3f2fd; border: 1px solid #90caf9; color: #0d47a1; }
+    .info-box.green { background: #e8f5e9; border: 1px solid #a5d6a7; color: #1b5e20; }
+    .info-box.red   { background: #fce4ec; border: 1px solid #f48fb1; color: #880e4f; }
+
+    /* Input method tabs */
+    .input-tabs { display: flex; border: 1.5px solid #1a73e8; border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+    .input-tab { flex: 1; padding: 8px 4px; text-align: center; font-size: 11px; font-weight: 600; cursor: pointer; color: #1a73e8; background: #fff; border: none; transition: all 0.2s; }
+    .input-tab.active { background: #1a73e8; color: #fff; }
+
+    /* Type panel */
+    .input-group { margin-bottom: 11px; }
+    .input-group label { display: block; font-size: 10px; font-weight: 700; color: #666; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .input-wrapper { display: flex; align-items: center; border: 1.5px solid #dde1e7; border-radius: 8px; background: #fafbfc; transition: border-color 0.2s; }
+    .input-wrapper:focus-within { border-color: #1a73e8; background: #fff; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; margin: 0 9px; flex-shrink: 0; }
+    .dot-a { background: #1a73e8; }
+    .dot-b { background: #ea4335; }
+    .input-wrapper input { flex: 1; border: none; background: transparent; padding: 9px 9px 9px 0; font-size: 13px; color: #333; outline: none; }
+
+    /* Point cards (click mode) */
+    .point-card {
+      display: flex; align-items: center; gap: 10px;
+      border: 1.5px solid #dde1e7; border-radius: 8px;
+      padding: 9px 11px; margin-bottom: 8px; background: #fafbfc;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .point-card:hover { border-color: #1a73e8; background: #f0f7ff; }
+    .point-card.set { border-color: #34a853; background: #f1fdf4; }
+    .point-card.active-pick { border-color: #1a73e8; background: #e8f4fd; animation: pulse-border 1.2s infinite; }
+    .point-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+    .point-icon-a { background: #e3f2fd; }
+    .point-icon-b { background: #fce4ec; }
+    .point-text { flex: 1; min-width: 0; }
+    .point-label { font-size: 10px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
+    .point-addr { font-size: 12px; color: #333; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .point-addr.placeholder { color: #aaa; font-style: italic; }
+    .point-clear { font-size: 15px; color: #bbb; cursor: pointer; padding: 2px 4px; border-radius: 4px; flex-shrink: 0; }
+    .point-clear:hover { color: #ea4335; background: #fce8e6; }
+
+    @keyframes pulse-border {
+      0%,100% { box-shadow: 0 0 0 0 rgba(26,115,232,0.3); }
+      50%      { box-shadow: 0 0 0 4px rgba(26,115,232,0.12); }
+    }
+
+    /* Swap */
+    .swap-btn { display: flex; align-items: center; justify-content: center; width: 100%; padding: 7px; border: 1.5px solid #dde1e7; border-radius: 8px; background: #fafbfc; cursor: pointer; font-size: 12px; color: #555; gap: 6px; margin-bottom: 10px; transition: all 0.2s; }
+    .swap-btn:hover { background: #eef2ff; border-color: #1a73e8; color: #1a73e8; }
+
+    /* Buttons */
+    .btn-route { width: 100%; padding: 10px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    .btn-route:hover { background: #1558b0; }
+    .btn-clear { width: 100%; padding: 8px; background: transparent; color: #ea4335; border: 1.5px solid #ea4335; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-top: 7px; }
+    .btn-clear:hover { background: #fce8e6; }
+
+    /* Route info */
+    #route-info { display: none; background: #f0f7ff; border: 1px solid #c5dffb; border-radius: 8px; padding: 11px; margin-top: 10px; }
+    #route-info h4 { font-size: 11px; font-weight: 700; color: #1a73e8; margin-bottom: 7px; }
+    .info-row { display: flex; justify-content: space-between; font-size: 12px; color: #555; padding: 3px 0; border-bottom: 1px solid #e3eef9; }
+    .info-row:last-child { border-bottom: none; }
+    .info-row span:last-child { font-weight: 600; color: #222; }
+
+    #status-msg { font-size: 11px; margin-top: 7px; min-height: 15px; }
+    #status-msg.loading { color: #1a73e8; }
+    #status-msg.error   { color: #ea4335; }
+    #status-msg.success { color: #34a853; }
+
+    .divider { height: 1px; background: #eee; margin: 12px 0; }
+
+    /* Toggle */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+    .toggle-label { font-size: 12px; color: #444; }
+    .toggle { position: relative; width: 40px; height: 21px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider-t { position: absolute; inset: 0; background: #ccc; border-radius: 21px; cursor: pointer; transition: background 0.2s; }
+    .slider-t:before { content: ''; position: absolute; width: 15px; height: 15px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: transform 0.2s; }
+    .toggle input:checked + .slider-t { background: #1a73e8; }
+    .toggle input:checked + .slider-t:before { transform: translateX(19px); }
+
+    /* Legend */
+    .section-label { font-size: 10px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 11px; color: #444; }
+    .leg-swatch { width: 36px; height: 6px; border-radius: 3px; flex-shrink: 0; position: relative; }
+
+    /* API badge */
+    .api-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; margin-left: 4px; vertical-align: middle; }
+    .badge-v2  { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+    .badge-v1  { background: #fff3e0; color: #e65100; border: 1px solid #ffcc80; }
+
+    #map { flex: 1; height: 100%; }
+    #map-hint { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.72); color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 500; pointer-events: none; display: none; white-space: nowrap; z-index: 5; }
+    .pac-container { z-index: 9999 !important; }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="sidebar-header">
+    <h2>🗺 Traffic Route Planner</h2>
+    <p>Real per-segment traffic colors via Routes API v2</p>
+  </div>
+
+  <div class="sidebar-body">
+
+    <div class="api-section">
+      <label>Google Maps API Key</label>
+      <input id="api-key-input" type="text" placeholder="Paste your API key here…" />
+    </div>
+
+    <!-- Input method tabs -->
+    <div class="input-tabs">
+      <button class="input-tab active" id="tab-type"  onclick="switchInputMode('type')">⌨️ Type Address</button>
+      <button class="input-tab"        id="tab-click" onclick="switchInputMode('click')">📍 Click on Map</button>
+    </div>
+
+    <!-- TYPE panel -->
+    <div id="type-panel">
+      <div class="input-group">
+        <label>Origin</label>
+        <div class="input-wrapper">
+          <span class="dot dot-a"></span>
+          <input id="origin-input" type="text" placeholder="Enter starting point…"/>
+        </div>
+      </div>
+      <div class="input-group">
+        <label>Destination</label>
+        <div class="input-wrapper">
+          <span class="dot dot-b"></span>
+          <input id="dest-input" type="text" placeholder="Enter destination…"/>
+        </div>
+      </div>
+      <button class="swap-btn" onclick="swapTyped()">⇅ Swap Origin &amp; Destination</button>
+    </div>
+
+    <!-- CLICK panel -->
+    <div id="click-panel" style="display:none;">
+      <div class="info-box blue" style="margin-bottom:10px;">
+        <b>How to use:</b><br>
+        1. Click a point card to activate it<br>
+        2. Click anywhere on the map<br>
+        3. Address auto-filled via reverse geocoding
+      </div>
+      <div class="point-card active-pick" id="card-origin" onclick="activatePick('origin')">
+        <div class="point-icon point-icon-a">🟢</div>
+        <div class="point-text">
+          <div class="point-label">Origin (Start)</div>
+          <div class="point-addr placeholder" id="origin-addr-display">Click to pick on map…</div>
+        </div>
+        <span class="point-clear" id="clear-origin" onclick="clearPoint('origin',event)" style="display:none;">✕</span>
+      </div>
+      <div class="point-card" id="card-dest" onclick="activatePick('dest')">
+        <div class="point-icon point-icon-b">🔴</div>
+        <div class="point-text">
+          <div class="point-label">Destination (End)</div>
+          <div class="point-addr placeholder" id="dest-addr-display">Click to pick on map…</div>
+        </div>
+        <span class="point-clear" id="clear-dest" onclick="clearPoint('dest',event)" style="display:none;">✕</span>
+      </div>
+      <button class="swap-btn" onclick="swapClicked()">⇅ Swap Origin &amp; Destination</button>
+    </div>
+
+    <button class="btn-route" onclick="getRoute()">Get Route</button>
+    <button onclick="testRoutesAPI()">Test Routes API</button>
+    <button class="btn-clear" onclick="clearAll()">Clear All</button>
+
+    <div id="status-msg"></div>
+
+    <div id="route-info">
+      <h4>Route Summary</h4>
+      <div class="info-row"><span>Distance</span><span id="info-dist">—</span></div>
+      <div class="info-row"><span>Normal Time</span><span id="info-dur">—</span></div>
+      <div class="info-row"><span>With Traffic</span><span id="info-traf">—</span></div>
+      <div class="info-row"><span>Delay</span><span id="info-delay">—</span></div>
+      <div class="info-row"><span>Data Source</span><span id="info-source">—</span></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="toggle-row">
+      <span class="toggle-label">Traffic Layer (Google)</span>
+      <label class="toggle"><input type="checkbox" id="traffic-toggle" checked onchange="toggleTrafficLayer(this)"/><span class="slider-t"></span></label>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section-label">Polyline Color Guide</div>
+
+    <div class="legend-item">
+      <div class="leg-swatch" style="background:#4285f4;"></div>
+      Blue — free flow (NORMAL speed)
+    </div>
+    <div class="legend-item">
+      <div class="leg-swatch" style="background:#fbbc04;"></div>
+      Yellow overlay — slow traffic
+    </div>
+    <div class="legend-item">
+      <div class="leg-swatch" style="background:#ea4335;"></div>
+      Red overlay — heavy / SLOW
+    </div>
+    <div class="legend-item">
+      <div class="leg-swatch" style="background:#9b1c1c;"></div>
+      Dark red — TRAFFIC_JAM
+    </div>
+
+    <div style="margin-top:10px; font-size:10px; color:#888; line-height:1.6;">
+      <span class="api-badge badge-v2">Routes API v2</span> gives real per-segment speed.<br>
+      <span class="api-badge badge-v1">Directions API</span> fallback if v2 is not enabled.
+    </div>
+
+  </div>
+</div>
+
+<div style="flex:1;position:relative;">
+  <div id="map"></div>
+  <div id="map-hint"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════ */
+let map, trafficLayer, directionsService, geocoder;
+let mapsLoaded   = false;
+let inputMode    = 'type';
+let activePick   = 'origin';
+let allPolylines = [];
+let clickedPoints = { origin: null, dest: null };
+let clickMarkers  = { origin: null, dest: null };
+
+/* ═══════════════════════════════════════════
+   SPEED → COLOR  (Routes API v2 values)
+   NORMAL      → no overlay (blue shows through)
+   SLOW        → red overlay  (#ea4335)
+   TRAFFIC_JAM → dark red     (#9b1c1c)
+═══════════════════════════════════════════ */
+function speedToOverlayColor(speed) {
+  if (speed === 'TRAFFIC_JAM') return '#9b1c1c';
+  if (speed === 'SLOW')        return '#ea4335';
+  return null; // NORMAL → no overlay
+}
+
+/* ═══════════════════════════════════════════
+   LOAD GOOGLE MAPS SDK
+═══════════════════════════════════════════ */
+function loadMapsSDK() {
+  const key = document.getElementById('api-key-input').value.trim();
+  if (!key) { alert('Please paste your Google Maps API key first.'); return false; }
+  if (mapsLoaded) return true;
+  const s = document.createElement('script');
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=places,geometry&callback=initMap`;
+  s.async = true; s.defer = true;
+  document.head.appendChild(s);
+  mapsLoaded = true;
+  return true;
+}
+
+window.initMap = function() {
+  map = new google.maps.Map(document.getElementById('map'), {
+    center: { lat: 12.9716, lng: 77.5946 },
+    zoom: 13,
+    streetViewControl: false,
+    mapTypeControl: true,
+    fullscreenControl: true,
+    gestureHandling: 'greedy'
+  });
+
+  trafficLayer = new google.maps.TrafficLayer();
+  trafficLayer.setMap(map);
+
+  directionsService = new google.maps.DirectionsService();
+  geocoder          = new google.maps.Geocoder();
+
+  ['origin-input','dest-input'].forEach(id => {
+    new google.maps.places.Autocomplete(document.getElementById(id));
+  });
+
+  map.addListener('click', function(e) {
+    if (inputMode !== 'click') return;
+    handleMapClick(e.latLng);
+  });
+};
+
+/* ═══════════════════════════════════════════
+   MAIN ROUTE FUNCTION
+   1. Try Routes API v2  → real speedReadingIntervals
+   2. Fallback to Directions API → ratio-based color
+═══════════════════════════════════════════ */
+async function getRoute() {
+  if (!loadMapsSDK()) return;
+  await wait(mapsLoaded ? 2200 : 100);
+  await _getRoute();
+}
+
+async function _getRoute() {
+  if (!directionsService) { await wait(600); return _getRoute(); }
+
+  let origin, dest;
+  const key    = document.getElementById('api-key-input').value.trim();
+  const status = document.getElementById('status-msg');
+
+  if (inputMode === 'type') {
+    origin = document.getElementById('origin-input').value.trim();
+    dest   = document.getElementById('dest-input').value.trim();
+    if (!origin || !dest) { setStatus('Please enter both origin and destination.', 'error'); return; }
+  } else {
+    if (!clickedPoints.origin || !clickedPoints.dest) {
+      setStatus('Please pick both Origin and Destination on the map.', 'error'); return;
+    }
+    origin = clickedPoints.origin.latlng;
+    dest   = clickedPoints.dest.latlng;
+  }
+
+  setStatus('Fetching route with real traffic data…', 'loading');
+  clearPolylines();
+
+  /* ── Try Routes API v2 first ── */
+  const v2 = await fetchRoutesV2(key, origin, dest);
+
+  if (v2 && v2.intervals && v2.intervals.length > 0) {
+    /* SUCCESS: real per-segment speed data */
+    drawFromSpeedIntervals(v2.path, v2.intervals);
+    fillRouteInfo(v2.distanceText, v2.durationText, v2.durationTrafficText, v2.delaySec, 'Routes API v2 ✅');
+    setStatus('✅ Real per-segment traffic colors applied!', 'success');
+
+  } else if (v2 && v2.path) {
+    /* Routes API v2 worked but no speed intervals (shouldn't happen but safeguard) */
+    drawBlueOnly(v2.path);
+    fillRouteInfo(v2.distanceText, v2.durationText, v2.durationTrafficText, v2.delaySec, 'Routes API v2 (no intervals)');
+    setStatus('ℹ️ Routes API v2 returned no speed data. Enable billing & Routes API.', 'error');
+
+  } else {
+    /* FALLBACK: Directions API with ratio-based colors */
+    setStatus('Routes API v2 not available — using Directions API fallback…', 'loading');
+    await fallbackDirectionsAPI(origin, dest);
+  }
+}
+
+/* ═══════════════════════════════════════════
+   ROUTES API v2  — REAL PER-SEGMENT TRAFFIC
+   Requires: Routes API enabled + billing on
+═══════════════════════════════════════════ */
+async function fetchRoutesV2(key, origin, dest) {
+  try {
+    /* Build origin/destination — handle both string addresses and LatLng objects */
+    const buildLocation = (loc) => {
+      if (typeof loc === 'string') return { address: loc };
+      return { location: { latLng: { latitude: loc.lat(), longitude: loc.lng() } } };
+    };
+
+    const body = {
+      origin:      buildLocation(origin),
+      destination: buildLocation(dest),
+      travelMode:  'DRIVE',
+      routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
+     departureTime: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      extraComputations: ['TRAFFIC_ON_POLYLINE']
+    };
+
+    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type':    'application/json',
+        'X-Goog-Api-Key':  key,
+        'X-Goog-FieldMask': [
+          'routes.distanceMeters',
+          'routes.duration',
+          'routes.staticDuration',
+          'routes.polyline.encodedPolyline',
+          'routes.travelAdvisory.speedReadingIntervals'
+        ].join(',')
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await res.json();
+
+    if (!data.routes || !data.routes[0]) return null;
+
+    const route     = data.routes[0];
+    const encoded   = route.polyline && route.polyline.encodedPolyline;
+    if (!encoded) return null;
+
+    const path      = google.maps.geometry.encoding.decodePath(encoded);
+    const intervals = (route.travelAdvisory && route.travelAdvisory.speedReadingIntervals) || [];
+
+    /* Parse duration values */
+    const durSec    = parseInt((route.staticDuration || '0s').replace('s','')) || 0;
+    const trafSec   = parseInt((route.duration       || '0s').replace('s','')) || 0;
+    const delaySec  = Math.max(0, trafSec - durSec);
+    const distM     = route.distanceMeters || 0;
+
+    return {
+      path,
+      intervals,
+      distanceText:       formatDist(distM),
+      durationText:       formatDur(durSec),
+      durationTrafficText:formatDur(trafSec),
+      delaySec
+    };
+
+  } catch(e) {
+    console.warn('Routes API v2 error:', e);
+    return null;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   DRAW — Routes API v2 speedReadingIntervals
+   Each interval: { startPolylinePointIndex,
+                    endPolylinePointIndex, speed }
+   speed: 'NORMAL' | 'SLOW' | 'TRAFFIC_JAM'
+═══════════════════════════════════════════ */
+function drawFromSpeedIntervals(path, intervals) {
+  clearPolylines();
+
+  // Base blue line
+  allPolylines.push(new google.maps.Polyline({
+    path, map,
+    strokeColor: '#ffffff',
+    strokeOpacity: 0.35,
+    strokeWeight: 15,
+    zIndex: 0
+  }));
+
+  allPolylines.push(new google.maps.Polyline({
+    path, map,
+    strokeColor: '#4285f4',
+    strokeOpacity: 1.0,
+    strokeWeight: 10,
+    zIndex: 1
+  }));
+
+  // ✅ FIXED LOOP
+  intervals.forEach((seg, i) => {
+    const overlayColor = speedToOverlayColor(seg.speed);
+    if (!overlayColor) return;
+
+    const start = seg.startPolylinePointIndex || 0;
+
+    // ✅ KEY FIX: use next segment start as end
+    let end;
+    if (seg.endPolylinePointIndex != null) {
+      end = seg.endPolylinePointIndex;
+    } else if (intervals[i + 1]) {
+      end = intervals[i + 1].startPolylinePointIndex - 1;
+    } else {
+      end = path.length - 1;
+    }
+
+    console.log(
+    "SEGMENT",
+    i,
+    "START:", start,
+    "END:", end,
+    "COLOR:", seg.speed
+  );
+
+    const segPath = path.slice(start, end + 1);
+    if (segPath.length < 2) return;
+
+    allPolylines.push(new google.maps.Polyline({
+      path: segPath,
+      map,
+      strokeColor: overlayColor,
+      strokeOpacity: 0.95,
+      strokeWeight: 10,
+      zIndex: 2
+    }));
+  });
+}
+
+/* ═══════════════════════════════════════════
+   FALLBACK — Directions API (ratio-based)
+═══════════════════════════════════════════ */
+async function fallbackDirectionsAPI(origin, dest) {
+  return new Promise(function(resolve) {
+    directionsService.route({
+      origin, destination: dest,
+      travelMode: google.maps.TravelMode.DRIVING,
+      drivingOptions: {
+        departureTime: new Date(),
+        trafficModel:  google.maps.TrafficModel.BEST_GUESS
+      }
+    }, function(result, s) {
+      if (s !== 'OK') {
+        setStatus('Route error: ' + s, 'error');
+        return resolve();
+      }
+
+      const leg     = result.routes[0].legs[0];
+      const normSec = leg.duration.value;
+      const trafSec = (leg.duration_in_traffic || leg.duration).value;
+      const ratio   = trafSec / normSec;
+      const delay   = Math.max(0, trafSec - normSec);
+
+      fillRouteInfo(leg.distance.text,
+        leg.duration.text,
+        leg.duration_in_traffic ? leg.duration_in_traffic.text : leg.duration.text,
+        delay,
+        'Directions API (estimate)');
+
+      /* Distribute ratio across steps with bell-curve */
+      const steps = leg.steps;
+      const total = steps.length;
+      clearPolylines();
+
+      /* Full blue base */
+      const fullPath = steps.flatMap(st => st.path);
+      allPolylines.push(new google.maps.Polyline({ path: fullPath, map, strokeColor: '#ffffff', strokeOpacity: 0.35, strokeWeight: 15, zIndex: 0 }));
+      allPolylines.push(new google.maps.Polyline({ path: fullPath, map, strokeColor: '#4285f4', strokeOpacity: 1.0, strokeWeight: 10, zIndex: 1 }));
+
+      steps.forEach(function(step, i) {
+        const prog   = i / Math.max(total - 1, 1);
+        const wave   = Math.sin(prog * Math.PI);
+        const noise  = (Math.random() - 0.5) * 0.25;
+        const localR = Math.max(1.0, 1.0 + (ratio - 1.0) * (0.3 + 0.7 * wave) + noise * (ratio - 1.0));
+
+        let color = null;
+        if (localR >= 2.0)  color = '#9b1c1c';
+        else if (localR >= 1.5) color = '#ea4335';
+        else if (localR >= 1.15) color = '#fbbc04';
+
+        if (color) {
+          allPolylines.push(new google.maps.Polyline({
+            path: step.path, map,
+            strokeColor: color, strokeOpacity: 0.9, strokeWeight: 10, zIndex: 2
+          }));
+        }
+      });
+
+      setStatus('⚠️ Using estimated colors. Enable Routes API for exact traffic.', 'error');
+      tryFit(result.routes[0].bounds);
+      resolve();
+    });
+  });
+}
+
+function drawBlueOnly(path) {
+  clearPolylines();
+  allPolylines.push(new google.maps.Polyline({ path, map, strokeColor: '#ffffff', strokeOpacity: 0.35, strokeWeight: 15, zIndex: 0 }));
+  allPolylines.push(new google.maps.Polyline({ path, map, strokeColor: '#4285f4', strokeOpacity: 1.0, strokeWeight: 10, zIndex: 1 }));
+}
+
+/* ═══════════════════════════════════════════
+   INPUT MODE SWITCH
+═══════════════════════════════════════════ */
+function switchInputMode(mode) {
+  inputMode = mode;
+  document.getElementById('type-panel').style.display  = mode === 'type'  ? 'block' : 'none';
+  document.getElementById('click-panel').style.display = mode === 'click' ? 'block' : 'none';
+  document.getElementById('tab-type').classList.toggle('active',  mode === 'type');
+  document.getElementById('tab-click').classList.toggle('active', mode === 'click');
+  if (map) map.setOptions({ draggableCursor: mode === 'click' ? 'crosshair' : '' });
+  if (mode === 'click') { activatePick('origin'); showHint('🟢 Click the map to set Origin'); }
+  else hideHint();
+}
+
+/* ═══════════════════════════════════════════
+   CLICK-ON-MAP
+═══════════════════════════════════════════ */
+function activatePick(which) {
+  activePick = which;
+  document.getElementById('card-origin').className = 'point-card' + (which==='origin' ? ' active-pick' : (clickedPoints.origin ? ' set' : ''));
+  document.getElementById('card-dest').className   = 'point-card' + (which==='dest'   ? ' active-pick' : (clickedPoints.dest   ? ' set' : ''));
+  showHint(which==='origin' ? '🟢 Click map → set Origin' : '🔴 Click map → set Destination');
+}
+
+function handleMapClick(latLng) {
+  const which = activePick;
+  if (clickMarkers[which]) { clickMarkers[which].setMap(null); }
+
+  const isOrigin = which === 'origin';
+  clickMarkers[which] = new google.maps.Marker({
+    position: latLng, map,
+    title: isOrigin ? 'Origin' : 'Destination',
+    icon: {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 10,
+      fillColor: isOrigin ? '#1a73e8' : '#ea4335',
+      fillOpacity: 1, strokeColor: '#fff', strokeWeight: 3
+    },
+    zIndex: 20
+  });
+
+  geocoder.geocode({ location: latLng }, function(results, status) {
+    const addr = (status==='OK' && results[0]) ? results[0].formatted_address : latLng.lat().toFixed(5)+', '+latLng.lng().toFixed(5);
+    clickedPoints[which] = { latlng: latLng, address: addr };
+
+    const el = document.getElementById(which+'-addr-display');
+    el.textContent = addr; el.classList.remove('placeholder');
+    document.getElementById('clear-'+which).style.display = 'inline';
+    document.getElementById('card-'+which).className = 'point-card set';
+
+    if (which==='origin' && !clickedPoints.dest)       setTimeout(()=>activatePick('dest'),200);
+    else if (which==='dest' && !clickedPoints.origin)  setTimeout(()=>activatePick('origin'),200);
+    else { showHint('✅ Both set! Click "Get Route"'); setTimeout(hideHint,2500); }
+  });
+}
+
+function clearPoint(which, e) {
+  e && e.stopPropagation();
+  if (clickMarkers[which]) { clickMarkers[which].setMap(null); clickMarkers[which]=null; }
+  clickedPoints[which] = null;
+  const el = document.getElementById(which+'-addr-display');
+  el.textContent = 'Click to pick on map…'; el.classList.add('placeholder');
+  document.getElementById('clear-'+which).style.display = 'none';
+  document.getElementById('card-'+which).className = 'point-card';
+  activatePick(which);
+}
+
+function swapClicked() {
+  const tmp = clickedPoints.origin; clickedPoints.origin=clickedPoints.dest; clickedPoints.dest=tmp;
+  const tmpM=clickMarkers.origin; clickMarkers.origin=clickMarkers.dest; clickMarkers.dest=tmpM;
+  ['origin','dest'].forEach(function(w){
+    const isOrigin = w==='origin';
+    if(clickMarkers[w]) clickMarkers[w].setIcon({ path:google.maps.SymbolPath.CIRCLE, scale:10, fillColor:isOrigin?'#1a73e8':'#ea4335', fillOpacity:1, strokeColor:'#fff', strokeWeight:3 });
+    const el=document.getElementById(w+'-addr-display');
+    if(clickedPoints[w]){ el.textContent=clickedPoints[w].address; el.classList.remove('placeholder'); document.getElementById('clear-'+w).style.display='inline'; document.getElementById('card-'+w).className='point-card set'; }
+    else { el.textContent='Click to pick on map…'; el.classList.add('placeholder'); document.getElementById('clear-'+w).style.display='none'; document.getElementById('card-'+w).className='point-card'; }
+  });
+}
+
+function swapTyped() {
+  const o=document.getElementById('origin-input'), d=document.getElementById('dest-input');
+  const tmp=o.value; o.value=d.value; d.value=tmp;
+}
+
+/* ═══════════════════════════════════════════
+   UTILS
+═══════════════════════════════════════════ */
+function fillRouteInfo(dist, dur, traf, delaySec, source) {
+  document.getElementById('info-dist').textContent  = dist;
+  document.getElementById('info-dur').textContent   = dur;
+  document.getElementById('info-traf').textContent  = traf;
+  document.getElementById('info-delay').textContent = delaySec > 60 ? '+'+Math.round(delaySec/60)+' min' : 'No delay';
+  document.getElementById('info-source').textContent= source;
+  document.getElementById('route-info').style.display = 'block';
+}
+
+function setStatus(msg, type) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = 'status-msg ' + (type||'');
+  el.style.color = type==='error' ? '#ea4335' : type==='success' ? '#34a853' : '#1a73e8';
+}
+
+function clearPolylines() { allPolylines.forEach(p=>p.setMap(null)); allPolylines=[]; }
+
+function clearAll() {
+  clearPolylines();
+  document.getElementById('route-info').style.display='none';
+  setStatus('','');
+  document.getElementById('origin-input').value='';
+  document.getElementById('dest-input').value='';
+  ['origin','dest'].forEach(function(w){
+    if(clickMarkers[w]){ clickMarkers[w].setMap(null); clickMarkers[w]=null; }
+    clickedPoints[w]=null;
+    const el=document.getElementById(w+'-addr-display');
+    if(el){ el.textContent='Click to pick on map…'; el.classList.add('placeholder'); }
+    const cl=document.getElementById('clear-'+w);
+    if(cl) cl.style.display='none';
+    const card=document.getElementById('card-'+w);
+    if(card) card.className='point-card';
+  });
+  if(inputMode==='click') activatePick('origin');
+}
+
+function tryFit(bounds) { if(bounds) map.fitBounds(bounds,{top:60,bottom:40,left:20,right:20}); }
+function toggleTrafficLayer(cb) { if(trafficLayer) trafficLayer.setMap(cb.checked?map:null); }
+function showHint(msg) { const h=document.getElementById('map-hint'); h.textContent=msg; h.style.display='block'; }
+function hideHint() { document.getElementById('map-hint').style.display='none'; }
+function wait(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+function formatDist(m) {
+  if(m>=1000) return (m/1000).toFixed(1)+' km';
+  return m+' m';
+}
+function formatDur(s) {
+  const h=Math.floor(s/3600), m=Math.round((s%3600)/60);
+  if(h>0) return h+'h '+m+'min';
+  return m+' min';
+}
+
+/* Auto-init */
+document.getElementById('api-key-input').addEventListener('change',function(){
+  if(this.value.trim().length>10 && !mapsLoaded) loadMapsSDK();
+});
+
+async function testRoutesAPI() {
+  const key = document.getElementById('api-key-input').value.trim();
+
+  if (!key) {
+    console.log("❌ Enter API key first");
+    return;
+  }
+
+  console.log("🚀 Calling Routes API...");
+
+  const res = await fetch(
+    "https://routes.googleapis.com/directions/v2:computeRoutes",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask":
+          "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals"
+      },
+      body: JSON.stringify({
+        origin: { address: "Bangalore" },
+        destination: { address: "Mysore" },
+        travelMode: "DRIVE",
+        routingPreference: "TRAFFIC_AWARE_OPTIMAL",
+        departureTime: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        extraComputations: ["TRAFFIC_ON_POLYLINE"]
+      })
+    }
+  );
+
+  const data = await res.json();
+
+  console.log("✅ ROUTES API RESPONSE:", data);
+}
+</script>
+
+</body>
+</html>

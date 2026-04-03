@@ -1,0 +1,1967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Emergency Control System</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Sora:wght@400;600;800&display=swap');
+:root{
+  --red:#E53935;--blue:#1A73E8;--green:#34A853;--yellow:#F9A825;
+  --dark:#0D1117;--card:#161B22;--border:#30363D;--text:#E6EDF3;--muted:#8B949E;
+  --amb:#E53935;--fire:#FF6D00;--police:#1565C0;--rescue:#9C27B0;--hazmat:#F57F17;
+  --purple:#9C27B0;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Sora',sans-serif;background:var(--dark);color:var(--text);min-height:100vh;}
+header{background:var(--card);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}
+.logo{font-size:20px;font-weight:800;}
+.header-right{display:flex;align-items:center;gap:12px;}
+.status-pill{padding:5px 14px;border-radius:20px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;}
+.status-pill.connected{background:rgba(52,168,83,.2);color:var(--green);}
+.status-pill.disconnected{background:rgba(229,57,53,.2);color:var(--red);}
+.units-online-badge{background:rgba(26,115,232,.18);color:#82B4FF;font-size:12px;font-weight:700;padding:5px 14px;border-radius:20px;}
+.tabs{display:flex;border-bottom:1px solid var(--border);padding:0 28px;background:var(--card);}
+.tab{padding:13px 22px;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;transition:all .2s;display:flex;align-items:center;gap:6px;}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue);}
+.tab-badge{background:rgba(229,57,53,.2);color:#FF8A80;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;}
+.tab-content{display:none;}.tab-content.active{display:block;}
+.dispatch-layout{display:grid;grid-template-columns:1fr 400px;gap:20px;padding:20px 28px;max-width:1600px;margin:0 auto;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px;}
+.card:last-child{margin-bottom:0;}
+.card-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:14px;}
+.unit-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px;}
+.utype-btn{padding:11px 6px;border-radius:10px;border:2px solid var(--border);background:var(--dark);cursor:pointer;text-align:center;transition:all .18s;}
+.utype-icon{font-size:22px;display:block;margin-bottom:3px;}
+.utype-label{font-size:10px;font-weight:800;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;}
+.utype-btn.ua{border-color:var(--amb);background:rgba(229,57,53,.07);} .utype-btn.ua .utype-label{color:var(--amb);}
+.utype-btn.uf{border-color:var(--fire);background:rgba(255,109,0,.07);} .utype-btn.uf .utype-label{color:var(--fire);}
+.utype-btn.up{border-color:#5C9CE5;background:rgba(21,101,192,.1);} .utype-btn.up .utype-label{color:#5C9CE5;}
+.utype-btn.ur{border-color:var(--rescue);background:rgba(156,39,176,.07);} .utype-btn.ur .utype-label{color:var(--rescue);}
+.utype-btn.uh{border-color:var(--hazmat);background:rgba(245,127,23,.07);} .utype-btn.uh .utype-label{color:var(--hazmat);}
+.sev-row{display:flex;gap:6px;margin-bottom:12px;}
+.sev-btn{flex:1;padding:7px 4px;border-radius:8px;border:1.5px solid var(--border);background:var(--dark);cursor:pointer;text-align:center;font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;transition:all .15s;}
+.sev-btn.sc{border-color:#E53935;background:rgba(229,57,53,.1);color:#E53935;}
+.sev-btn.sh{border-color:#FF6D00;background:rgba(255,109,0,.1);color:#FF6D00;}
+.sev-btn.sm{border-color:#F9A825;background:rgba(249,168,37,.1);color:#F9A825;}
+.sev-btn.sl{border-color:#34A853;background:rgba(52,168,83,.1);color:#34A853;}
+.field{margin-bottom:11px;}
+label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600;}
+input,textarea,select{width:100%;background:var(--dark);border:1px solid var(--border);color:var(--text);border-radius:9px;padding:9px 12px;font-family:'Sora',sans-serif;font-size:13px;outline:none;transition:border-color .2s;}
+input:focus,textarea:focus,select:focus{border-color:var(--blue);}
+select option{background:var(--card);}
+textarea{min-height:60px;resize:vertical;}
+.row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.search-wrap{position:relative;margin-bottom:10px;}
+.search-wrap .si{position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;pointer-events:none;z-index:2;}
+.search-wrap input#place-search{padding-left:36px;padding-right:36px;border:1.5px solid var(--blue);box-shadow:0 0 0 3px rgba(26,115,232,.1);}
+.search-wrap .sc-btn{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:14px;cursor:pointer;color:var(--muted);z-index:2;background:none;border:none;}
+.pac-container{background:var(--card)!important;border:1px solid var(--border)!important;border-radius:10px!important;box-shadow:0 8px 28px rgba(0,0,0,.6)!important;font-family:'Sora',sans-serif!important;overflow:hidden!important;}
+.pac-item{padding:9px 14px!important;color:var(--text)!important;font-size:12px!important;border-top:1px solid var(--border)!important;}
+.pac-item:hover,.pac-item-selected{background:rgba(26,115,232,.15)!important;}
+.pac-item-query{color:var(--text)!important;font-weight:700!important;}
+.pac-matched{color:var(--blue)!important;}
+.pac-icon{filter:invert(1)!important;opacity:.5!important;}
+.pac-logo:after{display:none!important;}
+.srl{font-size:11px;color:var(--green);padding:4px 0 8px;display:none;align-items:center;gap:5px;}
+.srl.show{display:flex;}
+.map-card-wrap{position:relative;}
+#map-picker{width:100%;height:400px;border-radius:10px;border:1px solid var(--border);overflow:hidden;margin-bottom:12px;}
+.map-status-bar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(26,115,232,.06);border:1px solid rgba(26,115,232,.15);border-radius:8px;margin-bottom:10px;font-size:11px;}
+.msb-left{display:flex;align-items:center;gap:10px;}
+.msb-dot{width:7px;height:7px;border-radius:50%;}
+.msb-info{color:var(--muted);}
+.msb-right{display:flex;gap:7px;}
+.msb-btn{padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--dark);color:var(--muted);font-family:'Sora',sans-serif;font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;}
+.msb-btn:hover{border-color:var(--blue);color:var(--blue);}
+.msb-btn.primary{border-color:rgba(26,115,232,.4);background:rgba(26,115,232,.1);color:#82B4FF;}
+.coord-disp{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--blue);padding:7px 11px;background:rgba(26,115,232,.08);border-radius:7px;margin-bottom:10px;}
+.view-resources-bar{display:flex;align-items:center;gap:10px;padding:10px 0 4px;}
+.view-resources-btn{display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:11px;border:2px solid var(--border);background:var(--dark);color:var(--muted);font-family:'Sora',sans-serif;font-size:13px;font-weight:700;cursor:not-allowed;transition:all .2s;opacity:.45;}
+.view-resources-btn.enabled{border-color:rgba(26,115,232,.5);background:rgba(26,115,232,.08);color:#82B4FF;cursor:pointer;opacity:1;}
+.view-resources-btn.enabled:hover{border-color:var(--blue);background:rgba(26,115,232,.15);transform:translateY(-1px);box-shadow:0 4px 16px rgba(26,115,232,.2);}
+.view-resources-btn.active{border-color:var(--green);background:rgba(52,168,83,.1);color:#69F0AE;}
+.vrb-icon{font-size:16px;}
+.vrb-chevron{font-size:11px;transition:transform .3s;}
+.vrb-chevron.open{transform:rotate(180deg);}
+.loc-hint{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px;}
+.dual-section{overflow:hidden;max-height:0;transition:max-height .5s cubic-bezier(0.4,0,0.2,1),opacity .4s;opacity:0;pointer-events:none;}
+.dual-section.open{max-height:1200px;opacity:1;pointer-events:auto;}
+.dual-maps-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
+.map-panel{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;}
+.map-panel-header{padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:rgba(26,115,232,.03);}
+.map-panel-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--text);display:flex;align-items:center;gap:7px;}
+.map-panel-badge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:10px;}
+.badge-blue{background:rgba(26,115,232,.18);color:#82B4FF;}
+.badge-green{background:rgba(52,168,83,.18);color:#69F0AE;}
+.map-panel-controls{display:flex;align-items:center;gap:7px;}
+.km-control{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);}
+.km-slider{width:70px;accent-color:var(--blue);cursor:pointer;}
+.km-label{font-size:11px;font-weight:700;color:#82B4FF;min-width:28px;}
+.map-inner{width:100%;height:300px;}
+.map-wrap{position:relative;}
+.map-legend-overlay{position:absolute;bottom:10px;left:10px;z-index:10;background:rgba(13,17,23,.9);border:1px solid var(--border);border-radius:10px;padding:8px 11px;backdrop-filter:blur(8px);min-width:150px;}
+.mlo-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px;}
+.leg-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;cursor:pointer;}
+.leg-row:last-child{margin-bottom:0;}
+.leg-label{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:var(--text);}
+.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.leg-count{font-size:9px;color:var(--muted);}
+.leg-sw{width:24px;height:13px;border-radius:7px;border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;}
+.leg-sw.on{background:var(--blue);}.leg-sw.off{background:var(--border);}
+.leg-sw::after{content:'';position:absolute;top:2px;width:9px;height:9px;border-radius:50%;background:#fff;transition:left .2s;}
+.leg-sw.on::after{left:13px;}.leg-sw.off::after{left:2px;}
+.dual-tables-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
+.table-panel{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;}
+.table-panel-header{padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.table-panel-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--text);display:flex;align-items:center;gap:7px;}
+.table-scroll{max-height:200px;overflow-y:auto;}
+.table-scroll::-webkit-scrollbar{width:3px;}
+.table-scroll::-webkit-scrollbar-thumb{background:var(--border);}
+.data-table{width:100%;border-collapse:collapse;}
+.data-table th{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);padding:7px 12px;border-bottom:1px solid var(--border);text-align:left;background:rgba(255,255,255,.02);}
+.data-table td{font-size:11px;padding:8px 12px;border-bottom:1px solid rgba(48,54,61,.5);color:var(--text);vertical-align:middle;}
+.data-table tr:last-child td{border-bottom:none;}
+.data-table tr:hover td{background:rgba(26,115,232,.04);}
+.place-type-badge{font-size:9px;font-weight:700;padding:2px 7px;border-radius:7px;text-transform:uppercase;}
+.pt-hospital{background:rgba(229,57,53,.12);color:#FF8A80;}
+.pt-blood{background:rgba(183,28,28,.12);color:#FF5252;}
+.pt-police{background:rgba(21,101,192,.12);color:#82B4FF;}
+.pt-fire{background:rgba(255,109,0,.12);color:#FFAB40;}
+.pt-pharmacy{background:rgba(156,39,176,.12);color:#E040FB;}
+.dist-val{font-family:'JetBrains Mono',monospace;font-size:11px;color:#82B4FF;font-weight:700;}
+.eta-val{font-family:'JetBrains Mono',monospace;font-size:11px;color:#69F0AE;font-weight:700;}
+.unit-sel-btn{padding:3px 10px;border-radius:7px;border:1px solid rgba(26,115,232,.3);background:rgba(26,115,232,.1);color:#82B4FF;font-family:'Sora',sans-serif;font-size:10px;font-weight:700;cursor:pointer;}
+.unit-sel-btn:hover{background:rgba(26,115,232,.2);}
+.unit-sel-btn.selected{background:rgba(52,168,83,.15);color:#34A853;border-color:rgba(52,168,83,.3);}
+.tbl-empty{text-align:center;padding:20px;color:var(--muted);font-size:11px;}
+.btn{padding:11px 18px;border-radius:11px;border:none;cursor:pointer;font-family:'Sora',sans-serif;font-size:13px;font-weight:700;width:100%;transition:all .15s;}
+.btn-dispatch{color:#fff;font-size:14px;font-weight:800;}
+.btn-dispatch.da{background:var(--amb);box-shadow:0 4px 18px rgba(229,57,53,.35);}
+.btn-dispatch.df{background:var(--fire);box-shadow:0 4px 18px rgba(255,109,0,.3);}
+.btn-dispatch.dp{background:var(--police);box-shadow:0 4px 18px rgba(21,101,192,.35);}
+.btn-dispatch.dr{background:var(--rescue);box-shadow:0 4px 18px rgba(156,39,176,.3);}
+.btn-dispatch.dh{background:var(--hazmat);box-shadow:0 4px 18px rgba(245,127,23,.3);}
+.btn-dispatch:hover{transform:translateY(-1px);filter:brightness(1.08);}
+.btn-dispatch:disabled{background:#333;box-shadow:none;cursor:not-allowed;transform:none;filter:none;}
+.btn-blue{background:rgba(26,115,232,.12);color:var(--blue);border:1px solid rgba(26,115,232,.3);}
+.btn-ghost{background:var(--dark);color:var(--muted);border:1px solid var(--border);}
+.btn-sm{padding:6px 14px;font-size:12px;width:auto;border-radius:8px;}
+.btn-xs{padding:4px 10px;font-size:10px;width:auto;border-radius:7px;}
+.status-box{padding:11px 14px;border-radius:11px;margin-bottom:11px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;}
+.status-box.waiting{background:rgba(139,148,158,.1);color:var(--muted);}
+.status-box.pending{background:rgba(249,168,37,.1);color:var(--yellow);}
+.status-box.accepted{background:rgba(52,168,83,.1);color:var(--green);}
+.status-box.rejected{background:rgba(229,57,53,.1);color:var(--red);}
+.presets{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:11px;}
+.preset-btn{padding:4px 11px;border-radius:14px;font-size:10px;font-weight:600;border:1px solid var(--border);background:var(--dark);color:var(--muted);cursor:pointer;}
+.preset-btn:hover{border-color:var(--blue);color:var(--blue);}
+.log-wrap{background:var(--dark);border:1px solid var(--border);border-radius:9px;padding:10px;height:140px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:11px;}
+.log-entry{margin-bottom:2px;line-height:1.5;}
+.log-entry.info{color:var(--muted);}.log-entry.ok{color:var(--green);}.log-entry.warn{color:var(--yellow);}.log-entry.error{color:var(--red);}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.dot.pulse{animation:pulse 1.2s infinite;}
+.section-label{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:7px;}
+.chip{padding:2px 8px;border-radius:7px;font-size:10px;font-weight:700;text-transform:uppercase;}
+.chip-pending{background:rgba(249,168,37,.12);color:#F9A825;}
+.chip-accepted{background:rgba(52,168,83,.12);color:var(--green);}
+.chip-rejected{background:rgba(229,57,53,.12);color:var(--red);}
+.chip-critical{background:rgba(229,57,53,.12);color:#E53935;}
+.chip-high{background:rgba(255,109,0,.1);color:#FF6D00;}
+.chip-medium{background:rgba(249,168,37,.1);color:#F9A825;}
+.chip-low{background:rgba(52,168,83,.1);color:#34A853;}
+.unit-registry{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px;}
+.registry-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+.registry-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);}
+.registry-badge{background:rgba(52,168,83,.15);color:#34A853;font-size:10px;font-weight:700;padding:2px 8px;border-radius:9px;}
+.registry-hint{font-size:11px;color:var(--muted);margin-bottom:10px;opacity:.65;}
+.unit-item{background:var(--dark);border:2px solid var(--border);border-radius:11px;padding:11px 13px;cursor:pointer;margin-bottom:7px;transition:all .18s;}
+.unit-item:hover{border-color:var(--muted);}
+.unit-item.sel{border-color:#1A73E8;background:rgba(26,115,232,.1);}
+.unit-item.busy{opacity:.65;}
+.unit-item.offline{opacity:.38;}
+.unit-top{display:flex;align-items:center;justify-content:space-between;}
+.unit-left{display:flex;align-items:center;gap:9px;}
+.unit-icon-wrap{font-size:22px;line-height:1;}
+.unit-name{font-size:13px;font-weight:800;color:var(--text);}
+.unit-meta{font-size:10px;color:var(--muted);margin-top:1px;}
+.unit-right{display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
+.unit-status-pill{padding:2px 8px;border-radius:8px;font-size:10px;font-weight:800;}
+.usp-available{background:rgba(52,168,83,.15);color:#34A853;}
+.usp-busy{background:rgba(249,168,37,.15);color:#F9A825;}
+.usp-offline{background:rgba(139,148,158,.1);color:var(--muted);}
+.unit-dist{font-size:10px;color:#82B4FF;font-weight:700;}
+.unit-sel-note{font-size:10px;color:#1A73E8;font-weight:700;margin-top:4px;}
+.unit-busy-note{font-size:10px;color:#F57F17;margin-top:4px;}
+.nearest-btn{width:100%;padding:9px;border-radius:9px;border:1px solid rgba(26,115,232,.3);background:rgba(26,115,232,.08);color:#82B4FF;font-family:'Sora',sans-serif;font-size:12px;font-weight:700;cursor:pointer;margin-bottom:10px;transition:all .15s;}
+.nearest-btn:hover{background:rgba(26,115,232,.18);}
+.unit-empty{text-align:center;padding:18px;color:var(--muted);}
+.mock-panel{background:var(--card);border:1px solid rgba(249,168,37,.2);border-radius:14px;padding:14px;margin-bottom:16px;}
+.mock-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#F9A825;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+.mock-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px;}
+.mock-btn{padding:7px 5px;border-radius:8px;border:1.5px solid var(--border);background:var(--dark);cursor:pointer;text-align:center;font-size:10px;font-weight:700;color:var(--muted);transition:all .15s;font-family:'Sora',sans-serif;}
+.mock-btn:hover{border-color:var(--yellow);color:var(--yellow);}
+.mock-btn.active{border-color:var(--green);color:var(--green);background:rgba(52,168,83,.08);}
+.mock-clear{width:100%;padding:6px;border-radius:8px;border:1px solid rgba(229,57,53,.3);background:rgba(229,57,53,.07);color:#FF8A80;font-family:'Sora',sans-serif;font-size:11px;font-weight:700;cursor:pointer;}
+.modal-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .25s;}
+.modal-overlay.show{opacity:1;pointer-events:auto;}
+.confirm-modal{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:0;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;transform:scale(.94) translateY(20px);transition:transform .3s cubic-bezier(0.34,1.56,0.64,1);}
+.modal-overlay.show .confirm-modal{transform:scale(1) translateY(0);}
+.modal-header{padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;}
+.modal-header-icon{font-size:32px;}
+.modal-header-info{flex:1;}
+.modal-header-title{font-size:18px;font-weight:800;color:var(--text);}
+.modal-header-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+.modal-body{padding:20px 24px;}
+.modal-section-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+.confirm-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
+.detail-card{background:var(--dark);border:1px solid var(--border);border-radius:10px;padding:10px 12px;}
+.detail-label{font-size:9px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px;}
+.detail-value{font-size:13px;font-weight:700;color:var(--text);word-break:break-word;}
+.detail-card.highlight{border-color:rgba(26,115,232,.4);background:rgba(26,115,232,.06);}
+.detail-card.highlight .detail-value{color:#82B4FF;}
+.unit-confirm-card{background:var(--dark);border:2px solid rgba(52,168,83,.3);border-radius:12px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:14px;}
+.ucf-icon{font-size:36px;flex-shrink:0;}
+.ucf-info{flex:1;}
+.ucf-name{font-size:16px;font-weight:800;color:var(--text);margin-bottom:2px;}
+.ucf-meta{font-size:11px;color:var(--muted);}
+.ucf-dist{font-size:12px;color:#69F0AE;font-weight:700;margin-top:4px;}
+.modal-warning{background:rgba(249,168,37,.08);border:1px solid rgba(249,168,37,.25);border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#F9A825;display:flex;align-items:center;gap:8px;}
+.modal-footer{padding:16px 24px 20px;border-top:1px solid var(--border);display:flex;gap:10px;}
+.modal-cancel-btn{flex:1;padding:12px;border-radius:11px;border:1px solid var(--border);background:var(--dark);color:var(--muted);font-family:'Sora',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;}
+.modal-cancel-btn:hover{border-color:var(--muted);color:var(--text);}
+.modal-confirm-btn{flex:2;padding:12px;border-radius:11px;border:none;color:#fff;font-family:'Sora',sans-serif;font-size:14px;font-weight:800;cursor:pointer;transition:all .15s;}
+.modal-confirm-btn:hover{transform:translateY(-1px);filter:brightness(1.1);}
+.modal-confirm-btn.da{background:var(--amb);box-shadow:0 4px 18px rgba(229,57,53,.4);}
+.modal-confirm-btn.df{background:var(--fire);box-shadow:0 4px 18px rgba(255,109,0,.35);}
+.modal-confirm-btn.dp{background:var(--police);box-shadow:0 4px 18px rgba(21,101,192,.4);}
+.modal-confirm-btn.dr{background:var(--rescue);box-shadow:0 4px 18px rgba(156,39,176,.35);}
+.modal-confirm-btn.dh{background:var(--hazmat);box-shadow:0 4px 18px rgba(245,127,23,.35);}
+.alerts-page{padding:20px 28px;max-width:1200px;margin:0 auto;}
+.alerts-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+.alerts-title{font-size:19px;font-weight:800;}
+.filter-row{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap;}
+.flt-btn{padding:4px 13px;border-radius:16px;font-size:11px;font-weight:600;border:1px solid var(--border);background:var(--dark);color:var(--muted);cursor:pointer;transition:all .15s;}
+.flt-btn.fa{border-color:var(--muted);color:var(--text);}
+.flt-btn.fa-amb{border-color:var(--amb);background:rgba(229,57,53,.07);color:var(--amb);}
+.flt-btn.fa-fire{border-color:var(--fire);background:rgba(255,109,0,.07);color:var(--fire);}
+.flt-btn.fa-police{border-color:#5C9CE5;background:rgba(21,101,192,.08);color:#5C9CE5;}
+.flt-btn.fa-rescue{border-color:var(--rescue);background:rgba(156,39,176,.07);color:var(--rescue);}
+.ticket-grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;}
+.ticket{background:var(--card);border:1px solid var(--border);border-radius:13px;padding:14px 16px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
+.ticket:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.5);}
+.ticket-bar{position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:13px 0 0 13px;}
+.ticket-inner{padding-left:5px;}
+.ticket-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;}
+.ticket-icon{font-size:18px;}
+.ticket-type{font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;}
+.ttype-amb{color:var(--amb);}.ttype-fire{color:var(--fire);}.ttype-police{color:#5C9CE5;}.ttype-rescue{color:var(--rescue);}.ttype-hazmat{color:var(--hazmat);}
+.ticket-time{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);}
+.ticket-name{font-size:15px;font-weight:800;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ticket-addr{font-size:11px;color:var(--muted);margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ticket-footer{display:flex;align-items:center;justify-content:space-between;}
+.ticket-open-btn{font-size:10px;font-weight:700;color:var(--blue);background:rgba(26,115,232,.1);border:1px solid rgba(26,115,232,.2);border-radius:7px;padding:4px 10px;cursor:pointer;font-family:'Sora',sans-serif;}
+.empty-alerts{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:50px 20px;color:var(--muted);text-align:center;gap:10px;}
+.ea-icon{font-size:48px;opacity:.22;}.ea-msg{font-size:14px;font-weight:700;}.ea-sub{font-size:11px;opacity:.6;}
+@keyframes lp{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.6)}}
+.live-dot-sm{width:6px;height:6px;border-radius:50%;background:var(--green);animation:lp 1.2s infinite;display:inline-block;margin-right:3px;vertical-align:middle;}
+#view-live{position:fixed;inset:0;z-index:100;background:var(--dark);flex-direction:row;display:none;}
+#view-live.active{display:flex;}
+.live-topbar{position:absolute;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;gap:10px;padding:10px 18px;background:linear-gradient(180deg,rgba(13,17,23,.95) 0%,transparent 100%);pointer-events:none;}
+.live-topbar > *{pointer-events:auto;}
+.live-back-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:9px;background:var(--card);border:1px solid var(--border);color:var(--text);font-family:'Sora',sans-serif;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;}
+.live-back-btn:hover{border-color:var(--muted);}
+.traffic-btn-off{background:rgba(229,57,53,.12)!important;border-color:rgba(229,57,53,.3)!important;color:#FF8A80!important;}
+.traffic-btn-on{background:rgba(52,168,83,.18)!important;border-color:rgba(52,168,83,.4)!important;color:#69F0AE!important;box-shadow:0 0 10px rgba(52,168,83,.25)!important;}
+.live-alert-pill{flex:1;display:flex;align-items:center;gap:9px;background:rgba(22,27,34,.9);border:1px solid var(--border);border-radius:11px;padding:8px 14px;backdrop-filter:blur(8px);}
+.lap-icon{font-size:19px;flex-shrink:0;}
+.lap-info{flex:1;min-width:0;}
+.lap-name{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lap-sub{font-size:10px;color:var(--muted);margin-top:1px;}
+.live-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(52,168,83,.15);border:1px solid rgba(52,168,83,.3);border-radius:18px;padding:4px 11px;font-size:11px;font-weight:700;color:var(--green);}
+.live-badge.offline{background:rgba(139,148,158,.1);border-color:rgba(139,148,158,.2);color:var(--muted);}
+.live-map-wrap{flex:1;position:relative;}
+#tracking-map{width:100%;height:100%;}
+.map-ph-full{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--dark);color:var(--muted);gap:10px;}
+.map-ph-full .ph-icon{font-size:52px;opacity:.18;}
+.map-ph-full .ph-msg{font-size:14px;font-weight:700;}
+.map-ph-full .ph-sub{font-size:11px;opacity:.6;max-width:240px;text-align:center;}
+.live-side{width:340px;flex-shrink:0;overflow-y:auto;background:var(--card);border-left:1px solid var(--border);display:flex;flex-direction:column;}
+.live-side::-webkit-scrollbar{width:4px;}
+.live-side::-webkit-scrollbar-thumb{background:var(--border);}
+.ls-section{padding:14px 18px;border-bottom:1px solid var(--border);}
+.ls-section:last-child{border-bottom:none;flex:1;}
+#tsb{padding:12px 14px;border-radius:11px;display:flex;align-items:center;gap:10px;border:1px solid;transition:all .4s;}
+.tsb-title{font-size:14px;font-weight:800;}
+.tsb-sub{font-size:10px;margin-top:2px;opacity:.7;}
+.step-wrap{margin-top:4px;}
+.step-hdr{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:5px;}
+.step-track{height:5px;background:rgba(255,255,255,.07);border-radius:3px;overflow:hidden;}
+.step-fill{height:5px;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .8s;}
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.info-stat{background:var(--dark);border:1px solid var(--border);border-radius:9px;padding:10px 12px;}
+.info-stat-label{font-size:9px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px;}
+.info-stat-value{font-size:17px;font-weight:800;font-family:'JetBrains Mono',monospace;}
+.info-stat-value.green{color:var(--green);}.info-stat-value.blue{color:var(--blue);}.info-stat-value.yellow{color:var(--yellow);}
+.speed-bar-wrap{margin-top:5px;height:3px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;}
+.speed-bar{height:3px;border-radius:2px;background:var(--green);transition:width .8s;}
+.ai-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px;}
+.ai-row:last-child{border-bottom:none;}
+.ai-lbl{color:var(--muted);font-weight:600;}
+.ai-val{font-weight:700;text-align:right;max-width:190px;word-break:break-word;}
+.logbox{background:var(--dark);border:1px solid var(--border);border-radius:9px;padding:10px;height:140px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:11px;}
+.logbox::-webkit-scrollbar{width:3px;}
+.logbox::-webkit-scrollbar-thumb{background:var(--border);}
+.lifecycle-strip{display:flex;align-items:center;background:var(--dark);border:1px solid var(--border);border-radius:9px;padding:9px 11px;margin-bottom:10px;overflow-x:auto;}
+.lc-step{display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:0;}
+.lc-dot{width:9px;height:9px;border-radius:50%;background:var(--border);transition:background .4s;}
+.lc-dot.active{background:var(--blue);}.lc-dot.done{background:var(--green);}
+.lc-label{font-size:8px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;}
+.lc-connector{width:100%;height:2px;background:var(--border);flex:1;margin:0 2px;align-self:center;margin-bottom:12px;transition:background .4s;}
+.lc-connector.done{background:var(--green);}.lc-connector.active{background:var(--blue);}
+.nearby-legend{position:absolute;bottom:20px;left:16px;z-index:20;background:rgba(13,17,23,.92);border:1px solid var(--border);border-radius:12px;padding:10px 14px;backdrop-filter:blur(8px);min-width:200px;}
+.nearby-legend-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:8px;}
+.nearby-toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;cursor:pointer;padding:3px 0;}
+.nearby-toggle-row:last-child{margin-bottom:0;}
+.nearby-toggle-label{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:600;color:var(--text);}
+.nearby-toggle-count{font-size:9px;font-weight:700;color:var(--muted);margin-left:4px;}
+.nearby-toggle-switch{width:28px;height:16px;border-radius:8px;border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;}
+.nearby-toggle-switch.on{background:var(--blue);}.nearby-toggle-switch.off{background:var(--border);}
+.nearby-toggle-switch::after{content:'';position:absolute;top:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .2s;}
+.nearby-toggle-switch.on::after{left:14px;}.nearby-toggle-switch.off::after{left:2px;}
+
+/* ── Route Intelligence Panel ── */
+.route-intel-panel{background:var(--dark);border:1px solid var(--border);border-radius:12px;padding:13px 14px;}
+.ri-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);margin-bottom:10px;}
+.ri-cards{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:9px;}
+.ri-card{border-radius:9px;padding:9px 11px;border:1px solid;}
+.ri-card-label{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px;}
+.ri-card-time{font-size:16px;font-weight:800;font-family:'JetBrains Mono',monospace;margin-bottom:2px;}
+.ri-card-dist{font-size:10px;color:var(--muted);}
+.ri-card-traffic{font-size:9px;margin-top:3px;font-weight:600;}
+.ri-status{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:9px;border:1px solid;margin-bottom:8px;}
+.ri-status-icon{font-size:15px;flex-shrink:0;}
+.ri-status-title{font-size:11px;font-weight:700;}
+.ri-status-sub{font-size:9px;color:var(--muted);margin-top:1px;}
+.ri-routes-list{margin-bottom:8px;}
+.ri-route-row{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid rgba(48,54,61,.4);}
+.ri-route-row:last-child{border-bottom:none;}
+.ri-route-swatch{width:14px;height:4px;border-radius:2px;flex-shrink:0;}
+.ri-route-info{flex:1;min-width:0;}
+.ri-route-name{font-size:10px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ri-route-meta{font-size:9px;color:var(--muted);}
+.ri-route-badge{font-size:8px;font-weight:700;padding:2px 6px;border-radius:5px;white-space:nowrap;}
+.ri-traffic-warn{display:flex;align-items:flex-start;gap:7px;padding:7px 10px;background:rgba(229,57,53,.07);border:1px solid rgba(229,57,53,.2);border-radius:8px;margin-bottom:8px;}
+.ri-traffic-warn-icon{font-size:13px;flex-shrink:0;margin-top:1px;}
+.ri-traffic-warn-text{font-size:10px;color:#FF8A80;font-weight:600;line-height:1.4;}
+.ri-legend{display:flex;align-items:center;gap:12px;padding-top:6px;border-top:1px solid rgba(48,54,61,.4);}
+.ri-legend-item{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--muted);}
+.ri-legend-line{width:16px;height:3px;border-radius:2px;}
+
+/* ── Nearby panel ── */
+.nearby-panel{padding:14px 18px;border-bottom:1px solid var(--border);}
+.nearby-panel-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);margin-bottom:10px;}
+.nearby-place-item{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid rgba(48,54,61,.5);cursor:pointer;}
+.nearby-place-item:last-child{border-bottom:none;}
+.np-icon{font-size:16px;flex-shrink:0;margin-top:1px;}
+.np-info{flex:1;min-width:0;}
+.np-name{font-size:11px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.np-dist{font-size:10px;color:#82B4FF;font-weight:600;}
+.np-type{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+.np-rating{font-size:9px;color:var(--yellow);}
+.nearby-refresh-btn{width:100%;margin-top:8px;padding:7px;border-radius:8px;border:1px solid rgba(26,115,232,.3);background:rgba(26,115,232,.08);color:#82B4FF;font-family:'Sora',sans-serif;font-size:11px;font-weight:700;cursor:pointer;}
+.nearby-loading{text-align:center;padding:12px;color:var(--muted);font-size:11px;}
+.np-no-data{text-align:center;padding:10px;color:var(--muted);font-size:11px;}
+@keyframes selFlash{0%,100%{box-shadow:0 0 0 0 rgba(26,115,232,.5)}50%{box-shadow:0 0 0 6px rgba(26,115,232,.0)}}
+.unit-item.sel{animation:selFlash .8s ease-out;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🚨 Emergency Control System</div>
+  <div class="header-right">
+    <div class="units-online-badge" id="hdr-units">0 units online</div>
+    <div class="status-pill disconnected" id="conn-pill">
+      <span class="dot pulse" style="background:#E53935" id="conn-dot"></span>
+      <span id="conn-text">Connecting…</span>
+    </div>
+  </div>
+</header>
+
+<div class="tabs" id="main-tabs">
+  <div class="tab active" onclick="switchTab('dispatch')">🚨 Dispatch</div>
+  <div class="tab"        onclick="switchTab('alerts')">📋 Incidents <span class="tab-badge" id="alert-count">0</span></div>
+</div>
+
+<div id="tab-dispatch" class="tab-content active">
+<div class="dispatch-layout">
+  <div>
+    <div class="card">
+      <div class="card-title">🚒 Select Emergency Unit Type</div>
+      <div class="unit-grid">
+        <div class="utype-btn ua" id="ub-ambulance" onclick="selU('ambulance')"><span class="utype-icon">🚑</span><div class="utype-label">Ambulance</div></div>
+        <div class="utype-btn"   id="ub-fire"       onclick="selU('fire')"    ><span class="utype-icon">🚒</span><div class="utype-label">Fire</div></div>
+        <div class="utype-btn"   id="ub-police"     onclick="selU('police')"  ><span class="utype-icon">🚔</span><div class="utype-label">Police</div></div>
+        <div class="utype-btn"   id="ub-rescue"     onclick="selU('rescue')"  ><span class="utype-icon">🚁</span><div class="utype-label">Rescue</div></div>
+        <div class="utype-btn"   id="ub-hazmat"     onclick="selU('hazmat')"  ><span class="utype-icon">☢️</span><div class="utype-label">Hazmat</div></div>
+      </div>
+      <div class="card-title" style="margin-bottom:7px;">Priority Level</div>
+      <div class="sev-row">
+        <div class="sev-btn sc" data-s="critical" onclick="selSev('critical')">🔴 Critical</div>
+        <div class="sev-btn"   data-s="high"      onclick="selSev('high')"    >🟠 High</div>
+        <div class="sev-btn"   data-s="medium"    onclick="selSev('medium')"  >🟡 Medium</div>
+        <div class="sev-btn"   data-s="low"       onclick="selSev('low')"     >🟢 Low</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📍 Set Incident Location &amp; Select Unit</div>
+      <div class="search-wrap">
+        <span class="si">🔍</span>
+        <input id="place-search" type="text" placeholder="Search address, hospital, landmark…" autocomplete="off"/>
+        <button class="sc-btn" id="sc-clear" onclick="clearSearch()" style="display:none">✕</button>
+      </div>
+      <div class="srl" id="srl"><span>✅</span><span id="srl-text"></span></div>
+      <div class="map-card-wrap">
+        <div id="map-picker"></div>
+      </div>
+      <div class="map-status-bar">
+        <div class="msb-left">
+          <span class="msb-dot" id="msb-dot" style="background:#34A853"></span>
+          <span class="msb-info" id="msb-info">Click map to set destination</span>
+        </div>
+        <div class="msb-right">
+          <button class="msb-btn primary" onclick="findNearest()">🔍 Find Nearest Unit</button>
+        </div>
+      </div>
+      <div class="coord-disp" id="coord-disp">Search or click map to set destination</div>
+      <div class="view-resources-bar">
+        <button class="view-resources-btn" id="view-res-btn" onclick="toggleDualSection()" disabled>
+          <span class="vrb-icon">🏥</span>
+          <span id="vrb-text">View Nearby Resources &amp; Units</span>
+          <span class="vrb-chevron" id="vrb-chevron">▼</span>
+        </button>
+        <span class="loc-hint" id="loc-hint">📍 Set a location above to enable</span>
+      </div>
+    </div>
+
+    <div class="dual-section" id="dual-section">
+      <div class="dual-maps-grid">
+        <div class="map-panel">
+          <div class="map-panel-header">
+            <div class="map-panel-title">🏥 Nearby Resources <span class="map-panel-badge badge-blue" id="m1-count">0 found</span></div>
+            <div class="map-panel-controls">
+              <div class="km-control">
+                <span>Radius:</span>
+                <input type="range" class="km-slider" id="km-slider" min="1" max="20" value="5" oninput="onKmChange(this.value)"/>
+                <span class="km-label" id="km-label">5 km</span>
+              </div>
+              <button class="btn-xs btn-ghost" onclick="searchNearbyResources()">🔍</button>
+            </div>
+          </div>
+          <div class="map-wrap">
+            <div id="map-resources" class="map-inner"></div>
+            <div class="map-legend-overlay">
+              <div class="mlo-title">Layers</div>
+              <div class="leg-row" onclick="toggleResLayer('hospital')"><span class="leg-label"><span class="leg-dot" style="background:#E53935"></span>Hospitals <span class="leg-count" id="rcnt-hospital">0</span></span><button class="leg-sw on" id="rsw-hospital"></button></div>
+              <div class="leg-row" onclick="toggleResLayer('blood_bank')"><span class="leg-label"><span class="leg-dot" style="background:#D32F2F"></span>Blood Banks <span class="leg-count" id="rcnt-blood_bank">0</span></span><button class="leg-sw on" id="rsw-blood_bank"></button></div>
+              <div class="leg-row" onclick="toggleResLayer('police')"><span class="leg-label"><span class="leg-dot" style="background:#1565C0"></span>Police <span class="leg-count" id="rcnt-police">0</span></span><button class="leg-sw on" id="rsw-police"></button></div>
+              <div class="leg-row" onclick="toggleResLayer('fire_station')"><span class="leg-label"><span class="leg-dot" style="background:#FF6D00"></span>Fire Stns <span class="leg-count" id="rcnt-fire_station">0</span></span><button class="leg-sw on" id="rsw-fire_station"></button></div>
+              <div class="leg-row" onclick="toggleResLayer('pharmacy')"><span class="leg-label"><span class="leg-dot" style="background:#7B1FA2"></span>Pharmacy <span class="leg-count" id="rcnt-pharmacy">0</span></span><button class="leg-sw on" id="rsw-pharmacy"></button></div>
+            </div>
+          </div>
+        </div>
+        <div class="map-panel">
+          <div class="map-panel-header">
+            <div class="map-panel-title">🚑 Available Units <span class="map-panel-badge badge-green" id="m2-count">0 online</span></div>
+            <div class="map-panel-controls">
+              <button class="btn-xs btn-ghost" onclick="fitUnitsMap()">⛶ Fit</button>
+              <button class="btn-xs btn-ghost" onclick="findNearestAndSelect()">🔍 Nearest</button>
+            </div>
+          </div>
+          <div class="map-wrap">
+            <div id="map-units" class="map-inner"></div>
+            <div class="map-legend-overlay">
+              <div class="mlo-title">Unit Layers</div>
+              <div class="leg-row" onclick="toggleUnitLayer('available')"><span class="leg-label"><span class="leg-dot" style="background:#4CAF50"></span>Available <span class="leg-count" id="ucnt-available">0</span></span><button class="leg-sw on" id="usw-available"></button></div>
+              <div class="leg-row" onclick="toggleUnitLayer('busy')"><span class="leg-label"><span class="leg-dot" style="background:#FFC107"></span>Busy <span class="leg-count" id="ucnt-busy">0</span></span><button class="leg-sw on" id="usw-busy"></button></div>
+              <div class="leg-row" onclick="toggleUnitLayer('offline')"><span class="leg-label"><span class="leg-dot" style="background:#9E9E9E"></span>Offline <span class="leg-count" id="ucnt-offline">0</span></span><button class="leg-sw on" id="usw-offline"></button></div>
+              <div style="border-top:1px solid var(--border);margin:5px 0 3px;font-size:9px;color:var(--muted);padding-top:4px;">Click marker to select unit</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="dual-tables-grid">
+        <div class="table-panel">
+          <div class="table-panel-header">
+            <div class="table-panel-title">🏥 Nearby Resources</div>
+            <span style="font-size:10px;color:var(--muted);" id="res-tbl-info">Search to populate</span>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead><tr><th>Place</th><th>Type</th><th>Distance</th><th>ETA</th><th>Rating</th></tr></thead>
+              <tbody id="res-table-body"><tr><td colspan="5" class="tbl-empty">📍 Set location &amp; search resources</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="table-panel">
+          <div class="table-panel-header">
+            <div class="table-panel-title">🚑 Online Units</div>
+            <span style="font-size:10px;color:var(--muted);" id="units-tbl-info">0 online</span>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead><tr><th>Unit</th><th>Type</th><th>Status</th><th>Distance</th><th>ETA</th><th></th></tr></thead>
+              <tbody id="units-table-body"><tr><td colspan="6" class="tbl-empty">📵 No units online</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" id="form-title">🚑 Ambulance — Incident Details</div>
+      <div class="section-label">Quick Locations</div>
+      <div class="presets">
+        <button class="preset-btn" onclick="setPreset(11.0168,76.9558,'Coimbatore City Center')">Coimbatore Centre</button>
+        <button class="preset-btn" onclick="setPreset(11.0504,76.9850,'Railway Station')">Railway Station</button>
+        <button class="preset-btn" onclick="setPreset(11.0178,76.9720,'GH Hospital')">GH Hospital</button>
+        <button class="preset-btn" onclick="setPreset(10.9081,76.9518,'Tirupur')">Tirupur</button>
+        <button class="preset-btn" onclick="setPreset(11.0168,76.9720,'Coimbatore Medical')">Medical College</button>
+      </div>
+      <div id="dynamic-form-container">
+        <div id="form-loading" style="text-align:center;padding:20px;color:var(--muted);display:none;"><div style="font-size:24px;margin-bottom:6px;">⏳</div><div style="font-size:12px;">Loading form fields…</div></div>
+        <div id="dynamic-form-fields"></div>
+        <div id="form-error" style="display:none;background:rgba(229,57,53,.1);border:1px solid rgba(229,57,53,.3);border-radius:9px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#EF5350;"></div>
+      </div>
+      <div class="row-2" style="margin-top:10px;">
+        <div class="field"><label>Latitude</label><input id="lat" type="number" step="0.0001" placeholder="11.0168"/></div>
+        <div class="field"><label>Longitude</label><input id="lng" type="number" step="0.0001" placeholder="76.9558"/></div>
+      </div>
+      <button class="btn btn-dispatch da" id="sendBtn" onclick="openConfirmModal()">🚑 DISPATCH AMBULANCE</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="mock-panel">
+      <div class="mock-title">🧪 Test Mock Units</div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px;opacity:.8;">Click to toggle mock units online/offline for testing.</div>
+      <div class="mock-grid" id="mock-grid"></div>
+      <button class="mock-clear" onclick="clearAllMocks()">🗑️ Clear All Mock Units</button>
+    </div>
+    <div class="unit-registry">
+      <div class="registry-header">
+        <div class="registry-title">📡 Online Units</div>
+        <span class="registry-badge" id="reg-count">0 online</span>
+      </div>
+      <div class="registry-hint">Click a unit card <strong>or click its marker on the map</strong> to select for dispatch.</div>
+      <button class="nearest-btn" onclick="findNearest()">🔍 Find Nearest Available Unit</button>
+      <div id="unit-registry-panel">
+        <div class="unit-empty"><div style="font-size:30px;margin-bottom:7px;">📵</div><div style="font-size:12px;font-weight:700;">No units online</div><div style="font-size:10px;margin-top:3px;opacity:.6;">Use mock units above to test</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">📡 Unit Response</div>
+      <div class="status-box waiting" id="status-box"><span id="status-icon">⏳</span><span id="status-text">No alert sent yet</span></div>
+      <div class="section-label">Alert ID</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--blue);margin-bottom:11px;" id="alert-id-display">—</div>
+      <div class="section-label">Destination</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);white-space:pre-line;margin-bottom:11px;" id="dest-display">—</div>
+      <div style="display:flex;gap:7px;">
+        <button onclick="refreshStatus()" class="btn btn-ghost btn-sm" style="flex:1;">↻ Refresh</button>
+        <button onclick="switchTab('alerts')" class="btn btn-blue btn-sm" style="flex:1;">📋 Incidents</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">📋 Activity Log</div>
+      <div class="log-wrap" id="log"></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div id="tab-alerts" class="tab-content">
+<div class="alerts-page">
+  <div class="alerts-header">
+    <div>
+      <div class="alerts-title">Dispatched Incidents</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px;">Click ticket to open live tracking</div>
+    </div>
+  </div>
+  <div class="filter-row">
+    <button class="flt-btn fa" id="flt-all"   onclick="setFilter('all')"      >All</button>
+    <button class="flt-btn"   id="flt-amb"    onclick="setFilter('ambulance')">🚑 Ambulance</button>
+    <button class="flt-btn"   id="flt-fire"   onclick="setFilter('fire')"     >🚒 Fire</button>
+    <button class="flt-btn"   id="flt-police" onclick="setFilter('police')"   >🚔 Police</button>
+    <button class="flt-btn"   id="flt-rescue" onclick="setFilter('rescue')"   >🚁 Rescue</button>
+  </div>
+  <div id="ticket-grid"></div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     LIVE VIEW  —  right panel order (top → bottom):
+     1. Lifecycle strip + status banner
+     2. Route Intelligence  ← MOVED UP HERE (stable, no flicker)
+     3. Navigation step progress (shown only when navigating)
+     4. Speed / ETA stats grid
+     5. Incident details
+     6. Nearby Resources panel
+     7. Tracking log
+════════════════════════════════════════════════════════════════ -->
+<div id="view-live">
+  <div class="live-map-wrap">
+    <div class="live-topbar">
+      <button class="live-back-btn" onclick="closeLive()">← Back</button>
+      <div class="live-alert-pill">
+        <span class="lap-icon" id="lap-icon">🚑</span>
+        <div class="lap-info">
+          <div class="lap-name" id="lap-name">—</div>
+          <div class="lap-sub"  id="lap-sub">—</div>
+        </div>
+        <div class="live-badge offline" id="live-badge" style="flex-shrink:0;">
+          <span class="dot" id="live-dot" style="background:var(--muted)"></span>
+          <span id="live-badge-text">Waiting…</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:7px;">
+        <button class="live-back-btn" onclick="centerOnVehicle()">🎯 Center</button>
+        <button class="live-back-btn" onclick="fitAll()">⛶ Fit</button>
+        <button class="live-back-btn traffic-btn-off" id="traffic-btn" onclick="toggleTraffic()">🚦 Traffic: OFF</button>
+      </div>
+    </div>
+    <div class="nearby-legend">
+      <div class="nearby-legend-title">📍 Nearby Places</div>
+      <div class="nearby-toggle-row" onclick="toggleNearbyLayer('hospital')"><span class="nearby-toggle-label"><span style="font-size:14px;">🏥</span>Hospitals <span class="nearby-toggle-count" id="cnt-hospital">0</span></span><button class="nearby-toggle-switch off" id="sw-hospital"></button></div>
+      <div class="nearby-toggle-row" onclick="toggleNearbyLayer('blood_bank')"><span class="nearby-toggle-label"><span style="font-size:14px;">🩸</span>Blood Banks <span class="nearby-toggle-count" id="cnt-blood_bank">0</span></span><button class="nearby-toggle-switch off" id="sw-blood_bank"></button></div>
+      <div class="nearby-toggle-row" onclick="toggleNearbyLayer('police')"><span class="nearby-toggle-label"><span style="font-size:14px;">🚔</span>Police <span class="nearby-toggle-count" id="cnt-police">0</span></span><button class="nearby-toggle-switch off" id="sw-police"></button></div>
+      <div class="nearby-toggle-row" onclick="toggleNearbyLayer('fire_station')"><span class="nearby-toggle-label"><span style="font-size:14px;">🚒</span>Fire Stns <span class="nearby-toggle-count" id="cnt-fire_station">0</span></span><button class="nearby-toggle-switch off" id="sw-fire_station"></button></div>
+      <div class="nearby-toggle-row" onclick="toggleNearbyLayer('pharmacy')"><span class="nearby-toggle-label"><span style="font-size:14px;">💊</span>Pharmacies <span class="nearby-toggle-count" id="cnt-pharmacy">0</span></span><button class="nearby-toggle-switch off" id="sw-pharmacy"></button></div>
+    </div>
+    <div class="map-ph-full" id="no-loc-msg">
+      <div class="ph-icon" id="ph-icon">🚑</div>
+      <div class="ph-msg">Waiting for unit to accept alert</div>
+      <div class="ph-sub">Live position appears once the unit is moving</div>
+    </div>
+    <div id="tracking-map" style="display:none;width:100%;height:100%;"></div>
+  </div>
+
+  <!-- ── RIGHT SIDE PANEL ── -->
+  <div class="live-side">
+
+    <!-- 1. Lifecycle strip + trip status banner -->
+    <div class="ls-section">
+      <div class="lifecycle-strip">
+        <div class="lc-step"><div class="lc-dot" id="lc-dispatched"></div><div class="lc-label">Dispatched</div></div>
+        <div class="lc-connector" id="lcc-1"></div>
+        <div class="lc-step"><div class="lc-dot" id="lc-en_route"></div><div class="lc-label">En Route</div></div>
+        <div class="lc-connector" id="lcc-2"></div>
+        <div class="lc-step"><div class="lc-dot" id="lc-on_action"></div><div class="lc-label">On Action</div></div>
+        <div class="lc-connector" id="lcc-3"></div>
+        <div class="lc-step"><div class="lc-dot" id="lc-arrived"></div><div class="lc-label">Arrived</div></div>
+        <div class="lc-connector" id="lcc-4"></div>
+        <div class="lc-step"><div class="lc-dot" id="lc-completed"></div><div class="lc-label">Done</div></div>
+      </div>
+      <div id="tsb">
+        <span id="tsb-icon" style="font-size:24px;flex-shrink:0;">⏸</span>
+        <div><div class="tsb-title" id="tsb-title">Waiting</div><div class="tsb-sub" id="tsb-sub">No active trip</div></div>
+      </div>
+    </div>
+
+    <!-- 2. Route Intelligence — ABOVE nearby resources, stable visibility -->
+    <div class="ls-section" id="route-intel-section" style="display:none;">
+      <div class="route-intel-panel" id="route-intel-panel">
+        <div class="ri-title">🗺️ Route Intelligence</div>
+        <div style="font-size:10px;color:var(--muted);text-align:center;padding:10px 0;">Waiting for route data…</div>
+      </div>
+    </div>
+
+    <!-- 3. Navigation step progress -->
+    <div class="ls-section" id="step-section" style="display:none;">
+      <div class="step-wrap">
+        <div class="step-hdr"><span style="font-weight:700;text-transform:uppercase;letter-spacing:.7px;font-size:10px;">Navigation</span><span id="step-counter" style="font-family:'JetBrains Mono',monospace;color:var(--blue);font-size:10px;">—</span></div>
+        <div class="step-track"><div class="step-fill" id="step-fill" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <!-- 4. Stats grid -->
+    <div class="ls-section">
+      <div class="info-grid">
+        <div class="info-stat"><div class="info-stat-label">Server</div><div class="info-stat-value green" id="stat-status">—</div></div>
+        <div class="info-stat"><div class="info-stat-label">Updated</div><div class="info-stat-value blue" id="stat-updated">—</div></div>
+        <div class="info-stat"><div class="info-stat-label">Latitude</div><div class="info-stat-value" id="stat-lat">—</div></div>
+        <div class="info-stat"><div class="info-stat-label">Longitude</div><div class="info-stat-value" id="stat-lng">—</div></div>
+        <div class="info-stat"><div class="info-stat-label">🏎 Speed</div><div class="info-stat-value green" id="stat-speed">— km/h</div><div class="speed-bar-wrap"><div class="speed-bar" id="speed-bar" style="width:0%"></div></div></div>
+        <div class="info-stat"><div class="info-stat-label">📏 Dist Left</div><div class="info-stat-value blue" id="stat-dist">—</div></div>
+        <div class="info-stat"><div class="info-stat-label">⏱ ETA</div><div class="info-stat-value yellow" id="stat-eta">—</div></div>
+        <div class="info-stat"><div class="info-stat-label">🕐 Arrival</div><div class="info-stat-value" id="stat-arrival">—</div></div>
+      </div>
+    </div>
+
+    <!-- 5. Incident details -->
+    <div class="ls-section">
+      <div class="section-label" style="margin-bottom:8px;">Incident Details</div>
+      <div class="ai-row"><span class="ai-lbl">Alert Status</span><span class="ai-val" id="ai-status">—</span></div>
+      <div class="ai-row"><span class="ai-lbl">Trip Status</span><span class="ai-val" id="ai-trip-status">—</span></div>
+      <div class="ai-row"><span class="ai-lbl">Unit Type</span><span class="ai-val" id="ai-unit">—</span></div>
+      <div class="ai-row"><span class="ai-lbl">Severity</span><span class="ai-val" id="ai-sev">—</span></div>
+      <div class="ai-row"><span class="ai-lbl">Contact</span><span class="ai-val" id="ai-phone">—</span></div>
+      <div class="ai-row"><span class="ai-lbl">Destination</span><span class="ai-val" id="ai-dest">—</span></div>
+      <div class="ai-row"><span class="ai-lbl">Notes</span><span class="ai-val" id="ai-notes" style="white-space:normal;">—</span></div>
+    </div>
+
+    <!-- 6. Nearby Resources — BELOW route intelligence -->
+    <div class="nearby-panel">
+      <div class="nearby-panel-title">🏥 Nearby Places</div>
+      <div id="nearby-list"><div class="nearby-loading">Waiting for unit location…</div></div>
+      <button class="nearby-refresh-btn" onclick="refreshNearbyPlaces()">↻ Refresh Nearby</button>
+    </div>
+
+    <!-- 7. Tracking log -->
+    <div class="ls-section" style="flex:1;">
+      <div class="section-label" style="margin-bottom:7px;">Tracking Log</div>
+      <div class="logbox" id="tracking-log"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="confirm-modal">
+  <div class="confirm-modal">
+    <div class="modal-header">
+      <span class="modal-header-icon" id="cm-icon">🚑</span>
+      <div class="modal-header-info">
+        <div class="modal-header-title" id="cm-title">Confirm Dispatch</div>
+        <div class="modal-header-sub" id="cm-sub">Review the assignment details before confirming</div>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="modal-section-title">🚑 Assigned Unit</div>
+      <div class="unit-confirm-card" id="cm-unit-card">
+        <span class="ucf-icon" id="cm-unit-icon">🚑</span>
+        <div class="ucf-info">
+          <div class="ucf-name" id="cm-unit-name">—</div>
+          <div class="ucf-meta" id="cm-unit-meta">—</div>
+          <div class="ucf-dist" id="cm-unit-dist"></div>
+        </div>
+        <span class="unit-status-pill usp-available" id="cm-unit-status">Available</span>
+      </div>
+      <div class="modal-warning" id="cm-no-unit-warn" style="display:none;">
+        ⚠️ No specific unit selected — this will broadcast to ALL available units.
+      </div>
+      <div class="modal-section-title">📋 Incident Details</div>
+      <div class="confirm-detail-grid">
+        <div class="detail-card highlight"><div class="detail-label">Unit Type</div><div class="detail-value" id="cm-type">Ambulance</div></div>
+        <div class="detail-card highlight"><div class="detail-label">Priority</div><div class="detail-value" id="cm-sev">Critical</div></div>
+        <div class="detail-card" style="grid-column:span 2;"><div class="detail-label">Patient / Caller</div><div class="detail-value" id="cm-patient">—</div></div>
+        <div class="detail-card" style="grid-column:span 2;"><div class="detail-label">📍 Incident Location</div><div class="detail-value" id="cm-address">—</div></div>
+        <div class="detail-card"><div class="detail-label">Phone</div><div class="detail-value" id="cm-phone">—</div></div>
+        <div class="detail-card"><div class="detail-label">Coordinates</div><div class="detail-value" id="cm-coords" style="font-family:'JetBrains Mono',monospace;font-size:11px;">—</div></div>
+        <div class="detail-card" style="grid-column:span 2;" id="cm-notes-card"><div class="detail-label">Notes</div><div class="detail-value" id="cm-notes">—</div></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-cancel-btn" onclick="closeConfirmModal()">✕ Cancel</button>
+      <button class="modal-confirm-btn da" id="cm-confirm-btn" onclick="sendAlert()">🚑 CONFIRM DISPATCH</button>
+    </div>
+  </div>
+</div>
+<script>
+const SERVER = window.location.origin;
+const UNIT_MAP_COLORS = { ambulance:'#4CAF50', fire:'#FB8C00', police:'#1E88E5', rescue:'#8E24AA', hazmat:'#F57F17' };
+const INCIDENT_COLOR  = '#E53935';
+const BUSY_COLOR      = '#FFC107';
+const UCFG = {
+  ambulance:{ icon:'🚑', label:'Ambulance',  color:'#4CAF50', btnCls:'da', btnTxt:'🚑 DISPATCH AMBULANCE',  formTitle:'🚑 Ambulance — Incident Details' },
+  fire:     { icon:'🚒', label:'Fire Engine', color:'#FB8C00', btnCls:'df', btnTxt:'🚒 DISPATCH FIRE ENGINE', formTitle:'🚒 Fire Engine — Incident Details' },
+  police:   { icon:'🚔', label:'Police Unit', color:'#1E88E5', btnCls:'dp', btnTxt:'🚔 DISPATCH POLICE UNIT', formTitle:'🚔 Police — Incident Details' },
+  rescue:   { icon:'🚁', label:'Rescue',      color:'#8E24AA', btnCls:'dr', btnTxt:'🚁 DISPATCH RESCUE UNIT', formTitle:'🚁 Rescue — Incident Details' },
+  hazmat:   { icon:'☢️',  label:'Hazmat',      color:'#F57F17', btnCls:'dh', btnTxt:'☢️ DISPATCH HAZMAT TEAM', formTitle:'☢️ Hazmat — Incident Details' },
+};
+const TRIP_STATUS_CFG = {
+  idle:       { bg:'rgba(139,148,158,.12)', brd:'rgba(139,148,158,.2)', c:'#8B949E', i:'⏸',  t:'Idle',             s:'No active trip' },
+  dispatched: { bg:'rgba(249,168,37,.15)',  brd:'rgba(249,168,37,.3)',  c:'#F9A825', i:'🚨',  t:'Alert Dispatched', s:'Unit notified — preparing' },
+  en_route:   { bg:'rgba(26,115,232,.15)',  brd:'rgba(26,115,232,.3)',  c:'#1A73E8', i:'🚑',  t:'En Route',         s:'Unit driving to location' },
+  on_action:  { bg:'rgba(156,39,176,.15)',  brd:'rgba(206,147,216,.3)', c:'#CE93D8', i:'🔵',  t:'On Action',        s:'Unit on scene — actively working' },
+  arrived:    { bg:'rgba(52,168,83,.18)',   brd:'rgba(52,168,83,.4)',   c:'#34A853', i:'🏁',  t:'ARRIVED',          s:'Unit reached destination!' },
+  completed:  { bg:'rgba(52,168,83,.10)',   brd:'rgba(52,168,83,.25)',  c:'#A5D6A7', i:'✅',  t:'Trip Completed',   s:'Successfully completed' },
+  abandoned:  { bg:'rgba(183,28,28,.15)',   brd:'rgba(229,57,53,.35)',  c:'#EF5350', i:'🚫',  t:'Trip Abandoned',   s:'Driver abandoned trip' },
+};
+const LIFECYCLE_ORDER = ['dispatched','en_route','on_action','arrived','completed'];
+const DARK_MAP_STYLES = [
+  {elementType:'geometry',stylers:[{color:'#1a1f2e'}]},
+  {elementType:'labels.text.stroke',stylers:[{color:'#1a1f2e'}]},
+  {elementType:'labels.text.fill',stylers:[{color:'#8b949e'}]},
+  {featureType:'road',elementType:'geometry',stylers:[{color:'#2d3748'}]},
+  {featureType:'road',elementType:'labels.text.fill',stylers:[{color:'#a0aec0'}]},
+  {featureType:'road.highway',elementType:'geometry',stylers:[{color:'#3d4f6e'}]},
+  {featureType:'water',elementType:'geometry',stylers:[{color:'#0d1117'}]},
+  {featureType:'poi',stylers:[{visibility:'off'}]},
+  {featureType:'transit',stylers:[{visibility:'off'}]},
+];
+const NEARBY_TYPES = {
+  hospital:     { label:'Hospital',       icon:'🏥', color:'#E53935', placeType:'hospital',     radius:5000, typeCls:'pt-hospital' },
+  blood_bank:   { label:'Blood Bank',     icon:'🩸', color:'#D32F2F', placeType:'blood_bank',   radius:8000, typeCls:'pt-blood' },
+  police:       { label:'Police Station', icon:'🚔', color:'#1565C0', placeType:'police',       radius:5000, typeCls:'pt-police' },
+  fire_station: { label:'Fire Station',   icon:'🚒', color:'#FF6D00', placeType:'fire_station', radius:5000, typeCls:'pt-fire' },
+  pharmacy:     { label:'Pharmacy',       icon:'💊', color:'#7B1FA2', placeType:'pharmacy',     radius:3000, typeCls:'pt-pharmacy' },
+};
+const MOCK_DEFS = [
+  {id:'MOCK-AMB-01', name:'Ambulance Alpha', type:'ambulance', baseLat:11.0200, baseLng:76.9500},
+  {id:'MOCK-AMB-02', name:'Ambulance Beta',  type:'ambulance', baseLat:11.0350, baseLng:76.9700},
+  {id:'MOCK-FIRE-01',name:'Fire Unit 1',     type:'fire',      baseLat:11.0100, baseLng:76.9650},
+  {id:'MOCK-POL-01', name:'Police Car 1',    type:'police',    baseLat:11.0280, baseLng:76.9400},
+  {id:'MOCK-RES-01', name:'Rescue Heli 1',   type:'rescue',    baseLat:11.0450, baseLng:76.9550},
+  {id:'MOCK-HAZ-01', name:'Hazmat Team 1',   type:'hazmat',    baseLat:10.9900, baseLng:76.9600},
+];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let selUType='ambulance', selSevType='critical';
+let curFilter='all', alertHistory=[], liveAlert=null, unitList=[], selectedUnitId=null;
+let pickedLat=null, pickedLng=null;
+let dMap, dMarker, autocomplete;
+let currentFormDef=null, formAnswers={};
+const formCache={};
+let tMap=null, tMapReady=false;
+let vehMarker=null, destMarkerT=null, routeOut=null, routePoly=null, fullPath=null;
+let lastVLat=null, lastVLng=null, routeAt=0;
+let lastSpdLog=0, lastTripSt='', _lastStatusKey='', _lastBox='';
+let nearbyMarkers={}, nearbyInfoWindow=null;
+let nearbyLayerVisible={ hospital:false, blood_bank:false, police:false, fire_station:false, pharmacy:false };
+let nearbyData={}, nearbySearchCenter=null, nearbySearchInFlight=false;
+let dualSectionOpen=false;
+let currentKmRadius=5;
+let mockUnits={};
+let trafficLayer=null, trafficLayerOn=false;
+let resMap=null, resDestMarker=null;
+let resMarkers={}, resLayerVisible={hospital:true,blood_bank:true,police:true,fire_station:true,pharmacy:true};
+let resInfoWindow=null, resNearbyData={};
+let unitsMap=null, unitsDestMarker=null;
+let unitMapMarkers2={}, unitLayerVisible2={available:true,busy:true,offline:true};
+let unitsInfoWindow2=null;
+
+// ── Route Intelligence State ───────────────────────────────────────────────────
+let allRoutePolylines = [];
+let currentRouteIdx   = 0;
+let bestRouteIdx      = 0;
+let routeData         = [];
+let routeDetectTimer  = null;
+// Track whether route-intel-section should be visible (set only on status change, not every poll)
+let routeIntelShouldShow = false;
+
+function haversineMetres(la1,lo1,la2,lo2){
+  const R=6371000,φ1=la1*Math.PI/180,φ2=la2*Math.PI/180,dφ=(la2-la1)*Math.PI/180,dλ=(lo2-lo1)*Math.PI/180;
+  const a=Math.sin(dφ/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function fmtDist(m){return m>=1000?(m/1000).toFixed(1)+' km':Math.round(m)+' m';}
+function fmtEta(m){const s=m/1000/30*3600,mins=Math.round(s/60);return mins<1?'<1 min':mins<60?mins+' min':Math.floor(mins/60)+'h '+mins%60+'m';}
+function fmtTime(s){if(s<=0)return'0 min';const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h===0?m+' min':m===0?h+' hr':h+' hr '+m+' min';}
+
+function trafficRatio(durationS, trafficS){
+  if(!trafficS||!durationS) return 1;
+  return trafficS / durationS;
+}
+function trafficLabel(ratio){
+  if(ratio < 1.1) return {label:'Free flow', color:'#34A853', emoji:'🟢', short:'Free'};
+  if(ratio < 1.3) return {label:'Moderate',  color:'#F9A825', emoji:'🟡', short:'Mod'};
+  if(ratio < 1.6) return {label:'Heavy',     color:'#E53935', emoji:'🔴', short:'Heavy'};
+  return              {label:'Stop & Go',  color:'#B71C1C', emoji:'🔴', short:'Stop&Go'};
+}
+function routeLineColor(trafficR){
+  if(trafficR < 1.1) return '#1A73E8';
+  if(trafficR < 1.3) return '#F9A825';
+  if(trafficR < 1.6) return '#E53935';
+  return '#B71C1C';
+}
+
+function perpDistLatLng(pos, poly){
+  if(!poly||poly.length<2) return Infinity;
+  let min=Infinity;
+  for(let i=0;i<poly.length-1;i++){
+    const A=poly[i],B=poly[i+1];
+    const ab=haversineMetres(A.lat,A.lng,B.lat,B.lng);
+    if(ab<0.5){min=Math.min(min,haversineMetres(pos.lat,pos.lng,A.lat,A.lng));continue;}
+    const t=Math.max(0,Math.min(1,
+      ((pos.lat-A.lat)*(B.lat-A.lat)+(pos.lng-A.lng)*(B.lng-A.lng)) /
+      ((B.lat-A.lat)**2+(B.lng-A.lng)**2)
+    ));
+    const nx=A.lat+t*(B.lat-A.lat),ny=A.lng+t*(B.lng-A.lng);
+    min=Math.min(min,haversineMetres(pos.lat,pos.lng,nx,ny));
+  }
+  return min;
+}
+
+function detectCurrentRoute(lat,lng){
+  if(!allRoutePolylines.length) return;
+  let minD=Infinity;
+  allRoutePolylines.forEach((r,i)=>{
+    const d=perpDistLatLng({lat,lng},r.fp);
+    if(d<minD){minD=d;currentRouteIdx=i;}
+  });
+  recolorRoutePolylines(); 
+  updateRouteIntelPanel();
+}
+
+function recolorRoutePolylines(){
+  allRoutePolylines.forEach((r,i)=>{
+    const isCurrent=i===currentRouteIdx;
+    const rd=routeData[i];
+    const tr=rd?trafficRatio(rd.durationS,rd.trafficS):1;
+    const lineColor=isCurrent?routeLineColor(tr):'#6B8FAA';
+    const lineW=isCurrent?9:3; const outW=isCurrent?15:5;
+    const opacity=isCurrent?1:0.35; const zP=isCurrent?10:3;
+    if(r.poly)r.poly.setOptions({strokeColor:lineColor,strokeOpacity:opacity,strokeWeight:lineW,zIndex:zP});
+    if(r.out)r.out.setOptions({strokeColor:'#FFFFFF',strokeOpacity:opacity,strokeWeight:outW,zIndex:zP-1});
+  });
+}
+
+// ── Route Intelligence Panel — only updates content, NEVER touches display ────
+// Visibility is controlled exclusively by setRouteIntelVisible()
+function updateRouteIntelPanel(){
+  const panel=document.getElementById('route-intel-panel');
+  if(!panel) return;
+  if(!routeData.length){
+    panel.innerHTML='<div class="ri-title">🗺️ Route Intelligence</div><div style="font-size:10px;color:var(--muted);text-align:center;padding:10px 0;">Waiting for route data…</div>';
+    return;
+  }
+
+  const best    = routeData[bestRouteIdx];
+  const current = routeData[currentRouteIdx] ?? best;
+  const onBest  = currentRouteIdx === bestRouteIdx;
+  const bestTR    = trafficRatio(best.durationS,    best.trafficS);
+  const currentTR = trafficRatio(current.durationS, current.trafficS);
+  const bestTL    = trafficLabel(bestTR);
+  const currentTL = trafficLabel(currentTR);
+  const timeDiffS  = current.trafficS - best.trafficS;
+  const timeDiffTx = timeDiffS > 3600 ? `+${(timeDiffS/3600).toFixed(1)}h slower`
+                   : timeDiffS > 60   ? `+${Math.round(timeDiffS/60)} min slower`
+                   : timeDiffS > 0    ? `+${timeDiffS}s slower` : 'Optimal route';
+  const distDiffM  = current.distanceM - best.distanceM;
+  const distDiffTx = distDiffM > 0 ? `+${fmtDist(distDiffM)} longer` : '';
+
+  let trafficWarnHtml = '';
+  if(bestTR >= 1.3){
+    const extraMins = Math.round((best.trafficS - best.durationS) / 60);
+    trafficWarnHtml = `
+      <div class="ri-traffic-warn">
+        <span class="ri-traffic-warn-icon">${bestTL.emoji}</span>
+        <div class="ri-traffic-warn-text">${bestTL.label} on fastest route — adds ~${extraMins} min delay (${fmtDist(best.distanceM)} route)</div>
+      </div>`;
+  }
+
+  const routesListHtml = routeData.map((r,i)=>{
+    const isBest    = i===bestRouteIdx;
+    const isCurrent = i===currentRouteIdx;
+    const tr  = trafficRatio(r.durationS, r.trafficS);
+    const tl  = trafficLabel(tr);
+    const lc  = isBest ? routeLineColor(tr) : '#A8C8F8';
+    const diffS = r.trafficS - best.trafficS;
+    const badgeTx = isBest ? 'Fastest' : diffS < 60 ? 'Similar' : `+${Math.round(diffS/60)} min`;
+    const badgeBg = isBest ? 'rgba(26,115,232,.2)' : diffS > 300 ? 'rgba(229,57,53,.15)' : 'rgba(249,168,37,.12)';
+    const badgeC  = isBest ? '#82B4FF' : diffS > 300 ? '#FF8A80' : '#F9A825';
+    const curMark = isCurrent ? ' ← driver' : '';
+    return `<div class="ri-route-row">
+      <div class="ri-route-swatch" style="background:${lc};opacity:${isBest?1:0.6}"></div>
+      <div class="ri-route-info">
+        <div class="ri-route-name">${r.summary||'Route '+(i+1)}${curMark}</div>
+        <div class="ri-route-meta">${fmtTime(r.trafficS)} · ${fmtDist(r.distanceM)} · ${tl.emoji} ${tl.short}</div>
+      </div>
+      <div class="ri-route-badge" style="background:${badgeBg};color:${badgeC}">${badgeTx}</div>
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="ri-title">🗺️ Route Intelligence</div>
+    <div class="ri-cards">
+      <div class="ri-card" style="background:rgba(26,115,232,.1);border-color:rgba(26,115,232,.25)">
+        <div class="ri-card-label" style="color:#82B4FF">Fastest (w/ traffic)</div>
+        <div class="ri-card-time" style="color:#82B4FF">${fmtTime(best.trafficS)}</div>
+        <div class="ri-card-dist">${fmtDist(best.distanceM)}</div>
+        <div class="ri-card-traffic" style="color:${bestTL.color}">${bestTL.emoji} ${bestTL.label}</div>
+      </div>
+      <div class="ri-card" style="background:${onBest?'rgba(52,168,83,.1)':'rgba(229,57,53,.09)'};border-color:${onBest?'rgba(52,168,83,.3)':'rgba(229,57,53,.28)'}">
+        <div class="ri-card-label" style="color:${onBest?'#69F0AE':'#FF8A80'}">Driver's route</div>
+        <div class="ri-card-time" style="color:${onBest?'#69F0AE':'#FF8A80'}">${fmtTime(current.trafficS)}</div>
+        <div class="ri-card-dist">${fmtDist(current.distanceM)}</div>
+        <div class="ri-card-traffic" style="color:${currentTL.color}">${currentTL.emoji} ${currentTL.label}</div>
+      </div>
+    </div>
+    ${trafficWarnHtml}
+    <div class="ri-status" style="background:${onBest?'rgba(52,168,83,.08)':'rgba(249,168,37,.07)'};border-color:${onBest?'rgba(52,168,83,.2)':'rgba(249,168,37,.25)'}">
+      <span class="ri-status-icon">${onBest?'✅':'⚠️'}</span>
+      <div>
+        <div class="ri-status-title" style="color:${onBest?'#34A853':'#F9A825'}">${onBest?'On fastest route':'Not on fastest route'}</div>
+        ${!onBest?`<div class="ri-status-sub">${timeDiffTx}${distDiffTx?' · '+distDiffTx:''} · ${routeData.length} routes available</div>`:''}
+      </div>
+    </div>
+    <div class="ri-routes-list">${routesListHtml}</div>
+    <div class="ri-legend">
+      <div class="ri-legend-item"><div class="ri-legend-line" style="background:#1A73E8"></div>Fastest</div>
+      <div class="ri-legend-item"><div class="ri-legend-line" style="background:#F9A825"></div>Moderate traffic</div>
+      <div class="ri-legend-item"><div class="ri-legend-line" style="background:#A8C8F8;opacity:.7"></div>Alternatives</div>
+    </div>`;
+}
+
+// Single source of truth for route-intel-section visibility
+// Only called when trip status actually changes (not every poll)
+function setRouteIntelVisible(visible){
+  routeIntelShouldShow = visible;
+  const ris = document.getElementById('route-intel-section');
+  if(!ris) return;
+  // Only show if we have route data OR we're forcing show (awaiting data)
+  ris.style.display = (visible && routeData.length > 0) ? 'block' : 'none';
+}
+
+function switchTab(tab){
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['dispatch','alerts'][i]===tab));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  if(tab==='alerts')renderTickets();
+}
+
+const U_CLS={ambulance:'ua',fire:'uf',police:'up',rescue:'ur',hazmat:'uh'};
+function selU(type){
+  selUType=type;
+  document.querySelectorAll('.utype-btn').forEach(b=>b.className='utype-btn');
+  document.getElementById('ub-'+type).classList.add(U_CLS[type]);
+  const cfg=UCFG[type];
+  document.getElementById('form-title').textContent=cfg.formTitle;
+  const btn=document.getElementById('sendBtn');
+  btn.textContent=cfg.btnTxt; btn.className='btn btn-dispatch '+cfg.btnCls;
+  loadFormForUnitType(type);
+}
+function selSev(s){
+  selSevType=s;
+  document.querySelectorAll('.sev-btn[data-s]').forEach(b=>{b.className='sev-btn';if(b.dataset.s===s)b.classList.add({critical:'sc',high:'sh',medium:'sm',low:'sl'}[s]);});
+}
+
+function initMap(){
+  dMap=new google.maps.Map(document.getElementById('map-picker'),{center:{lat:11.0168,lng:76.9558},zoom:13,styles:DARK_MAP_STYLES});
+  dMap.addListener('click',e=>{pinDest(e.latLng.lat(),e.latLng.lng(),null);revGeo(e.latLng.lat(),e.latLng.lng());});
+  autocomplete=new google.maps.places.Autocomplete(document.getElementById('place-search'),
+    {componentRestrictions:{country:'in'},fields:['geometry','name','formatted_address']});
+  autocomplete.addListener('place_changed',()=>{
+    const p=autocomplete.getPlace();if(!p.geometry?.location)return;
+    const lat=p.geometry.location.lat(),lng=p.geometry.location.lng();
+    pinDest(lat,lng,p.formatted_address||p.name);
+    dMap.setCenter({lat,lng});dMap.setZoom(16);
+    setAddrField(p.formatted_address||p.name);showSrl(p.name||p.formatted_address);
+    document.getElementById('sc-clear').style.display='block';
+  });
+  document.getElementById('place-search').addEventListener('input',e=>{
+    document.getElementById('sc-clear').style.display=e.target.value?'block':'none';
+    if(!e.target.value)hideSrl();
+  });
+  nearbyInfoWindow=new google.maps.InfoWindow();
+  addLog('🗺️ Map ready','ok');
+  buildMockGrid();
+  startPolling();
+  loadFormForUnitType('ambulance');
+  fetchUnits();
+  setInterval(fetchUnits,5000);
+}
+
+function clearSearch(){document.getElementById('place-search').value='';document.getElementById('sc-clear').style.display='none';hideSrl();}
+function showSrl(n){document.getElementById('srl-text').textContent=n;document.getElementById('srl').classList.add('show');}
+function hideSrl(){document.getElementById('srl').classList.remove('show');}
+
+function pinDest(lat,lng,ov){
+  pickedLat=lat;pickedLng=lng;
+  document.getElementById('lat').value=lat.toFixed(6);
+  document.getElementById('lng').value=lng.toFixed(6);
+  document.getElementById('coord-disp').textContent=`📍 ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  document.getElementById('msb-info').textContent=`Dest: ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  if(dMarker)dMarker.setMap(null);
+  dMarker=new google.maps.Marker({
+    position:{lat,lng},map:dMap,animation:google.maps.Animation.DROP,zIndex:200,
+    icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="52" viewBox="0 0 40 52">
+        <path d="M20 0C9 0 0 9 0 20C0 35 20 52 20 52C20 52 40 35 40 20C40 9 31 0 20 0Z" fill="${INCIDENT_COLOR}" stroke="white" stroke-width="2.5"/>
+        <circle cx="20" cy="20" r="8" fill="white" opacity="0.9"/>
+        <circle cx="20" cy="20" r="4" fill="${INCIDENT_COLOR}"/>
+        <text x="20" y="15" text-anchor="middle" font-size="9" fill="white" font-weight="bold">DEST</text>
+      </svg>`),scaledSize:new google.maps.Size(34,42),anchor:new google.maps.Point(17,42)},
+  });
+  if(ov)setAddrField(ov);
+  enableViewResourcesBtn();
+  if(pickedLat&&pickedLng)findNearest(true);
+  updateUnitDistances();
+}
+
+function revGeo(lat,lng){
+  new google.maps.Geocoder().geocode({location:{lat,lng}},(r,s)=>{
+    if(s==='OK'&&r[0]){const a=r[0].formatted_address;setAddrField(a);document.getElementById('place-search').value=a;document.getElementById('sc-clear').style.display='block';showSrl(a);addLog('📍 '+a,'info');}
+  });
+}
+function setPreset(lat,lng,name){
+  pinDest(lat,lng,name);dMap?.setCenter({lat,lng});dMap?.setZoom(15);
+  document.getElementById('place-search').value=name;
+  document.getElementById('sc-clear').style.display='block';showSrl(name);addLog('📌 Preset: '+name,'info');
+}
+function setAddrField(v){const el=document.querySelector('#dynamic-form-fields input[data-label*="Address"],#dynamic-form-fields input[data-label*="address"]');if(el)el.value=v;}
+function getAddrField(){const el=document.querySelector('#dynamic-form-fields input[data-label*="Address"],#dynamic-form-fields input[data-label*="address"]');return el?el.value.trim():'';}
+
+function enableViewResourcesBtn(){
+  const btn=document.getElementById('view-res-btn');
+  btn.disabled=false;btn.classList.add('enabled');
+  document.getElementById('loc-hint').style.display='none';
+}
+
+function toggleDualSection(){
+  dualSectionOpen=!dualSectionOpen;
+  const section=document.getElementById('dual-section');
+  const btn=document.getElementById('view-res-btn');
+  const chevron=document.getElementById('vrb-chevron');
+  const text=document.getElementById('vrb-text');
+  section.classList.toggle('open',dualSectionOpen);
+  btn.classList.toggle('active',dualSectionOpen);
+  chevron.classList.toggle('open',dualSectionOpen);
+  text.textContent=dualSectionOpen?'Hide Resources & Units':'View Nearby Resources & Units';
+  if(dualSectionOpen){
+    setTimeout(()=>{initDualMaps();if(pickedLat&&pickedLng)searchNearbyResources();},100);
+    updateUnitsTable();
+  }
+}
+
+let dualMapsInited=false;
+function initDualMaps(){
+  if(dualMapsInited)return; dualMapsInited=true;
+  nearbySearchInFlight=false;
+  const center={lat:pickedLat||11.0168,lng:pickedLng||76.9558};
+  resMap=new google.maps.Map(document.getElementById('map-resources'),{center,zoom:13,styles:DARK_MAP_STYLES,mapTypeControl:false,streetViewControl:false});
+  resInfoWindow=new google.maps.InfoWindow();
+  if(pickedLat&&pickedLng)pinOnResMap(pickedLat,pickedLng);
+  unitsMap=new google.maps.Map(document.getElementById('map-units'),{center,zoom:13,styles:DARK_MAP_STYLES,mapTypeControl:false,streetViewControl:false});
+  unitsInfoWindow2=new google.maps.InfoWindow();
+  if(pickedLat&&pickedLng)pinOnUnitsMap(pickedLat,pickedLng);
+  renderUnitsOnMap2();
+}
+
+function pinOnResMap(lat,lng){
+  if(!resMap)return;
+  if(resDestMarker)resDestMarker.setMap(null);
+  resDestMarker=new google.maps.Marker({position:{lat,lng},map:resMap,zIndex:200,
+    icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(destIconSvg()),scaledSize:new google.maps.Size(28,36),anchor:new google.maps.Point(14,36)}});
+  resMap.setCenter({lat,lng});
+}
+function pinOnUnitsMap(lat,lng){
+  if(!unitsMap)return;
+  if(unitsDestMarker)unitsDestMarker.setMap(null);
+  unitsDestMarker=new google.maps.Marker({position:{lat,lng},map:unitsMap,zIndex:200,
+    icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(destIconSvg()),scaledSize:new google.maps.Size(28,36),anchor:new google.maps.Point(14,36)}});
+  unitsMap.setCenter({lat,lng});
+}
+function destIconSvg(){
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M14 0C6 0 0 6 0 14C0 25 14 36 14 36S28 25 28 14C28 6 22 0 14 0Z" fill="#E53935" stroke="white" stroke-width="2"/><circle cx="14" cy="14" r="5" fill="white"/></svg>`;
+}
+
+function onKmChange(v){currentKmRadius=parseInt(v);document.getElementById('km-label').textContent=v+' km';}
+
+async function searchNearbyResources(){
+  if(!pickedLat||!pickedLng){addLog('⚠️ Set location first','warn');return;}
+  if(!window.google?.maps?.places)return;
+  if(!resMap){initDualMaps();setTimeout(searchNearbyResources,150);return;}
+  if(nearbySearchInFlight)return;
+  nearbySearchInFlight=true; resNearbyData={};
+  document.getElementById('res-table-body').innerHTML=`<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted);font-size:11px;">🔍 Searching within ${currentKmRadius} km…</td></tr>`;
+  const searches=Object.entries(NEARBY_TYPES).map(([key,cfg])=>
+    searchPlaceType(pickedLat,pickedLng,cfg.placeType,currentKmRadius*1000)
+      .then(places=>{resNearbyData[key]=places;document.getElementById('rcnt-'+key).textContent=places.length;addResMarkers(key,places,cfg);})
+      .catch(()=>{resNearbyData[key]=[];})
+  );
+  await Promise.allSettled(searches);
+  nearbySearchInFlight=false;
+  const total=Object.values(resNearbyData).flat().length;
+  document.getElementById('m1-count').textContent=total+' found';
+  document.getElementById('res-tbl-info').textContent=total+' places';
+  renderResourceTable();
+  addLog(`🏥 ${total} resources within ${currentKmRadius}km`,'ok');
+}
+
+function searchPlaceType(lat,lng,placeType,radius){
+  return new Promise(resolve=>{
+    if(!window.google?.maps?.places||!resMap){resolve([]);return;}
+    const svc=new google.maps.places.PlacesService(resMap);
+    svc.nearbySearch({location:{lat,lng},radius,type:placeType},(results,status)=>{
+      if(status===google.maps.places.PlacesServiceStatus.OK&&results)
+        resolve(results.map(p=>({name:p.name,lat:p.geometry.location.lat(),lng:p.geometry.location.lng(),vicinity:p.vicinity||'',rating:p.rating||null,place_id:p.place_id,open_now:p.opening_hours?.open_now})));
+      else resolve([]);
+    });
+  });
+}
+
+function buildResIconSvg(icon,color,size=30){
+  const s=size,cx=s/2,cy=s/2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><circle cx="${cx}" cy="${cy}" r="${s/2-2}" fill="${color}" stroke="white" stroke-width="2"/><text x="${cx}" y="${cy+5}" text-anchor="middle" font-size="${Math.round(s*0.44)}">${icon}</text></svg>`;
+}
+
+function addResMarkers(key,places,cfg){
+  if(resMarkers[key])resMarkers[key].forEach(m=>m.setMap(null));
+  resMarkers[key]=[];if(!resMap||!resLayerVisible[key])return;
+  places.forEach(p=>{
+    const marker=new google.maps.Marker({position:{lat:p.lat,lng:p.lng},map:resMap,title:p.name,zIndex:20,
+      icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(buildResIconSvg(cfg.icon,cfg.color,30)),scaledSize:new google.maps.Size(30,30),anchor:new google.maps.Point(15,15)}});
+    const distM=pickedLat?haversineMetres(pickedLat,pickedLng,p.lat,p.lng):null;
+    marker.addListener('click',()=>{
+      const ds=distM?fmtDist(distM):'';const et=distM?fmtEta(distM):'';
+      resInfoWindow.setContent(`<div style="font-family:'Sora',sans-serif;padding:8px 10px;min-width:180px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;"><span style="font-size:20px;">${cfg.icon}</span><div><div style="font-weight:800;font-size:13px;color:#111;">${p.name}</div><div style="font-size:10px;color:#888;">${cfg.label}</div></div></div>${p.vicinity?`<div style="font-size:11px;color:#555;margin-bottom:5px;">${p.vicinity}</div>`:''}<div style="display:flex;gap:10px;font-size:11px;margin-bottom:7px;">${ds?`<span style="color:#1E88E5;font-weight:700;">📏 ${ds}</span>`:''} ${et?`<span style="color:#34A853;font-weight:700;">⏱ ${et}</span>`:''} ${p.rating?`<span>⭐ ${p.rating}</span>`:''}</div><a href="https://www.google.com/maps/search/?api=1&query_place_id=${p.place_id}" target="_blank" style="display:block;background:${cfg.color};color:#fff;border-radius:7px;padding:7px;font-size:11px;font-weight:700;text-align:center;text-decoration:none;">📍 Open Maps</a></div>`);
+      resInfoWindow.open(resMap,marker);
+    });
+    resMarkers[key].push(marker);
+  });
+}
+
+function toggleResLayer(key){
+  resLayerVisible[key]=!resLayerVisible[key];
+  const sw=document.getElementById('rsw-'+key);
+  if(sw){sw.classList.toggle('on',resLayerVisible[key]);sw.classList.toggle('off',!resLayerVisible[key]);}
+  if(resMarkers[key])resMarkers[key].forEach(m=>m.setMap(resLayerVisible[key]?resMap:null));
+}
+
+function renderResourceTable(){
+  const tbody=document.getElementById('res-table-body');
+  const all=[];
+  Object.entries(resNearbyData).forEach(([key,places])=>{
+    const cfg=NEARBY_TYPES[key];
+    places.forEach(p=>{const d=pickedLat?haversineMetres(pickedLat,pickedLng,p.lat,p.lng):Infinity;all.push({...p,d,cfg});});
+  });
+  if(!all.length){tbody.innerHTML='<tr><td colspan="5" class="tbl-empty">No resources found in this area</td></tr>';return;}
+  all.sort((a,b)=>a.d-b.d);
+  tbody.innerHTML=all.slice(0,30).map(p=>`<tr>
+    <td><div style="font-weight:700;font-size:11px;">${p.cfg.icon} ${p.name}</div><div style="font-size:9px;color:var(--muted);">${p.vicinity}</div></td>
+    <td><span class="place-type-badge ${p.cfg.typeCls}">${p.cfg.label}</span></td>
+    <td><span class="dist-val">${fmtDist(p.d)}</span></td>
+    <td><span class="eta-val">${fmtEta(p.d)}</span></td>
+    <td>${p.rating?`⭐ ${p.rating}`:'—'}</td>
+  </tr>`).join('');
+}
+
+function renderUnitsOnMap2(){
+  if(!unitsMap)return;
+  const seenIds=new Set();
+  const counts={available:0,busy:0,offline:0};
+  unitList.forEach((u,idx)=>{
+    seenIds.add(u.id);
+    if(!u.isOnline){counts.offline++;if(unitMapMarkers2[u.id]){unitMapMarkers2[u.id].setMap(null);delete unitMapMarkers2[u.id];}return;}
+    if(u.status==='busy')counts.busy++;else counts.available++;
+    const hasGps=!!(u.location?.latitude);
+    const lat=hasGps?parseFloat(u.location.latitude):11.0168+(idx*0.002);
+    const lng=hasGps?parseFloat(u.location.longitude):76.9558+(idx*0.002);
+    const isSel=u.id===selectedUnitId;
+    const color=u.status==='busy'?BUSY_COLOR:(UNIT_MAP_COLORS[u.type]||'#4CAF50');
+    const cfg2=UCFG[u.type]||UCFG.ambulance;
+    const s=isSel?48:38,cx=s/2,cy=s/2;
+    const svgStr=`<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s+16}" viewBox="0 0 ${s} ${s+16}">
+      ${isSel?`<circle cx="${cx}" cy="${cy}" r="${s/2-1}" fill="none" stroke="#1A73E8" stroke-width="3" stroke-dasharray="5 3"/>`:''}
+      ${u.status==='busy'?`<polygon points="${cx},4 ${s-4},${cy} ${cx},${s-4} 4,${cy}" fill="${BUSY_COLOR}" stroke="white" stroke-width="2"/>`:hasGps?`<circle cx="${cx}" cy="${cy}" r="${s/2-2}" fill="${color}" opacity="0.15"/><circle cx="${cx}" cy="${cy}" r="${s/2-4}" fill="${color}" stroke="white" stroke-width="2.5"/>` :`<circle cx="${cx}" cy="${cy}" r="${s/2-2}" fill="${color}" opacity="0.12"/><circle cx="${cx}" cy="${cy}" r="${s/2-4}" fill="${color}" stroke="white" stroke-width="2" opacity="0.55" stroke-dasharray="5 3"/>`}
+      <text x="${cx}" y="${cy+5}" text-anchor="middle" font-size="${Math.round(s*0.38)}">${cfg2.icon}</text>
+      <rect x="${cx-20}" y="${s+1}" width="40" height="12" rx="3" fill="${isSel?'#1A73E8':color}" opacity="${isSel?'0.9':'0.75'}"/>
+      <text x="${cx}" y="${s+10}" text-anchor="middle" font-size="7" fill="white" font-weight="bold">${(u.name.length>7?u.name.slice(0,6)+'…':u.name)}</text>
+    </svg>`;
+    const layerKey=u.status==='busy'?'busy':'available';
+    const vis=unitLayerVisible2[layerKey];
+    const iconObj={url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svgStr),scaledSize:new google.maps.Size(s,s+16),anchor:new google.maps.Point(s/2,s/2)};
+    if(unitMapMarkers2[u.id]){unitMapMarkers2[u.id].setPosition({lat,lng});unitMapMarkers2[u.id].setIcon(iconObj);unitMapMarkers2[u.id].setMap(vis?unitsMap:null);}
+    else{
+      const marker=new google.maps.Marker({position:{lat,lng},map:vis?unitsMap:null,title:u.name,zIndex:isSel?150:u.status==='available'?80:40,icon:iconObj});
+      marker.addListener('click',()=>{
+        unitsInfoWindow2.close();
+        const isNowSel=selectedUnitId===u.id;
+        const distStr=u.distanceM!=null?fmtDist(u.distanceM):(u.location?.latitude?'GPS active':'No GPS');
+        const statusColor=u.status==='available'?'#34A853':u.status==='busy'?'#FFC107':'#9E9E9E';
+        unitsInfoWindow2.setContent(`<div style="font-family:'Sora',sans-serif;padding:10px 12px;min-width:200px;"><div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;"><span style="font-size:26px;">${cfg2.icon}</span><div><div style="font-weight:800;font-size:14px;color:#111;">${u.name}</div><div style="font-size:10px;color:#888;">${u.id}</div></div></div><div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;"><div style="width:8px;height:8px;border-radius:50%;background:${statusColor}"></div><span style="font-size:12px;font-weight:700;color:${statusColor};">${u.status}</span><span style="font-size:11px;color:#1E88E5;font-weight:600;margin-left:auto;">${distStr}</span></div>${u.status!=='busy'?`<button onclick="selectUnitFromMap2('${u.id}')" style="width:100%;background:${isNowSel?'#555':UNIT_MAP_COLORS[u.type]||'#4CAF50'};color:#fff;border:none;border-radius:7px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">${isNowSel?'✕ Deselect':'🎯 Select for Dispatch'}</button>`:`<div style="background:#FFF8E1;border:1px solid #FFC107;border-radius:7px;padding:7px;font-size:11px;color:#F57F17;font-weight:600;">⚠️ On active incident</div>`}</div>`);
+        unitsInfoWindow2.open(unitsMap,marker);
+      });
+      unitMapMarkers2[u.id]=marker;
+    }
+  });
+  Object.keys(unitMapMarkers2).forEach(id=>{if(!seenIds.has(id)){unitMapMarkers2[id].setMap(null);delete unitMapMarkers2[id];}});
+  document.getElementById('ucnt-available').textContent=counts.available;
+  document.getElementById('ucnt-busy').textContent=counts.busy;
+  document.getElementById('ucnt-offline').textContent=counts.offline;
+  document.getElementById('m2-count').textContent=unitList.filter(u=>u.isOnline).length+' online';
+}
+
+function selectUnitFromMap2(id){unitsInfoWindow2.close();selectUnit(id);}
+function toggleUnitLayer(key){
+  unitLayerVisible2[key]=!unitLayerVisible2[key];
+  const sw=document.getElementById('usw-'+key);
+  if(sw){sw.classList.toggle('on',unitLayerVisible2[key]);sw.classList.toggle('off',!unitLayerVisible2[key]);}
+  unitList.forEach(u=>{const lk=!u.isOnline?'offline':u.status==='busy'?'busy':'available';if(lk===key&&unitMapMarkers2[u.id])unitMapMarkers2[u.id].setMap(unitLayerVisible2[key]?unitsMap:null);});
+}
+function fitUnitsMap(){
+  if(!unitsMap)return;
+  const b=new google.maps.LatLngBounds();let any=false;
+  unitList.forEach(u=>{if(u.location?.latitude){b.extend({lat:parseFloat(u.location.latitude),lng:parseFloat(u.location.longitude)});any=true;}});
+  if(pickedLat&&pickedLng){b.extend({lat:pickedLat,lng:pickedLng});any=true;}
+  if(any)unitsMap.fitBounds(b,{padding:60});
+}
+function updateUnitDistances(){
+  if(!pickedLat||!pickedLng)return;
+  unitList.forEach(u=>{if(u.location?.latitude)u.distanceM=Math.round(haversineMetres(pickedLat,pickedLng,parseFloat(u.location.latitude),parseFloat(u.location.longitude)));else u.distanceM=null;});
+  unitList.sort((a,b)=>{if(a.distanceM!=null&&b.distanceM!=null)return a.distanceM-b.distanceM;if(a.distanceM!=null)return-1;if(b.distanceM!=null)return 1;return 0;});
+  if(dualSectionOpen){renderUnitsOnMap2();updateUnitsTable();}
+  renderUnitPanel();
+}
+function updateUnitsTable(){
+  const tbody=document.getElementById('units-table-body');
+  const onlineUnits=unitList.filter(u=>u.isOnline);
+  document.getElementById('units-tbl-info').textContent=onlineUnits.length+' online';
+  if(!onlineUnits.length){tbody.innerHTML='<tr><td colspan="6" class="tbl-empty">📵 No units online — use mock units</td></tr>';return;}
+  tbody.innerHTML=onlineUnits.map(u=>{
+    const cfg=UCFG[u.type]||UCFG.ambulance;
+    const sc=u.status==='available'?'usp-available':u.status==='busy'?'usp-busy':'usp-offline';
+    const ds=u.distanceM!=null?fmtDist(u.distanceM):(u.location?.latitude?'GPS':'—');
+    const et=u.distanceM!=null?fmtEta(u.distanceM):'—';
+    const isSel=u.id===selectedUnitId;
+    const mock=u._isMock?'<span style="font-size:8px;background:rgba(249,168,37,.15);color:#F9A825;padding:1px 5px;border-radius:5px;margin-left:3px;">MOCK</span>':'';
+    return `<tr><td><div style="font-weight:700;font-size:11px;">${cfg.icon} ${u.name}${mock}</div><div style="font-size:9px;color:var(--muted);">${u.id}</div></td><td style="font-size:10px;">${cfg.label}</td><td><span class="unit-status-pill ${sc}">${u.status}</span></td><td><span class="dist-val">${ds}</span></td><td><span class="eta-val">${et}</span></td><td>${u.status!=='busy'?`<button class="unit-sel-btn${isSel?' selected':''}" onclick="selectUnit('${u.id}')">${isSel?'✅':'Select'}</button>`:`<span style="font-size:9px;color:var(--yellow);">On Call</span>`}</td></tr>`;
+  }).join('');
+}
+function findNearestAndSelect(){
+  const lat=parseFloat(document.getElementById('lat').value);
+  const lng=parseFloat(document.getElementById('lng').value);
+  if(isNaN(lat)||isNaN(lng)){addLog('⚠️ Set destination first','warn');return;}
+  const avail=unitList.filter(u=>u.isOnline&&u.status==='available'&&u.location?.latitude);
+  if(!avail.length){addLog('⚠️ No available units with GPS','warn');return;}
+  avail.forEach(u=>u.distanceM=Math.round(haversineMetres(lat,lng,parseFloat(u.location.latitude),parseFloat(u.location.longitude))));
+  avail.sort((a,b)=>a.distanceM-b.distanceM);
+  selectedUnitId=avail[0].id;
+  renderUnitPanel();renderUnitsOnMap2();updateUnitsTable();
+  addLog(`🔍 Nearest: ${avail[0].name} — ${fmtDist(avail[0].distanceM)}`,'ok');
+}
+async function fetchUnits(){
+  try{
+    const res=await fetch(`${SERVER}/units`);const json=await res.json();
+    const real=json.data||[];
+    const mockArr=Object.values(mockUnits);
+    unitList=[...mockArr,...real.filter(u=>!mockUnits[u.id])];
+    const onlineCount=unitList.filter(u=>u.isOnline).length;
+    document.getElementById('reg-count').textContent=onlineCount+' online';
+    document.getElementById('hdr-units').textContent=onlineCount+' units online';
+    if(pickedLat&&pickedLng)updateUnitDistances();
+    renderUnitPanel();
+    if(dualSectionOpen){renderUnitsOnMap2();updateUnitsTable();}
+  }catch(_){
+    const mockArr=Object.values(mockUnits);
+    if(mockArr.length){
+      unitList=mockArr;
+      const onlineCount=unitList.filter(u=>u.isOnline).length;
+      document.getElementById('reg-count').textContent=onlineCount+' online';
+      document.getElementById('hdr-units').textContent=onlineCount+' units online';
+      if(pickedLat&&pickedLng)updateUnitDistances();
+      renderUnitPanel();
+      if(dualSectionOpen){renderUnitsOnMap2();updateUnitsTable();}
+    }
+  }
+}
+function selectUnit(id){
+  selectedUnitId=selectedUnitId===id?null:id;
+  renderUnitPanel();
+  if(dualSectionOpen){renderUnitsOnMap2();updateUnitsTable();}
+  if(selectedUnitId){
+    const u=unitList.find(u=>u.id===id);
+    addLog(`🎯 Selected: ${u?u.name:id}`,'info');
+    if(u&&UCFG[u.type])selU(u.type);
+    const card=document.querySelector(`.unit-item[data-uid="${id}"]`);
+    if(card)card.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+}
+function renderUnitPanel(){
+  const panel=document.getElementById('unit-registry-panel');if(!panel)return;
+  const onlineUnits=unitList.filter(u=>u.isOnline);
+  if(!onlineUnits.length){panel.innerHTML=`<div class="unit-empty"><div style="font-size:28px;margin-bottom:6px;">📵</div><div style="font-size:12px;font-weight:700;">No units online</div><div style="font-size:10px;margin-top:3px;opacity:.6;">Use mock units above for testing</div></div>`;return;}
+  panel.innerHTML=onlineUnits.map(u=>{
+    const isSel=u.id===selectedUnitId,cfg=UCFG[u.type]||UCFG.ambulance;
+    const sCls=u.status==='available'?'usp-available':u.status==='busy'?'usp-busy':'usp-offline';
+    const sLbl=u.status==='available'?'Available':u.status==='busy'?'Busy':'Offline';
+    const distStr=u.distanceM!=null?fmtDist(u.distanceM)+' away':'';
+    const mockBadge=u._isMock?'<span style="font-size:8px;background:rgba(249,168,37,.15);color:#F9A825;padding:1px 5px;border-radius:5px;margin-left:3px;">MOCK</span>':'';
+    return `<div class="unit-item${isSel?' sel':''}${u.status==='busy'?' busy':''}${!u.isOnline?' offline':''}" data-uid="${u.id}" onclick="selectUnit('${u.id}')"><div class="unit-top"><div class="unit-left"><div class="unit-icon-wrap">${cfg.icon}</div><div><div class="unit-name">${u.name}${mockBadge}</div><div class="unit-meta">${u.id} · ${u.isOnline?u.secondsAgo+'s ago':'Offline'} · ${u.location?.latitude?'📡 GPS':'📵 No GPS'}</div></div></div><div class="unit-right"><span class="unit-status-pill ${sCls}">${sLbl}</span>${distStr?`<span class="unit-dist">📍 ${distStr}</span>`:''}</div></div>${isSel?'<div class="unit-sel-note">✅ Selected — will be assigned on dispatch</div>':''}${u.status==='busy'&&!isSel?'<div class="unit-busy-note">⚠️ On active incident</div>':''}</div>`;
+  }).join('');
+}
+async function findNearest(silent){
+  const lat=parseFloat(document.getElementById('lat').value);
+  const lng=parseFloat(document.getElementById('lng').value);
+  if(isNaN(lat)||isNaN(lng)){if(!silent)addLog('⚠️ Set destination on map first','warn');return;}
+  try{
+    const res=await fetch(`${SERVER}/nearest?lat=${lat}&lng=${lng}&type=${selUType}&limit=10`);
+    const ct=res.headers.get('content-type')||'';
+    if(!ct.includes('application/json')){if(!silent)addLog('⚠️ No units have GPS yet','warn');return;}
+    const json=await res.json();
+    if(!json.success&&json.error){if(!silent)addLog('⚠️ Nearest: '+json.error,'warn');return;}
+    if(!json.data||!json.data.length){if(!silent){findNearestAndSelect();}return;}
+    const distMap={};json.data.forEach(u=>distMap[u.id]=u.distanceM);
+    unitList.forEach(u=>u.distanceM=distMap[u.id]??u.distanceM);
+    unitList.sort((a,b)=>{if(a.distanceM!=null&&b.distanceM!=null)return a.distanceM-b.distanceM;if(a.distanceM!=null)return -1;if(b.distanceM!=null)return 1;return 0;});
+    selectedUnitId=json.data[0].id;
+    renderUnitPanel();
+    if(dualSectionOpen){renderUnitsOnMap2();updateUnitsTable();}
+    const nearest=json.data[0];
+    if(!silent)addLog(`🔍 Nearest ${selUType}: ${nearest.name} — ${fmtDist(nearest.distanceM)}`,'ok');
+    if(nearest.location?.latitude)dMap?.panTo({lat:parseFloat(nearest.location.latitude),lng:parseFloat(nearest.location.longitude)});
+  }catch(err){if(!silent)findNearestAndSelect();}
+}
+function buildMockGrid(){
+  const grid=document.getElementById('mock-grid');
+  grid.innerHTML=MOCK_DEFS.map(def=>`<button class="mock-btn" id="mbtn-${def.id}" onclick="toggleMock('${def.id}')">${UCFG[def.type].icon} ${def.name.replace('Ambulance ','Amb ').replace('Police Car','Police').replace('Fire Unit','Fire').replace('Rescue Heli','Rescue').replace('Hazmat Team','Hazmat')}</button>`).join('');
+}
+async function toggleMock(id){
+  const def=MOCK_DEFS.find(d=>d.id===id);if(!def)return;
+  const btn=document.getElementById('mbtn-'+id);
+  if(mockUnits[id]){
+    delete mockUnits[id];btn.classList.remove('active');addLog(`🗑️ Removed: ${def.name}`,'warn');
+    try{await fetch(`${SERVER}/register-unit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({unitId:id,name:def.name,type:def.type,status:'offline'})});}catch(_){}
+  }else{
+    const jla=(Math.random()-.5)*.02,jlg=(Math.random()-.5)*.02;
+    const lat=def.baseLat+jla,lng=def.baseLng+jlg;
+    mockUnits[id]={id,name:def.name,type:def.type,status:'available',isOnline:true,lastSeen:Date.now(),secondsAgo:0,registeredAt:Date.now(),pushToken:null,assignedIncidentId:null,distanceM:null,_isMock:true,location:{latitude:lat,longitude:lng,heading:Math.round(Math.random()*360),speed:0,updatedAt:Date.now()}};
+    btn.classList.add('active');addLog(`✅ Mock online: ${def.name} @ ${lat.toFixed(4)},${lng.toFixed(4)}`,'ok');
+    try{
+      await fetch(`${SERVER}/register-unit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({unitId:id,name:def.name,type:def.type})});
+      await fetch(`${SERVER}/update-unit-location`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({unitId:id,latitude:lat,longitude:lng,heading:0,speed:0})});
+    }catch(_){}
+  }
+  await fetchUnits();
+}
+function clearAllMocks(){
+  Object.keys(mockUnits).forEach(id=>{const btn=document.getElementById('mbtn-'+id);if(btn)btn.classList.remove('active');});
+  mockUnits={};addLog('🗑️ Cleared all mock units','warn');fetchUnits();
+}
+setInterval(()=>{const now=Date.now();Object.values(mockUnits).forEach(u=>{u.secondsAgo=Math.floor((now-u.lastSeen)/1000);u.lastSeen=now;});},5000);
+
+function openConfirmModal(){
+  const lat=parseFloat(document.getElementById('lat').value);
+  const lng=parseFloat(document.getElementById('lng').value);
+  if(!lat||!lng){alert('Please pick a destination on the map first!');return;}
+  collectAllAnswers();
+  const cfg=UCFG[selUType];
+  const name=formAnswers.f1||'Unknown';
+  const phone=formAnswers.f2||'—';
+  const addr=getAddrField()||`${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  const notes=formAnswers.f7||'';
+  const sevColors={critical:'#E53935',high:'#FF6D00',medium:'#F9A825',low:'#34A853'};
+  document.getElementById('cm-icon').textContent=cfg.icon;
+  document.getElementById('cm-title').textContent=`Confirm ${cfg.label} Dispatch`;
+  document.getElementById('cm-sub').textContent='Review the assignment details before sending';
+  document.getElementById('cm-type').textContent=cfg.label;
+  document.getElementById('cm-sev').textContent=selSevType.toUpperCase();
+  document.getElementById('cm-sev').style.color=sevColors[selSevType]||'var(--text)';
+  document.getElementById('cm-patient').textContent=name;
+  document.getElementById('cm-phone').textContent=phone;
+  document.getElementById('cm-address').textContent=addr;
+  document.getElementById('cm-coords').textContent=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  document.getElementById('cm-notes').textContent=notes||'None';
+  document.getElementById('cm-notes-card').style.display=notes?'block':'none';
+  const confirmBtn=document.getElementById('cm-confirm-btn');
+  confirmBtn.className='modal-confirm-btn '+cfg.btnCls;
+  confirmBtn.textContent=cfg.btnTxt.replace('DISPATCH','CONFIRM DISPATCH');
+  const selUnit=unitList.find(u=>u.id===selectedUnitId);
+  const unitCard=document.getElementById('cm-unit-card');
+  const noUnitWarn=document.getElementById('cm-no-unit-warn');
+  if(selUnit){
+    unitCard.style.display='flex';noUnitWarn.style.display='none';
+    document.getElementById('cm-unit-icon').textContent=cfg.icon;
+    document.getElementById('cm-unit-name').textContent=selUnit.name;
+    document.getElementById('cm-unit-meta').textContent=`${selUnit.id} · ${cfg.label}${selUnit._isMock?' · MOCK':''}`;
+    document.getElementById('cm-unit-dist').textContent=selUnit.distanceM!=null?`📍 ${fmtDist(selUnit.distanceM)} away · ETA ~${fmtEta(selUnit.distanceM)}`:'📡 GPS Active';
+    document.getElementById('cm-unit-status').textContent='Available';
+  }else{unitCard.style.display='none';noUnitWarn.style.display='flex';}
+  document.getElementById('confirm-modal').classList.add('show');
+}
+function closeConfirmModal(){document.getElementById('confirm-modal').classList.remove('show');}
+document.getElementById('confirm-modal').addEventListener('click',function(e){if(e.target===this)closeConfirmModal();});
+
+async function loadFormForUnitType(unitType){
+  if(formCache[unitType]){currentFormDef=formCache[unitType];formAnswers={};renderFormFields(currentFormDef.fields);return;}
+  document.getElementById('form-loading').style.display='block';
+  document.getElementById('dynamic-form-fields').innerHTML='';
+  try{
+    const res=await fetch(`${SERVER}/forms/${unitType}`);
+    const ct=res.headers.get('content-type')||'';
+    if(!ct.includes('application/json')){useFallbackForm(unitType);return;}
+    const json=await res.json();
+    if(!json.success||!json.data){useFallbackForm(unitType);return;}
+    const form=json.data;form.fields=typeof form.fields==='string'?JSON.parse(form.fields):form.fields;
+    formCache[unitType]=form;currentFormDef=form;formAnswers={};renderFormFields(form.fields);
+  }catch(err){useFallbackForm(unitType);}
+  finally{document.getElementById('form-loading').style.display='none';}
+}
+function renderFormFields(fields){
+  const container=document.getElementById('dynamic-form-fields');if(!container||!fields?.length)return;
+  container.innerHTML=fields.map(f=>renderField(f)).join('');
+  fields.forEach(field=>{
+    const el=document.getElementById('field_'+field.id);if(!el)return;
+    if(field.type==='checkbox'){container.querySelectorAll(`input[name="field_${field.id}"]`).forEach(cb=>cb.addEventListener('change',()=>collectAnswer(field)));}
+    else if(field.type==='yesno'||field.type==='radio'){container.querySelectorAll(`input[name="field_${field.id}"]`).forEach(rb=>rb.addEventListener('change',()=>collectAnswer(field)));}
+    else{el.addEventListener('input',()=>collectAnswer(field));el.addEventListener('change',()=>collectAnswer(field));}
+  });
+}
+function renderField(field){
+  const req=field.required?'<span style="color:#E53935;margin-left:2px;">*</span>':'';
+  const lbl=`<label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600;">${field.label}${req}</label>`;
+  const base='width:100%;background:var(--dark);border:1px solid var(--border);color:var(--text);border-radius:9px;padding:9px 12px;font-family:\'Sora\',sans-serif;font-size:13px;outline:none;';
+  let inp='';
+  switch(field.type){
+    case 'text':case 'email':case 'phone':inp=`<input id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" type="text" placeholder="${field.placeholder||''}" style="${base}">`;break;
+    case 'number':inp=`<input id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" type="number" placeholder="${field.placeholder||''}" style="${base}">`;break;
+    case 'textarea':inp=`<textarea id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" placeholder="${field.placeholder||''}" rows="3" style="${base}resize:vertical;"></textarea>`;break;
+    case 'dropdown':{const opts=(field.options||[]).map(o=>`<option value="${o}">${o}</option>`).join('');inp=`<select id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" style="${base}"><option value="">${field.placeholder||'Select…'}</option>${opts}</select>`;break;}
+    case 'segmented':{const btns=(field.options||[]).map(o=>`<button type="button" data-val="${o}" onclick="selectSegment('${field.id}',this)" style="flex:1;padding:7px 4px;border-radius:8px;border:1.5px solid var(--border);background:var(--dark);cursor:pointer;font-family:'Sora',sans-serif;font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;transition:all .15s;">${o}</button>`).join('');inp=`<input type="hidden" id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" value=""><div style="display:flex;gap:6px;">${btns}</div>`;break;}
+    case 'radio':{const rs=(field.options||[]).map(o=>`<label style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--dark);font-size:12px;color:var(--text);font-weight:600;transition:border-color .15s;"><input type="radio" name="field_${field.id}" value="${o}" style="accent-color:#1A73E8;width:15px;height:15px;flex-shrink:0;cursor:pointer;"><span>${o}</span></label>`).join('');inp=`<input type="hidden" id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" value=""><div style="display:flex;flex-direction:column;gap:6px;">${rs}</div>`;break;}
+    case 'checkbox':{const bs=(field.options||[]).map(o=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--dark);font-size:12px;color:var(--text);font-weight:600;"><input type="checkbox" name="field_${field.id}" value="${o}" style="accent-color:#1A73E8;"> ${o}</label>`).join('');inp=`<div id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}"><div style="display:flex;flex-direction:column;gap:6px;">${bs}</div></div>`;break;}
+    case 'yesno':inp=`<input type="hidden" id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" value=""><div style="display:flex;gap:8px;"><label style="display:flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--dark);font-size:13px;color:var(--text);font-weight:700;"><input type="radio" name="field_${field.id}" value="Yes" style="accent-color:#34A853;"> ✅ Yes</label><label style="display:flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--dark);font-size:13px;color:var(--text);font-weight:700;"><input type="radio" name="field_${field.id}" value="No" style="accent-color:#E53935;"> ❌ No</label></div>`;break;
+    default:inp=`<input id="field_${field.id}" data-field-id="${field.id}" data-label="${field.label}" type="text" placeholder="${field.placeholder||''}" style="${base}">`;
+  }
+  return `<div style="margin-bottom:11px;">${lbl}${inp}</div>`;
+}
+function selectSegment(fieldId,btn){
+  btn.parentElement.querySelectorAll('button').forEach(b=>{b.style.background='var(--dark)';b.style.color='var(--muted)';b.style.borderColor='var(--border)';});
+  btn.style.background='#1A73E8';btn.style.color='#fff';btn.style.borderColor='#1A73E8';
+  const hidden=document.getElementById('field_'+fieldId);if(hidden){hidden.value=btn.dataset.val;const field=currentFormDef?.fields?.find(f=>f.id===fieldId);if(field)collectAnswer(field);}
+}
+function collectAnswer(field){
+  const el=document.getElementById('field_'+field.id);if(!el)return;
+  if(field.type==='checkbox')formAnswers[field.id]=Array.from(document.querySelectorAll(`input[name="field_${field.id}"]:checked`)).map(cb=>cb.value);
+  else if(field.type==='radio'||field.type==='yesno'){const ch=document.querySelector(`input[name="field_${field.id}"]:checked`);formAnswers[field.id]=ch?ch.value:'';if(el.tagName==='INPUT')el.value=formAnswers[field.id];}
+  else formAnswers[field.id]=el.value;
+}
+function collectAllAnswers(){formAnswers={};if(!currentFormDef?.fields)return;currentFormDef.fields.forEach(f=>collectAnswer(f));}
+function useFallbackForm(unitType){
+  const fallbacks={
+    ambulance:{id:null,name:'Ambulance Dispatch Form',unit_type:'ambulance',fields:[{id:'f1',type:'text',label:'Patient Name',placeholder:'Ravi Kumar',required:true},{id:'f2',type:'phone',label:'Phone Number',placeholder:'9876543210',required:true},{id:'f3',type:'text',label:'Address',placeholder:'12 Gandhi Nagar',required:true},{id:'f4',type:'dropdown',label:'Medical Condition',placeholder:'Select…',required:true,options:['Cardiac Arrest','Chest Pain','Stroke','Accident / Trauma','Breathing Difficulty','Unconscious','Other']},{id:'f5',type:'segmented',label:'Priority',required:true,options:['Low','Medium','High','Critical']},{id:'f6',type:'text',label:'Floor / Block',placeholder:'2nd Floor',required:false},{id:'f7',type:'textarea',label:'Notes',placeholder:'Additional details…',required:false}]},
+    fire:{id:null,name:'Fire Engine Dispatch Form',unit_type:'fire',fields:[{id:'f1',type:'text',label:'Caller Name',placeholder:'Suresh Kumar',required:true},{id:'f2',type:'phone',label:'Phone Number',placeholder:'9876543210',required:true},{id:'f3',type:'text',label:'Incident Address',placeholder:'23 Industrial Area',required:true},{id:'f4',type:'dropdown',label:'Fire Type',placeholder:'Select…',required:true,options:['Building Fire','Vehicle Fire','Forest / Wildfire','Industrial Fire','Gas Leak / Explosion','Electrical Fire']},{id:'f5',type:'segmented',label:'Priority',required:true,options:['Low','Medium','High','Critical']},{id:'f6',type:'radio',label:'People Trapped?',required:false,options:['Unknown','None','Yes — people trapped']},{id:'f7',type:'textarea',label:'Notes',required:false}]},
+    police:{id:null,name:'Police Dispatch Form',unit_type:'police',fields:[{id:'f1',type:'text',label:'Caller Name',placeholder:'Meena Devi',required:true},{id:'f2',type:'phone',label:'Phone Number',placeholder:'9876543210',required:true},{id:'f3',type:'text',label:'Incident Address',placeholder:'Near Bus Stand',required:true},{id:'f4',type:'dropdown',label:'Incident Type',placeholder:'Select…',required:true,options:['Theft / Robbery','Assault / Fight','Accident','Domestic Violence','Missing Person','Suspicious Activity']},{id:'f5',type:'segmented',label:'Priority',required:true,options:['Low','Medium','High','Critical']},{id:'f6',type:'radio',label:'Armed?',required:false,options:['Unknown','No','Yes — armed']},{id:'f7',type:'textarea',label:'Notes',required:false}]},
+    rescue:{id:null,name:'Rescue Dispatch Form',unit_type:'rescue',fields:[{id:'f1',type:'text',label:'Caller Name',placeholder:'Name',required:true},{id:'f2',type:'phone',label:'Phone Number',placeholder:'9876543210',required:true},{id:'f3',type:'text',label:'Incident Address',placeholder:'Location',required:true},{id:'f4',type:'dropdown',label:'Rescue Type',placeholder:'Select…',required:true,options:['Flood Rescue','Mountain / Cliff','Building Collapse','Vehicle Entrapment','Water Drowning']},{id:'f5',type:'number',label:'Number of People',placeholder:'3',required:false},{id:'f6',type:'segmented',label:'Priority',required:true,options:['Low','Medium','High','Critical']},{id:'f7',type:'textarea',label:'Notes',required:false}]},
+    hazmat:{id:null,name:'Hazmat Dispatch Form',unit_type:'hazmat',fields:[{id:'f1',type:'text',label:'Caller Name',placeholder:'Name',required:true},{id:'f2',type:'phone',label:'Phone Number',placeholder:'9876543210',required:true},{id:'f3',type:'text',label:'Incident Address',placeholder:'Location',required:true},{id:'f4',type:'dropdown',label:'Hazard Type',placeholder:'Select…',required:true,options:['Chemical Spill','Gas Leak','Radiation','Biological','Industrial Accident']},{id:'f5',type:'yesno',label:'Evacuation Needed?',required:false},{id:'f6',type:'segmented',label:'Priority',required:true,options:['Low','Medium','High','Critical']},{id:'f7',type:'textarea',label:'Notes',required:false}]},
+  };
+  const fb=fallbacks[unitType]||fallbacks.ambulance;
+  formCache[unitType]=fb;currentFormDef=fb;formAnswers={};renderFormFields(fb.fields);
+}
+
+async function sendAlert(){
+  closeConfirmModal();
+  const lat=parseFloat(document.getElementById('lat').value),lng=parseFloat(document.getElementById('lng').value);
+  if(!lat||!lng)return;
+  const addr=getAddrField();
+  collectAllAnswers();
+  const name=formAnswers.f1||'Unknown',phone=formAnswers.f2||'',notes=formAnswers.f7||'';
+  const btn=document.getElementById('sendBtn');btn.disabled=true;btn.textContent='⏳ Sending…';
+  addLog('🚨 Dispatching '+UCFG[selUType].label+'…','warn');
+  try{
+    let data;
+    if(selectedUnitId){
+      const res=await fetch(`${SERVER}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({unitId:selectedUnitId,patientName:name,patientPhone:phone,address:addr||`${lat.toFixed(4)}, ${lng.toFixed(4)}`,notes,destination:{latitude:lat,longitude:lng},vehicleType:selUType,severity:selSevType,formId:currentFormDef?.id,answers:formAnswers})});
+      data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');
+      addLog(`🎯 Assigned to ${data.unitName}`,'ok');
+    }else{
+      const res=await fetch(`${SERVER}/send-alert`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({patientName:name,patientPhone:phone,address:addr||`${lat.toFixed(4)}, ${lng.toFixed(4)}`,notes,destination:{latitude:lat,longitude:lng},vehicleType:selUType,severity:selSevType})});
+      data=await res.json();addLog('📡 Broadcast to all units','warn');
+    }
+    const aObj={id:data.id,vehicleType:selUType,severity:selSevType,name,phone,address:addr||`${lat.toFixed(4)}, ${lng.toFixed(4)}`,notes,destination:{latitude:lat,longitude:lng},status:'pending',createdAt:Date.now(),assignedUnit:selectedUnitId||null};
+    alertHistory.unshift(aObj);updateAlertBadge();
+    addLog(`✅ Sent! ID: ${data.id.slice(0,8)}…`,'ok');
+    document.getElementById('alert-id-display').textContent=data.id;
+    document.getElementById('dest-display').textContent=`${lat.toFixed(5)}, ${lng.toFixed(5)}\n${addr}`;
+    setStatusBox('pending','📡',selectedUnitId?`Waiting for ${selectedUnitId}…`:'Waiting for unit…');
+    selectedUnitId=null;fetchUnits();
+  }catch(e){addLog('❌ Failed: '+e.message,'error');}
+  btn.disabled=false;btn.textContent=UCFG[selUType].btnTxt;
+}
+function updateAlertBadge(){document.getElementById('alert-count').textContent=alertHistory.length;}
+
+function setFilter(f){
+  curFilter=f;document.querySelectorAll('.flt-btn').forEach(b=>b.className='flt-btn');
+  const cls={all:'fa',ambulance:'fa-amb',fire:'fa-fire',police:'fa-police',rescue:'fa-rescue'};
+  const el=document.getElementById('flt-'+(f==='ambulance'?'amb':f));if(el)el.classList.add(cls[f]||'fa');
+  renderTickets();
+}
+function renderTickets(){
+  const list=curFilter==='all'?alertHistory:alertHistory.filter(a=>a.vehicleType===curFilter);
+  const grid=document.getElementById('ticket-grid');
+  if(!list.length){grid.innerHTML=`<div class="empty-alerts"><div class="ea-icon">${curFilter==='all'?'📋':(UCFG[curFilter]?.icon||'📋')}</div><div class="ea-msg">No incidents yet</div><div class="ea-sub">Dispatch from the Dispatch tab</div></div>`;return;}
+  const sevCls={critical:'chip-critical',high:'chip-high',medium:'chip-medium',low:'chip-low'};
+  const stCls={pending:'chip-pending',accepted:'chip-accepted',rejected:'chip-rejected'};
+  const barColor={ambulance:'#E53935',fire:'#FF6D00',police:'#1565C0',rescue:'#9C27B0',hazmat:'#F57F17'};
+  const typeCls={ambulance:'ttype-amb',fire:'ttype-fire',police:'ttype-police',rescue:'ttype-rescue',hazmat:'ttype-hazmat'};
+  grid.innerHTML=`<div class="ticket-grid-wrap">${list.map(a=>{
+    const cfg=UCFG[a.vehicleType]||UCFG.ambulance;
+    const t=new Date(a.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const live=a.status==='accepted'?`<span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:3px;vertical-align:middle;"></span>`:'';
+    return `<div class="ticket" onclick="openLive(alertHistory.find(x=>x.id==='${a.id}'))"><div class="ticket-bar" style="background:${barColor[a.vehicleType]||'#666'}"></div><div class="ticket-inner"><div class="ticket-top"><div style="display:flex;align-items:center;gap:6px;"><span class="ticket-icon">${cfg.icon}</span><span class="ticket-type ${typeCls[a.vehicleType]||''}">${cfg.label}</span></div><span class="ticket-time">${t}</span></div><div class="ticket-name">${a.name}</div><div class="ticket-addr">📍 ${a.address}</div><div class="ticket-footer"><div style="display:flex;gap:5px;"><span class="chip ${sevCls[a.severity]||''}">${a.severity}</span><span class="chip ${stCls[a.status]||'chip-pending'}">${live}${a.status}</span></div><button class="ticket-open-btn">Live →</button></div></div></div>`;
+  }).join('')}</div>`;
+}
+
+function openLive(alertObj){
+  if(!alertObj)return;liveAlert=alertObj;
+  const cfg=UCFG[alertObj.vehicleType]||UCFG.ambulance;
+  document.getElementById('lap-icon').textContent=cfg.icon;
+  document.getElementById('lap-name').textContent=`${cfg.icon} ${alertObj.name}`;
+  document.getElementById('lap-sub').textContent=`${cfg.label} · ${(alertObj.severity||'').toUpperCase()} · ${alertObj.address}`;
+  document.getElementById('ph-icon').textContent=cfg.icon;
+  document.getElementById('ai-unit').textContent=cfg.label;
+  document.getElementById('ai-sev').textContent=(alertObj.severity||'').toUpperCase();
+  document.getElementById('ai-phone').textContent=alertObj.phone||'—';
+  document.getElementById('ai-dest').textContent=alertObj.destination?`${alertObj.destination.latitude?.toFixed(4)}, ${alertObj.destination.longitude?.toFixed(4)}`:'—';
+  document.getElementById('ai-notes').textContent=alertObj.notes||'—';
+  document.getElementById('ai-status').textContent=alertObj.status;
+  resetTMap();lastTripSt='';updateLifecycleStrip('idle');
+  setRouteIntelVisible(false);
+  Object.values(nearbyMarkers).forEach(m=>m.forEach(x=>x.setMap(null)));
+  nearbyMarkers={};nearbyData={};nearbySearchCenter=null;
+  document.getElementById('nearby-list').innerHTML='<div class="nearby-loading">Waiting for unit location…</div>';
+  Object.keys(NEARBY_TYPES).forEach(key=>document.getElementById('cnt-'+key).textContent='0');
+  Object.keys(nearbyLayerVisible).forEach(key=>{
+    nearbyLayerVisible[key]=false;
+    const sw=document.getElementById('sw-'+key);
+    if(sw){sw.classList.remove('on');sw.classList.add('off');}
+  });
+  document.getElementById('view-live').classList.add('active');
+  document.getElementById('main-tabs').style.display='none';
+  document.querySelectorAll('.tab-content').forEach(c=>c.style.display='none');
+  if(!tMapReady&&typeof google!=='undefined')initTMap();
+  addTLog(`📡 Tracking: ${cfg.icon} ${alertObj.name}`,'ok');
+}
+function closeLive(){
+  document.getElementById('view-live').classList.remove('active');
+  document.getElementById('main-tabs').style.display='';
+  document.querySelectorAll('.tab-content').forEach(c=>c.style.display='');
+  switchTab('alerts');liveAlert=null;
+}
+function updateLifecycleStrip(ts){
+  const idx=LIFECYCLE_ORDER.indexOf(ts);
+  LIFECYCLE_ORDER.forEach((st,i)=>{const dot=document.getElementById('lc-'+st);if(!dot)return;dot.className='lc-dot';if(i<idx)dot.classList.add('done');else if(i===idx)dot.classList.add('active');});
+  for(let i=1;i<=4;i++){const conn=document.getElementById('lcc-'+i);if(!conn)continue;conn.className='lc-connector';if(i<idx)conn.classList.add('done');else if(i===idx)conn.classList.add('active');}
+}
+
+function initTMap(){
+  tMapReady=true;
+  document.getElementById('no-loc-msg').style.display='none';
+  document.getElementById('tracking-map').style.display='block';
+  tMap=new google.maps.Map(document.getElementById('tracking-map'),{center:{lat:11.0168,lng:76.9558},zoom:13,styles:DARK_MAP_STYLES});
+  trafficLayer=new google.maps.TrafficLayer();
+  nearbyInfoWindow=nearbyInfoWindow||new google.maps.InfoWindow();
+}
+
+function resetTMap(){
+  if(vehMarker){vehMarker.setMap(null);vehMarker=null;}
+  if(destMarkerT){destMarkerT.setMap(null);destMarkerT=null;}
+  allRoutePolylines.forEach(r=>{r.out?.setMap(null);r.poly?.setMap(null);});
+  allRoutePolylines=[];routeData=[];currentRouteIdx=0;bestRouteIdx=0;
+  routeIntelShouldShow=false;
+  routePoly=null;routeOut=null;fullPath=null;
+  lastVLat=null;lastVLng=null;routeAt=0;
+  if(trafficLayer){trafficLayer.setMap(null);}
+  trafficLayerOn=false;
+  const tb=document.getElementById('traffic-btn');
+  if(tb){tb.textContent='🚦 Traffic: OFF';tb.className='live-back-btn traffic-btn-off';}
+  document.getElementById('no-loc-msg').style.display='flex';
+  document.getElementById('tracking-map').style.display='none';
+  tMapReady=false;
+  // Hide panels cleanly
+  const ris=document.getElementById('route-intel-section');if(ris)ris.style.display='none';
+  const ss=document.getElementById('step-section');if(ss)ss.style.display='none';
+  const rip=document.getElementById('route-intel-panel');
+  if(rip)rip.innerHTML='<div class="ri-title">🗺️ Route Intelligence</div><div style="font-size:10px;color:var(--muted);text-align:center;padding:10px 0;">Waiting for route data…</div>';
+  ['stat-speed','stat-dist','stat-eta','stat-arrival'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=id==='stat-speed'?'— km/h':'—';});
+  const sb=document.getElementById('speed-bar');if(sb)sb.style.width='0%';
+}
+
+function toggleTraffic(){
+  if(!tMap||!trafficLayer){addTLog('⚠️ Map not ready yet','warn');return;}
+  trafficLayerOn=!trafficLayerOn;
+  trafficLayer.setMap(trafficLayerOn?tMap:null);
+  const tb=document.getElementById('traffic-btn');
+  if(trafficLayerOn){
+    tb.textContent='🚦 Traffic: ON';tb.className='live-back-btn traffic-btn-on';
+    addTLog('🚦 Traffic layer ON','ok');
+  }else{
+    tb.textContent='🚦 Traffic: OFF';tb.className='live-back-btn traffic-btn-off';
+    addTLog('🚦 Traffic layer OFF','info');
+  }
+}
+
+async function fetchRoute(origin,dest){
+  try{
+    const res=await fetch(`${SERVER}/directions?originLat=${origin.lat}&originLng=${origin.lng}&destLat=${dest.latitude}&destLng=${dest.longitude}&mode=driving`);
+    const d=await res.json();
+    if(d.status!=='OK')return;
+    const routes=d.routes;
+    if(!routes?.length)return;
+
+    allRoutePolylines.forEach(r=>{r.out?.setMap(null);r.poly?.setMap(null);});
+    allRoutePolylines=[];routeData=[];
+
+    const parsed=routes.map((r,i)=>{
+      const leg=r.legs[0];
+      const durationS=leg.duration.value;
+      const trafficS=leg.duration_in_traffic?.value ?? durationS;
+      const fp=stitch(leg.steps);
+      return {
+        fp,durationS,trafficS,
+        distanceM: leg.distance.value,
+        durationTxt: leg.duration.text,
+        trafficTxt:  leg.duration_in_traffic?.text ?? leg.duration.text,
+        distTxt:     leg.distance.text,
+        summary:     r.summary||`Route ${i+1}`,
+      };
+    });
+
+    parsed.sort((a,b)=>a.trafficS-b.trafficS);
+    bestRouteIdx=0;
+    fullPath=parsed[0].fp;
+    routeData=parsed;
+
+    parsed.forEach((r,i)=>{
+      if(!r.fp||r.fp.length<2)return;
+      const isBest=i===0;
+      const tr=trafficRatio(r.durationS,r.trafficS);
+      const lineColor=isBest?routeLineColor(tr):'#A8C8F8';
+      const outlineColor=isBest?'#FFFFFF':'#B5D4F4';
+      const lineW=isBest?9:4,outW=isBest?15:7;
+      const opacity=isBest?1:0.55;
+      const zOut=isBest?8:3,zPoly=isBest?9:4;
+      const out=new google.maps.Polyline({path:r.fp,geodesic:true,map:tMap,strokeColor:outlineColor,strokeOpacity:opacity,strokeWeight:outW,zIndex:zOut});
+      const poly=new google.maps.Polyline({path:r.fp,geodesic:true,map:tMap,strokeColor:lineColor,strokeOpacity:opacity,strokeWeight:lineW,zIndex:zPoly});
+      allRoutePolylines.push({out,poly,fp:r.fp,isBest});
+    });
+
+    routePoly=allRoutePolylines[0]?.poly??null;
+    routeOut=allRoutePolylines[0]?.out??null;
+
+    detectCurrentRoute(origin.lat,origin.lng);
+    // Show route intel panel now that we have data — only if trip is actively navigating
+    if(routeIntelShouldShow){
+      const ris=document.getElementById('route-intel-section');
+      if(ris) ris.style.display='block';
+    }
+    updateRouteIntelPanel();
+
+    const bestR=parsed[0];
+    const tr=trafficRatio(bestR.durationS,bestR.trafficS);
+    const tl=trafficLabel(tr);
+    addTLog(`🛣️ ${bestR.distTxt} · ${bestR.trafficTxt} · ${tl.emoji} ${tl.label} (${parsed.length} routes)`,'info');
+    if(tr>=1.3){
+      const extraMins=Math.round((bestR.trafficS-bestR.durationS)/60);
+      addTLog(`⚠️ Traffic adds ~${extraMins} min on fastest route`,'warn');
+    }
+  }catch(e){console.warn(e.message);}
+}
+
+function decPoly(enc){let p=[],i=0,la=0,ln=0;while(i<enc.length){let b,s=0,r=0;do{b=enc.charCodeAt(i++)-63;r|=(b&0x1f)<<s;s+=5;}while(b>=0x20);la+=(r&1)?~(r>>1):(r>>1);s=0;r=0;do{b=enc.charCodeAt(i++)-63;r|=(b&0x1f)<<s;s+=5;}while(b>=0x20);ln+=(r&1)?~(r>>1):(r>>1);p.push({lat:la/1e5,lng:ln/1e5});}return p;}
+function stitch(steps){const o=[];for(const s of steps){if(!s.polyline?.points)continue;const p=decPoly(s.polyline.points);if(o.length>0&&p.length>0){const l=o[o.length-1],f=p[0];const dd=Math.abs(l.lat-f.lat)<1e-6&&Math.abs(l.lng-f.lng)<1e-6;o.push(...(dd?p.slice(1):p));}else o.push(...p);}return o;}
+function trimPath(path,pos){if(!path||path.length<2)return path||[];let md=Infinity,mi=0;for(let i=0;i<path.length;i++){const d=haversineMetres(pos.lat,pos.lng,path[i].lat,path[i].lng);if(d<md){md=d;mi=i;}}return[{lat:pos.lat,lng:pos.lng},...path.slice(mi)];}
+
+function trimRoute(pos){
+  if(!allRoutePolylines.length)return;
+  const cur=allRoutePolylines[currentRouteIdx]||allRoutePolylines[0];if(!cur)return;
+  const t=trimPath(cur.fp,pos);
+  cur.poly?.setPath(t);
+  cur.out?.setPath(t);
+  routePoly=cur.poly;
+  routeOut=cur.out;
+  if(routeDetectTimer)clearTimeout(routeDetectTimer);
+  routeDetectTimer=setTimeout(()=>detectCurrentRoute(pos.lat,pos.lng),800);
+}
+
+function updVehOnMap(lat,lng,dest){
+  if(!tMapReady)initTMap();
+  document.getElementById('no-loc-msg').style.display='none';document.getElementById('tracking-map').style.display='block';
+  const pos={lat,lng},cfg=UCFG[liveAlert?.vehicleType||'ambulance'];
+  if(!vehMarker){
+    vehMarker=new google.maps.Marker({position:pos,map:tMap,zIndex:100,
+      icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="${cfg.color}" stroke="white" stroke-width="2.5"/><text x="22" y="28" text-anchor="middle" font-size="20">${cfg.icon}</text></svg>`),scaledSize:new google.maps.Size(44,44),anchor:new google.maps.Point(22,22)}});
+    addTLog(`${cfg.icon} Unit on map`,'ok');fetchNearbyPlaces(lat,lng);
+  }else{vehMarker.setPosition(pos);fetchNearbyPlaces(lat,lng);}
+  if(dest?.latitude&&dest?.longitude&&!destMarkerT){
+    destMarkerT=new google.maps.Marker({position:{lat:dest.latitude,lng:dest.longitude},map:tMap,zIndex:90,
+      icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40"><path d="M16 0C7 0 0 7 0 16C0 28 16 40 16 40C16 40 32 28 32 16C32 7 25 0 16 0Z" fill="${cfg.color}" stroke="white" stroke-width="2"/><circle cx="16" cy="16" r="6" fill="white"/></svg>`),scaledSize:new google.maps.Size(32,40),anchor:new google.maps.Point(16,40)}});
+  }
+  const now=Date.now();
+  if(dest?.latitude&&dest?.longitude&&(now-routeAt>8000)){routeAt=now;fetchRoute(pos,dest);}
+  else if(allRoutePolylines.length)trimRoute(pos);
+  if(lastVLat!==null){if(Math.abs(lat-lastVLat)>0.0001||Math.abs(lng-lastVLng)>0.0001)tMap.panTo(pos);}
+  else setTimeout(fitAll,600);
+  lastVLat=lat;lastVLng=lng;
+}
+function centerOnVehicle(){if(!tMap||lastVLat===null){alert('No unit location yet');return;}tMap.panTo({lat:lastVLat,lng:lastVLng});tMap.setZoom(16);}
+function fitAll(){if(!tMap)return;const b=new google.maps.LatLngBounds();if(vehMarker)b.extend(vehMarker.getPosition());if(destMarkerT)b.extend(destMarkerT.getPosition());if(!b.isEmpty())tMap.fitBounds(b);}
+
+async function fetchNearbyPlaces(lat,lng){
+  if(!tMap||!tMapReady)return;
+  if(nearbySearchInFlight)return;
+  if(nearbySearchCenter){const d=haversineMetres(lat,lng,nearbySearchCenter.lat,nearbySearchCenter.lng);if(d<500)return;}
+  nearbySearchInFlight=true;nearbySearchCenter={lat,lng};
+  document.getElementById('nearby-list').innerHTML='<div class="nearby-loading">🔍 Searching nearby…</div>';
+  try{
+    const searches=Object.entries(NEARBY_TYPES).map(([key,cfg])=>
+      new Promise(resolve=>{
+        if(!window.google?.maps?.places){resolve([]);return;}
+        const svc=new google.maps.places.PlacesService(tMap);
+        svc.nearbySearch({location:{lat,lng},radius:cfg.radius,type:cfg.placeType},(results,status)=>{
+          if(status===google.maps.places.PlacesServiceStatus.OK&&results)
+            resolve(results.map(p=>({name:p.name,lat:p.geometry.location.lat(),lng:p.geometry.location.lng(),vicinity:p.vicinity||'',rating:p.rating||null,place_id:p.place_id,open_now:p.opening_hours?.open_now})));
+          else resolve([]);
+        });
+      }).then(places=>{
+        nearbyData[key]=places;
+        document.getElementById('cnt-'+key).textContent=places.length;
+        if(nearbyMarkers[key])nearbyMarkers[key].forEach(m=>m.setMap(null));
+        nearbyMarkers[key]=[];
+        places.forEach(place=>{
+          const marker=new google.maps.Marker({position:{lat:place.lat,lng:place.lng},map:nearbyLayerVisible[key]?tMap:null,title:place.name,zIndex:20,
+            icon:{url:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${cfg.color}" stroke="white" stroke-width="2"/><text x="16" y="21" text-anchor="middle" font-size="14">${cfg.icon}</text></svg>`),scaledSize:new google.maps.Size(32,32),anchor:new google.maps.Point(16,16)}});
+          marker.addListener('click',()=>{
+            const dd=haversineMetres(lat,lng,place.lat,place.lng);
+            nearbyInfoWindow.setContent(`<div style="font-family:'Sora',sans-serif;padding:8px;min-width:190px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><span style="font-size:20px;">${cfg.icon}</span><div><div style="font-weight:800;font-size:13px;color:#111;">${place.name}</div><div style="font-size:10px;color:#888;">${cfg.label}</div></div></div>${place.vicinity?`<div style="font-size:11px;color:#555;margin-bottom:4px;">${place.vicinity}</div>`:''}<div style="display:flex;gap:10px;font-size:11px;margin-bottom:6px;"><span style="color:#1E88E5;font-weight:700;">${fmtDist(dd)}</span>${place.rating?`<span>⭐ ${place.rating}</span>`:''}</div><button onclick="window.open('https://www.google.com/maps/search/?api=1&query_place_id=${place.place_id}','_blank')" style="width:100%;background:${cfg.color};color:#fff;border:none;border-radius:7px;padding:7px;font-size:11px;font-weight:700;cursor:pointer;font-family:sans-serif;">📍 Open in Maps</button></div>`);
+            nearbyInfoWindow.open(tMap,marker);
+          });
+          nearbyMarkers[key].push(marker);
+        });
+      }).catch(()=>{nearbyData[key]=[];})
+    );
+    await Promise.allSettled(searches);
+    const allPlaces=[];
+    Object.entries(nearbyData).forEach(([key,places])=>{const cfg=NEARBY_TYPES[key];places.forEach(p=>{const dd=haversineMetres(lat,lng,p.lat,p.lng);allPlaces.push({...p,d:dd,key,cfg});});});
+    if(!allPlaces.length){document.getElementById('nearby-list').innerHTML='<div class="np-no-data">No nearby places found</div>';}
+    else{
+      allPlaces.sort((a,b)=>a.d-b.d);
+      document.getElementById('nearby-list').innerHTML=allPlaces.slice(0,20).map(p=>{
+        const ds=p.d>=1000?(p.d/1000).toFixed(1)+' km':Math.round(p.d)+' m';
+        return `<div class="nearby-place-item"><span class="np-icon">${p.cfg.icon}</span><div class="np-info"><div class="np-name">${p.name}</div><div style="display:flex;align-items:center;gap:8px;"><span class="np-dist">📏 ${ds}</span><span class="np-type">${p.cfg.label}</span>${p.rating?`<span class="np-rating">⭐ ${p.rating}</span>`:''}</div></div></div>`;
+      }).join('');
+    }
+  }catch(err){document.getElementById('nearby-list').innerHTML='<div class="np-no-data">Search failed — try refresh</div>';}
+  finally{nearbySearchInFlight=false;}
+}
+
+function toggleNearbyLayer(key){
+  nearbyLayerVisible[key]=!nearbyLayerVisible[key];
+  const sw=document.getElementById('sw-'+key);
+  if(sw){sw.classList.toggle('on',nearbyLayerVisible[key]);sw.classList.toggle('off',!nearbyLayerVisible[key]);}
+  if(nearbyMarkers[key])nearbyMarkers[key].forEach(m=>m.setMap(nearbyLayerVisible[key]?tMap:null));
+}
+function refreshNearbyPlaces(){
+  if(lastVLat===null||lastVLng===null){addTLog('⚠️ No unit location yet','warn');return;}
+  nearbySearchCenter=null;fetchNearbyPlaces(lastVLat,lastVLng);
+}
+
+function startPolling(){refreshStatus();refreshLoc();setInterval(refreshStatus,3000);setInterval(refreshLoc,2000);}
+
+async function refreshLoc(){
+  try{
+    const res=await fetch(`${SERVER}/ambulance-location`),d=await res.json();
+    const ts=d.tripStatus||'idle',cfg=TRIP_STATUS_CFG[ts]||TRIP_STATUS_CFG.idle;
+    const tsb=document.getElementById('tsb');
+    tsb.style.background=cfg.bg;tsb.style.borderColor=cfg.brd;tsb.style.color=cfg.c;
+    document.getElementById('tsb-icon').textContent=cfg.i;
+    document.getElementById('tsb-title').textContent=cfg.t;
+    document.getElementById('tsb-sub').textContent=cfg.s;
+    updateLifecycleStrip(ts);
+    document.getElementById('ai-trip-status').textContent=cfg.t;
+    document.getElementById('ai-trip-status').style.color=cfg.c;
+
+    // Step progress — show/hide without touching route-intel
+    const si=parseInt(d.stepIdx)||0,st=parseInt(d.totalSteps)||0;
+    const ss=document.getElementById('step-section');
+    if(st>0&&(ts==='en_route'||ts==='on_action')){
+      ss.style.display='block';
+      document.getElementById('step-counter').textContent=`Step ${si+1}/${st}`;
+      document.getElementById('step-fill').style.width=Math.min(100,((si+1)/st*100)).toFixed(0)+'%';
+    }else{
+      ss.style.display='none';
+    }
+
+    // ── Trip status change handling ──────────────────────────────────────────
+    // Route intel visibility is ONLY updated here, on actual status changes.
+    // Never touched in the per-poll path below.
+    if(ts!==lastTripSt){
+      lastTripSt=ts;
+      const emoji={dispatched:'🚨',en_route:'🚑',on_action:'🔵',arrived:'🏁',completed:'✅',abandoned:'🚫',idle:'⏸'}[ts]||'🔄';
+      addTLog(`${emoji} → ${cfg.t}`,(ts==='arrived'||ts==='completed')?'ok':ts==='abandoned'?'error':'info');
+
+      // Show route intel when unit is actively navigating
+      const shouldShow = (ts==='en_route'||ts==='on_action'||ts==='arrived');
+      setRouteIntelVisible(shouldShow);
+
+      // Auto-enable traffic when navigating
+      if((ts==='en_route'||ts==='on_action')&&!trafficLayerOn&&trafficLayer&&tMap){
+        trafficLayer.setMap(tMap);trafficLayerOn=true;
+        const tb=document.getElementById('traffic-btn');
+        if(tb){tb.textContent='🚦 Traffic: ON';tb.className='live-back-btn traffic-btn-on';}
+        addTLog('🚦 Traffic layer auto-enabled','ok');
+      }
+      if((ts==='completed'||ts==='idle'||ts==='abandoned')&&trafficLayerOn&&trafficLayer){
+        trafficLayer.setMap(null);trafficLayerOn=false;
+        const tb=document.getElementById('traffic-btn');
+        if(tb){tb.textContent='🚦 Traffic: OFF';tb.className='live-back-btn traffic-btn-off';}
+      }
+    }
+    // ── End status change block ──────────────────────────────────────────────
+
+    document.getElementById('stat-status').textContent='🟢 Online';
+    document.getElementById('stat-status').className='info-stat-value green';
+    document.getElementById('stat-updated').textContent=new Date().toLocaleTimeString();
+    if(!d.latitude||!d.longitude)return;
+    const lat=parseFloat(d.latitude),lng=parseFloat(d.longitude);
+    document.getElementById('stat-lat').textContent=lat.toFixed(5);
+    document.getElementById('stat-lng').textContent=lng.toFixed(5);
+    const spd=parseFloat(d.speed)||0;
+    const sEl=document.getElementById('stat-speed');sEl.textContent=spd.toFixed(1)+' km/h';
+    const bp=Math.min(100,(spd/120)*100);
+    const be=document.getElementById('speed-bar');be.style.width=bp+'%';be.style.background=spd>90?'#E53935':spd>60?'#F9A825':'#34A853';
+    const dm=parseInt(d.remainingDistM)||0;document.getElementById('stat-dist').textContent=dm<=0?'—':fmtDist(dm);
+    //const ts2=parseInt(d.remainingTimeS)||0,hrs=Math.floor(ts2/3600),mins=Math.round((ts2%3600)/60);
+    const serverTs2=parseInt(d.remainingTimeS)||0;
+    const curRtData=(routeData.length>0&&routeData[currentRouteIdx])?routeData[currentRouteIdx]:null;
+    const ts2=curRtData&&curRtData.trafficS>0?curRtData.trafficS:serverTs2;
+    document.getElementById('stat-eta').textContent=ts2<=0?'—':hrs===0?mins+' min':hrs+'hr '+mins+'min';
+    if(ts2>0){const ar=new Date(Date.now()+ts2*1000);let ah=ar.getHours(),am=ar.getMinutes(),ap=ah>=12?'PM':'AM';ah=ah%12||12;document.getElementById('stat-arrival').textContent=ah+':'+am.toString().padStart(2,'0')+' '+ap;}else document.getElementById('stat-arrival').textContent='—';
+    document.getElementById('live-badge').className='live-badge';
+    document.getElementById('live-dot').style.background='#34A853';
+    document.getElementById('live-dot').classList.add('pulse');
+    document.getElementById('live-badge-text').textContent='🔴 LIVE';
+    if(liveAlert)updVehOnMap(lat,lng,liveAlert.destination);
+    const now=Date.now();if(now-lastSpdLog>10000&&(spd>0||dm>0)){lastSpdLog=now;const dl=fmtDist(dm);const el=ts2>0?(hrs>0?hrs+'hr '+mins+'min':mins+' min'):'—';addTLog(`🚗 ${spd.toFixed(1)} km/h · ${dl} · ETA ${el}`,'info');}
+  }catch{
+    document.getElementById('stat-status').textContent='⚫ Offline';
+    document.getElementById('stat-status').className='info-stat-value';
+    document.getElementById('live-badge').className='live-badge offline';
+    document.getElementById('live-dot').style.background='var(--muted)';
+    document.getElementById('live-dot').classList.remove('pulse');
+    document.getElementById('live-badge-text').textContent='Waiting…';
+  }
+}
+
+async function refreshStatus(){
+  try{
+    const res=await fetch(`${SERVER}/status`),d=await res.json(),a=d.alert;
+    document.getElementById('conn-pill').className='status-pill connected';
+    document.getElementById('conn-dot').style.background='#34A853';
+    document.getElementById('conn-text').textContent='Connected';
+    const key=a.status+(a.id||'');
+    if(_lastStatusKey!==key){
+      _lastStatusKey=key;
+      if(a.id){const al=alertHistory.find(x=>x.id===a.id);if(al&&al.status!==a.status){al.status=a.status;if(document.getElementById('tab-alerts').classList.contains('active'))renderTickets();}}
+      document.getElementById('ai-status').textContent=a.status||'—';
+      document.getElementById('ai-status').style.color=a.status==='accepted'?'var(--green)':a.status==='rejected'?'var(--red)':a.status==='pending'?'var(--yellow)':'var(--muted)';
+      if(a.status==='accepted'){setStatusBox('accepted','✅','Unit ACCEPTED');addLog('✅ Unit accepted','ok');addTLog('✅ Live tracking active','ok');}
+      else if(a.status==='rejected'){setStatusBox('rejected','❌',`Rejected: ${a.reason||'manual'}`);addLog('❌ Rejected','error');}
+      else if(a.status==='pending'){setStatusBox('pending','📡','Waiting for unit…');}
+    }
+  }catch{
+    document.getElementById('conn-pill').className='status-pill disconnected';
+    document.getElementById('conn-dot').style.background='#E53935';
+    document.getElementById('conn-text').textContent='Disconnected';
+  }
+}
+function setStatusBox(type,icon,text){const k=type+text;if(_lastBox===k)return;_lastBox=k;document.getElementById('status-box').className=`status-box ${type}`;document.getElementById('status-icon').textContent=icon;document.getElementById('status-text').textContent=text;}
+function addLog(msg,type='info'){_l('log',msg,type);}
+function addTLog(msg,type='info'){_l('tracking-log',msg,type);}
+function _l(id,msg,type){const w=document.getElementById(id);if(!w)return;const el=document.createElement('div');el.className='log-entry '+type;el.textContent=`[${new Date().toLocaleTimeString()}] ${msg}`;w.appendChild(el);w.scrollTop=w.scrollHeight;}
+</script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAVz9omOzS8B29CEi50AkrNPMPn3JXhbcg&libraries=places&callback=initMap"></script>
+</body>
+</html>
