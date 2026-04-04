@@ -19,15 +19,15 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-const express    = require('express');
-const cors       = require('cors');
+const express = require('express');
+const cors = require('cors');
 const bodyParser = require('body-parser');
-const mysql      = require('mysql2/promise');
+const mysql = require('mysql2/promise');
 const { v4: uuidv4 } = require('uuid');
 
-const app  = express();
+const app = express();
 const PORT = 5000;
-const GOOGLE_KEY           = 'AIzaSyAVz9omOzS8B29CEi50AkrNPMPn3JXhbcg';
+const GOOGLE_KEY = 'AIzaSyAVz9omOzS8B29CEi50AkrNPMPn3JXhbcg';
 const HEARTBEAT_TIMEOUT_MS = 30000;
 
 app.use(cors({ origin: '*' }));
@@ -37,13 +37,13 @@ app.use(bodyParser.json());
 // DATABASE
 // ══════════════════════════════════════════════════════════════════════════════
 const db = mysql.createPool({
-  host:             'localhost',
-  port:             3306,
-  user:             'root',
-  password:         'admin',
-  database:         'emergency_db',
+  host: 'localhost',
+  port: 3306,
+  user: 'root',
+  password: 'Admin@123',
+  database: 'emergency_db',
   waitForConnections: true,
-  connectionLimit:  10,
+  connectionLimit: 10,
 });
 
 (async () => {
@@ -58,9 +58,9 @@ const db = mysql.createPool({
 // ══════════════════════════════════════════════════════════════════════════════
 // IN-MEMORY STATE
 // ══════════════════════════════════════════════════════════════════════════════
-const units       = new Map();
+const units = new Map();
 const assignments = new Map();
-const incidents   = new Map();
+const incidents = new Map();
 
 // ── PER-UNIT trip state (THE FIX) ─────────────────────────────────────────
 // Each unit that posts a location update gets its own slot here.
@@ -69,18 +69,18 @@ const unitTripState = new Map(); // Map<unitId, tripStateObj>
 
 function makeFreshTripState(overrides = {}) {
   return {
-    latitude:       null,
-    longitude:      null,
-    heading:        0,
-    speed:          0,
+    latitude: null,
+    longitude: null,
+    heading: 0,
+    speed: 0,
     remainingDistM: 0,
     remainingTimeS: 0,
-    tripStatus:     'dispatched',
-    stepIdx:        0,
-    totalSteps:     0,
-    distToDest:     0,
-    timestamp:      null,
-    trail:          [],
+    tripStatus: 'dispatched',
+    stepIdx: 0,
+    totalSteps: 0,
+    distToDest: 0,
+    timestamp: null,
+    trail: [],
     ...overrides,
   };
 }
@@ -114,7 +114,7 @@ function haversineMetres(lat1, lon1, lat2, lon2) {
   const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
   const dφ = (lat2 - lat1) * Math.PI / 180;
   const dλ = (lon2 - lon1) * Math.PI / 180;
-  const a  = Math.sin(dφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
+  const a = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -152,12 +152,12 @@ async function sendPushToToken(token, alert) {
         to: token, sound: 'default', priority: 'high',
         channelId: 'emergency-alerts', ttl: 300,
         title: `🚨 Emergency — ${alert.patientName || 'Incident'}`,
-        body:  `📍 ${alert.address || 'Location pending'}\n📝 ${alert.notes || ''}`,
-        data:  { type: 'emergency_alert', ...alert },
+        body: `📍 ${alert.address || 'Location pending'}\n📝 ${alert.notes || ''}`,
+        data: { type: 'emergency_alert', ...alert },
       }]),
     });
     const result = await r.json();
-    const item   = result.data?.[0];
+    const item = result.data?.[0];
     if (item?.status === 'ok') console.log(`✅ Push sent`);
     else console.warn(`❌ Push failed:`, item?.message);
   } catch (err) { console.error('Push error:', err.message); }
@@ -169,8 +169,8 @@ async function broadcastPush(alert) {
     to: token, sound: 'default', priority: 'high',
     channelId: 'emergency-alerts', ttl: 300,
     title: `🚨 Emergency — ${alert.patientName || 'Incident'}`,
-    body:  `📍 ${alert.address || 'Location pending'}`,
-    data:  { type: 'emergency_alert', ...alert },
+    body: `📍 ${alert.address || 'Location pending'}`,
+    data: { type: 'emergency_alert', ...alert },
   }));
   try {
     const r = await fetch('https://exp.host/--/api/v2/push/send', {
@@ -180,7 +180,7 @@ async function broadcastPush(alert) {
     });
     const result = await r.json();
     result.data?.forEach((item, i) => {
-      if (item.status === 'ok') console.log(`✅ Broadcast push device ${i+1}`);
+      if (item.status === 'ok') console.log(`✅ Broadcast push device ${i + 1}`);
       else if (item.details?.error === 'DeviceNotRegistered')
         pushTokens.delete([...pushTokens][i]);
     });
@@ -193,7 +193,7 @@ function validateAnswers(fields, answers) {
     if (!field.required) continue;
     const val = answers[field.id];
     const empty = val === undefined || val === null || val === '' ||
-                  (Array.isArray(val) && val.length === 0);
+      (Array.isArray(val) && val.length === 0);
     if (empty) errors.push(`"${field.label}" is required`);
   }
   return errors;
@@ -236,7 +236,7 @@ app.post('/forms/:formId/submit', async (req, res) => {
     const { answers = {}, incidentId, submittedBy = 'dispatcher' } = req.body;
     const [rows] = await db.query('SELECT * FROM forms WHERE id = ? AND is_active = 1', [req.params.formId]);
     if (!rows.length) return res.status(404).json({ success: false, error: 'Form not found' });
-    const form   = rows[0];
+    const form = rows[0];
     const fields = typeof form.fields === 'string' ? JSON.parse(form.fields) : form.fields;
     const errors = validateAnswers(fields, answers);
     if (errors.length) return res.status(400).json({ success: false, errors });
@@ -313,8 +313,8 @@ app.put('/admin/forms/:id', async (req, res) => {
   try {
     const { fields, name, is_active } = req.body;
     const updates = [], vals = [];
-    if (fields)              { updates.push('fields = ?');    vals.push(JSON.stringify(fields)); }
-    if (name)                { updates.push('name = ?');      vals.push(name); }
+    if (fields) { updates.push('fields = ?'); vals.push(JSON.stringify(fields)); }
+    if (name) { updates.push('name = ?'); vals.push(name); }
     if (is_active !== undefined) { updates.push('is_active = ?'); vals.push(is_active ? 1 : 0); }
     if (!updates.length) return res.status(400).json({ success: false, error: 'Nothing to update' });
     vals.push(req.params.id);
@@ -338,20 +338,20 @@ app.get('/admin/form-types', async (req, res) => {
 // UNIT REGISTRATION
 // ══════════════════════════════════════════════════════════════════════════════
 function handleRegister(req, res) {
-  const unitId    = req.body.unitId    || req.body.ambulanceId;
-  const name      = req.body.name;
-  const type      = req.body.type      || 'ambulance';
+  const unitId = req.body.unitId || req.body.ambulanceId;
+  const name = req.body.name;
+  const type = req.body.type || 'ambulance';
   const pushToken = req.body.pushToken || null;
   if (!unitId || !name) return res.status(400).json({ error: 'unitId and name required' });
   const existing = units.get(unitId);
   const unit = {
     id: unitId, name, type,
-    status:             existing?.status === 'busy' ? 'busy' : 'available',
-    lastSeen:           Date.now(),
-    registeredAt:       existing?.registeredAt || Date.now(),
-    pushToken:          pushToken || existing?.pushToken || null,
+    status: existing?.status === 'busy' ? 'busy' : 'available',
+    lastSeen: Date.now(),
+    registeredAt: existing?.registeredAt || Date.now(),
+    pushToken: pushToken || existing?.pushToken || null,
     assignedIncidentId: existing?.assignedIncidentId || null,
-    location:           existing?.location || null,
+    location: existing?.location || null,
   };
   units.set(unitId, unit);
   if (pushToken) pushTokens.add(pushToken);
@@ -362,12 +362,12 @@ function handleRegister(req, res) {
   console.log(`✅ Unit registered: ${name} (${unitId})`);
   res.json({ success: true, unit });
 }
-app.post('/register-unit',      handleRegister);
+app.post('/register-unit', handleRegister);
 app.post('/register-ambulance', handleRegister);
 
 app.post('/heartbeat', (req, res) => {
   const unitId = req.body.unitId || req.body.ambulanceId;
-  const unit   = units.get(unitId);
+  const unit = units.get(unitId);
   if (!unit) return res.status(404).json({ error: 'Unit not registered' });
 
   unit.lastSeen = Date.now();
@@ -382,10 +382,10 @@ app.post('/heartbeat', (req, res) => {
 
   if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
     unit.location = {
-      latitude:  lat,
+      latitude: lat,
       longitude: lng,
-      heading:   parseFloat(req.body.heading) || unit.location?.heading  || 0,
-      speed:     parseFloat(req.body.speed)   || unit.location?.speed    || 0,
+      heading: parseFloat(req.body.heading) || unit.location?.heading || 0,
+      speed: parseFloat(req.body.speed) || unit.location?.speed || 0,
       updatedAt: Date.now(),
     };
 
@@ -393,15 +393,15 @@ app.post('/heartbeat', (req, res) => {
     const prev = unitTripState.get(unitId) || makeFreshTripState();
     unitTripState.set(unitId, {
       ...prev,
-      latitude:  lat,
+      latitude: lat,
       longitude: lng,
-      heading:   unit.location.heading,
-      speed:     unit.location.speed,
+      heading: unit.location.heading,
+      speed: unit.location.speed,
       timestamp: Date.now(),
       trail: [...(prev.trail || []).slice(-149), {
         latitude: lat, longitude: lng,
         heading: unit.location.heading,
-        speed:   unit.location.speed,
+        speed: unit.location.speed,
       }],
     });
 
@@ -418,21 +418,21 @@ app.post('/heartbeat', (req, res) => {
 });
 
 app.get('/units', (req, res) => {
-  const now  = Date.now();
+  const now = Date.now();
   const list = Array.from(units.values()).map(u => ({
     ...u,
-    isOnline:   now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
+    isOnline: now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
     secondsAgo: Math.floor((now - u.lastSeen) / 1000),
-    distanceM:  null,
+    distanceM: null,
   }));
   res.json({ success: true, data: list, total: list.length });
 });
 
 app.get('/ambulances', (req, res) => {
-  const now  = Date.now();
+  const now = Date.now();
   const list = Array.from(units.values()).map(u => ({
     ...u,
-    isOnline:   now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
+    isOnline: now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
     secondsAgo: Math.floor((now - u.lastSeen) / 1000),
   }));
   res.json({ success: true, data: list, total: list.length });
@@ -440,11 +440,11 @@ app.get('/ambulances', (req, res) => {
 
 app.get('/nearest', (req, res) => {
   try {
-    const destLat    = parseFloat(req.query.lat);
-    const destLng    = parseFloat(req.query.lng);
+    const destLat = parseFloat(req.query.lat);
+    const destLng = parseFloat(req.query.lng);
     const typeFilter = req.query.type && req.query.type !== 'null' ? req.query.type : null;
-    const limit      = parseInt(req.query.limit) || 5;
-    const now        = Date.now();
+    const limit = parseInt(req.query.limit) || 5;
+    const now = Date.now();
     if (isNaN(destLat) || isNaN(destLng))
       return res.status(400).json({ error: 'lat and lng required' });
 
@@ -483,8 +483,8 @@ app.get('/nearest', (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 function handleLocationUpdate(req, res) {
   const unitId = req.body.unitId || req.body.ambulanceId;
-  const lat    = parseFloat(req.body.latitude);
-  const lng    = parseFloat(req.body.longitude);
+  const lat = parseFloat(req.body.latitude);
+  const lng = parseFloat(req.body.longitude);
   if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'Invalid coordinates' });
 
   // Update unit.location (for /all-locations)
@@ -503,19 +503,19 @@ function handleLocationUpdate(req, res) {
 
 
   const point = {
-    latitude:       lat,
-    longitude:      lng,
-    heading:        req.body.heading        || 0,
-    speed:          req.body.speed          || 0,
+    latitude: lat,
+    longitude: lng,
+    heading: req.body.heading || 0,
+    speed: req.body.speed || 0,
     remainingDistM: req.body.remainingDistM || 0,
     remainingTimeS: req.body.remainingTimeS || 0,
     tripStatus: prevState.tripStatus === 'completed'
-  ? 'completed'
-  : (req.body.tripStatus || prevState.tripStatus || 'en_route'),
-    stepIdx:        req.body.stepIdx        || 0,
-    totalSteps:     req.body.totalSteps     || 0,
-    distToDest:     req.body.distToDest     || 0,
-    timestamp:      Date.now(),
+      ? 'completed'
+      : (req.body.tripStatus || prevState.tripStatus || 'en_route'),
+    stepIdx: req.body.stepIdx || 0,
+    totalSteps: req.body.totalSteps || 0,
+    distToDest: req.body.distToDest || 0,
+    timestamp: Date.now(),
   };
   console.log(`🚑 ${unitId} | speed=${point.speed} | ETA=${point.remainingTimeS}`);
 
@@ -534,9 +534,9 @@ function handleLocationUpdate(req, res) {
   res.json({ success: true });
 }
 
-app.post('/update-unit-location',      handleLocationUpdate);
+app.post('/update-unit-location', handleLocationUpdate);
 app.post('/update-ambulance-location', handleLocationUpdate);
-app.post('/update-location',           handleLocationUpdate);
+app.post('/update-location', handleLocationUpdate);
 
 // GET /ambulance-location — legacy, returns last-writer's data
 app.get('/ambulance-location', (req, res) => res.json(ambulanceLocation));
@@ -556,28 +556,28 @@ app.get('/unit-location/:unitId', (req, res) => {
     // Trip state (position, speed, ETA, nav steps) — all unit-specific
     ...tripState,
     // Unit identity
-    unitId:   unit.id,
-    name:     unit.name,
-    type:     unit.type,
-    status:   unit.status,
+    unitId: unit.id,
+    name: unit.name,
+    type: unit.type,
+    status: unit.status,
     // If the unit hasn't posted a full location update yet, fall back to unit.location
-    latitude:  tripState.latitude  ?? unit.location?.latitude  ?? null,
+    latitude: tripState.latitude ?? unit.location?.latitude ?? null,
     longitude: tripState.longitude ?? unit.location?.longitude ?? null,
     // tripStatus: prefer the assignment's status if available (set by mobile app)
     tripStatus:
-  tripState.tripStatus === 'completed'
-    ? 'completed'
-    : ( tripState.tripStatus || 'dispatched'),
+      tripState.tripStatus === 'completed'
+        ? 'completed'
+        : (tripState.tripStatus || 'dispatched'),
   });
 });
 
 app.get('/all-locations', (req, res) => {
-  const now  = Date.now();
+  const now = Date.now();
   const data = Array.from(units.values()).filter(u => u.location?.latitude).map(u => ({
     id: u.id, name: u.name, type: u.type, status: u.status,
-    isOnline:  now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
-    latitude:  u.location.latitude, longitude: u.location.longitude,
-    heading:   u.location.heading || 0, speed: u.location.speed || 0,
+    isOnline: now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
+    latitude: u.location.latitude, longitude: u.location.longitude,
+    heading: u.location.heading || 0, speed: u.location.speed || 0,
     updatedAt: u.location.updatedAt,
   }));
   res.json({ success: true, data });
@@ -594,14 +594,14 @@ app.post('/assign', async (req, res) => {
     formId, answers,
   } = req.body;
 
-  const id   = unitId || ambulanceId;
+  const id = unitId || ambulanceId;
   const unit = units.get(id);
-  if (!unit)           return res.status(404).json({ error: `Unit ${id} not found` });
+  if (!unit) return res.status(404).json({ error: `Unit ${id} not found` });
   if (unit.status === 'busy')
     return res.status(400).json({ error: `${unit.name} is already on an active incident` });
 
-  const incidentId   = uuidv4();
-  let   submissionId = null;
+  const incidentId = uuidv4();
+  let submissionId = null;
 
   if (formId && answers && Object.keys(answers).length > 0) {
     try {
@@ -622,32 +622,32 @@ app.post('/assign', async (req, res) => {
   }
 
   const alertData = {
-    id:           incidentId,
-    status:       'pending',
-    unitId:       id,
-    patientName:  patientName  || (answers?.f1 ?? ''),
+    id: incidentId,
+    status: 'pending',
+    unitId: id,
+    patientName: patientName || (answers?.f1 ?? ''),
     patientPhone: patientPhone || (answers?.f2 ?? ''),
-    address:      address      || (answers?.f3 ?? ''),
-    destination:  destination  || null,
-    notes:        notes        || (answers?.f7 ?? answers?.f8 ?? ''),
-    vehicleType:  vehicleType  || unit.type,
-    severity:     severity     || (answers?.f5 ?? answers?.f7 ?? 'high'),
-    assignedAt:   Date.now(),
+    address: address || (answers?.f3 ?? ''),
+    destination: destination || null,
+    notes: notes || (answers?.f7 ?? answers?.f8 ?? ''),
+    vehicleType: vehicleType || unit.type,
+    severity: severity || (answers?.f5 ?? answers?.f7 ?? 'high'),
+    assignedAt: Date.now(),
     submissionId,
-    reason:       '',
+    reason: '',
   };
 
   assignments.set(id, alertData);
   incidents.set(incidentId, { ...alertData, unitName: unit.name, unitType: unit.type });
-  unit.status             = 'busy';
+  unit.status = 'busy';
   unit.assignedIncidentId = incidentId;
-  currentAlert            = { ...alertData };
+  currentAlert = { ...alertData };
 
   // Reset THIS unit's trip state (not all units)
   unitTripState.set(id, makeFreshTripState({ tripStatus: 'dispatched' }));
   resetLegacyLocation();
 
-  console.log(`🚨 Assigned ${unit.name} → incident ${incidentId.slice(0,8)}`);
+  console.log(`🚨 Assigned ${unit.name} → incident ${incidentId.slice(0, 8)}`);
   if (unit.pushToken) await sendPushToToken(unit.pushToken, alertData);
 
   res.json({ success: true, id: incidentId, unitName: unit.name, submissionId });
@@ -657,14 +657,14 @@ app.post('/send-alert', async (req, res) => {
   const id = uuidv4();
   currentAlert = {
     id, status: 'pending',
-    patientName:  req.body.patientName  || '',
+    patientName: req.body.patientName || '',
     patientPhone: req.body.patientPhone || '',
-    address:      req.body.address      || '',
-    destination:  req.body.destination,
-    notes:        req.body.notes        || '',
-    vehicleType:  req.body.vehicleType  || 'ambulance',
-    severity:     req.body.severity     || 'high',
-    reason:       '',
+    address: req.body.address || '',
+    destination: req.body.destination,
+    notes: req.body.notes || '',
+    vehicleType: req.body.vehicleType || 'ambulance',
+    severity: req.body.severity || 'high',
+    reason: '',
   };
   resetLegacyLocation();
   const selectedUnits = dispatchToNearestUnits(currentAlert, currentAlert.vehicleType);
@@ -719,7 +719,7 @@ app.post('/reject', (req, res) => {
 
 app.post('/complete-trip', (req, res) => {
   const unitId = req.body.unitId || req.body.ambulanceId;
-  const unit   = units.get(unitId);
+  const unit = units.get(unitId);
   if (unit) { unit.status = 'available'; unit.assignedIncidentId = null; }
   assignments.delete(unitId);
   // Mark this unit's trip as completed in its own trip state
@@ -805,7 +805,7 @@ app.post('/update-dispatch-status', (req, res) => {
 });
 
 app.get('/incidents', (req, res) => {
-  const list = Array.from(incidents.values()).sort((a,b) => (b.assignedAt||0) - (a.assignedAt||0));
+  const list = Array.from(incidents.values()).sort((a, b) => (b.assignedAt || 0) - (a.assignedAt || 0));
   res.json({ success: true, data: list });
 });
 
@@ -820,11 +820,11 @@ app.get('/directions', async (req, res) => {
   const { originLat, originLng, destLat, destLng, mode } = req.query;
   if (!originLat || !originLng || !destLat || !destLng)
     return res.status(400).json({ error: 'Missing params' });
-  const tMode   = mode || 'driving';
+  const tMode = mode || 'driving';
   const traffic = tMode === 'driving' ? '&departure_time=now&traffic_model=best_guess' : '';
-  const url     = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&mode=${tMode}&alternatives=true${traffic}&key=${GOOGLE_KEY}`;
+  const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&mode=${tMode}&alternatives=true${traffic}&key=${GOOGLE_KEY}`;
   try {
-    const r    = await fetch(url);
+    const r = await fetch(url);
     const data = await r.json();
     res.json(data);
   } catch (err) { res.status(500).json({ error: 'Directions fetch failed' }); }

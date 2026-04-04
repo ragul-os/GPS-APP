@@ -379,7 +379,7 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
 
   useEffect(() => {
     fetchAndRenderUnits();
-    const iv = setInterval(fetchAndRenderUnits, 4000);
+    const iv = setInterval(fetchAndRenderUnits, 20000); // 20s — nearby map updates slowly
     return () => clearInterval(iv);
   }, [fetchAndRenderUnits]);
 

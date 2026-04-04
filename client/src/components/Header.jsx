@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getStatus } from '../api/api';
+import { MdReport, MdPerson, MdDashboard, MdBarChart, MdSensors } from 'react-icons/md';
 
 const styles = {
   header: {
@@ -72,7 +73,7 @@ export default function Header() {
       }
     };
     check();
-    const iv = setInterval(check, 1000);
+    const iv = setInterval(check, 60000); // 60s — server connectivity changes slowly
     return () => clearInterval(iv);
   }, []);
 
@@ -106,7 +107,9 @@ export default function Header() {
     <>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
       <header style={styles.header}>
-        <div style={styles.logo}>🚨 Emergency Control System</div>
+        <div style={{ ...styles.logo, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <MdReport color="#E53935" size={24} /> Emergency Control System
+        </div>
         <div style={styles.right}>
           <div style={styles.unitsBadge} id="hdr-units">0 units online</div>
           <div style={styles.pill(connected)}>
@@ -144,7 +147,7 @@ export default function Header() {
           style={styles.tab(isAgent)}
           onClick={() => navigate('/agent')}
         >
-          👩‍💼 Agent
+          <MdPerson size={16} /> Agent
         </button>
 
         {/* DISPATCH TAB — badge shows pending agent tickets */}
@@ -152,7 +155,7 @@ export default function Header() {
           style={styles.tab(isDispatch)}
           onClick={() => navigate('/dispatch')}
         >
-          🚨 Dispatch
+          <MdDashboard size={16} /> Dispatch
           {pendingCount > 0 && (
             <span style={styles.badgeWarning}>{pendingCount} new</span>
           )}
@@ -163,7 +166,7 @@ export default function Header() {
           style={styles.tab(isAlerts)}
           onClick={() => navigate('/alerts')}
         >
-          📊 Monitoring
+          <MdBarChart size={16} /> Monitoring
           <span style={styles.badge}>{alertCount}</span>
         </button>
 

@@ -82,7 +82,7 @@ export default function UnitList({
 
   useEffect(() => {
     fetchAll();
-    const iv = setInterval(fetchAll, 3000);
+    const iv = setInterval(fetchAll, 15000); // 15s — unit list changes slowly
     return () => clearInterval(iv);
   }, [fetchAll]);
 

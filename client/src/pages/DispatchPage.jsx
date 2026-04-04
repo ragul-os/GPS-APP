@@ -1,25 +1,36 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import MapView         from '../components/MapView';
+import MapView from '../components/MapView';
 import NearbyResources from '../components/NearbyResources';
-import UnitList        from '../components/UnitList';
+import UnitList from '../components/UnitList';
 import { sendAlert, assignUnit } from '../api/api';
 import { useAuth } from "../context/AuthContext";
-
+import { createRoom, inviteUser } from "../services/MatrixService";
+import { 
+  MdLocalHospital, MdFireTruck, MdLocalPolice, MdWarning, 
+  MdCheckCircle, MdCancel, MdAccessTime, MdNotificationsActive,
+  MdPause, MdFiberManualRecord, MdFlag, MdBlock,
+  MdAssignment, MdGpsFixed, MdSettings, MdRoad, MdStar,
+  MdLocationOn, MdOpacity, MdMedicalServices, MdSearch, MdClose,
+  MdSend, MdReport
+} from 'react-icons/md';
+import { FaHelicopter, FaHospital, FaAmbulance } from 'react-icons/fa';
+import { GiRadioactive } from 'react-icons/gi';
+import { AiOutlineLoading3Quarters } from 'react-icons/ai';
 /* ── Unit config ── */
 const UCFG = {
-  ambulance: { icon: '🚑', label: 'Ambulance',  color: '#E53935', barColor: '#E53935', btnCls: { background: '#E53935', boxShadow: '0 4px 18px rgba(229,57,53,.35)' } },
-  fire:      { icon: '🚒', label: 'Fire Engine', color: '#FF6D00', barColor: '#FF6D00', btnCls: { background: '#FF6D00', boxShadow: '0 4px 18px rgba(255,109,0,.3)'  } },
-  police:    { icon: '🚔', label: 'Police Unit', color: '#1565C0', barColor: '#1565C0', btnCls: { background: '#1565C0', boxShadow: '0 4px 18px rgba(21,101,192,.35)' } },
-  rescue:    { icon: '🚁', label: 'Rescue',      color: '#9C27B0', barColor: '#9C27B0', btnCls: { background: '#9C27B0', boxShadow: '0 4px 18px rgba(156,39,176,.3)'  } },
-  hazmat:    { icon: '☢️',  label: 'Hazmat',      color: '#F57F17', barColor: '#F57F17', btnCls: { background: '#F57F17', boxShadow: '0 4px 18px rgba(245,127,23,.3)'  } },
+  ambulance: { icon: <MdLocalHospital />, label: 'Ambulance', color: '#E53935', barColor: '#E53935', btnCls: { background: '#E53935', boxShadow: '0 4px 18px rgba(229,57,53,.35)' } },
+  fire: { icon: <MdFireTruck />, label: 'Fire Engine', color: '#FF6D00', barColor: '#FF6D00', btnCls: { background: '#FF6D00', boxShadow: '0 4px 18px rgba(255,109,0,.3)' } },
+  police: { icon: <MdLocalPolice />, label: 'Police Unit', color: '#1565C0', barColor: '#1565C0', btnCls: { background: '#1565C0', boxShadow: '0 4px 18px rgba(21,101,192,.35)' } },
+  rescue: { icon: <FaHelicopter />, label: 'Rescue', color: '#9C27B0', barColor: '#9C27B0', btnCls: { background: '#9C27B0', boxShadow: '0 4px 18px rgba(156,39,176,.3)' } },
+  hazmat: { icon: <GiRadioactive />, label: 'Hazmat', color: '#F57F17', barColor: '#F57F17', btnCls: { background: '#F57F17', boxShadow: '0 4px 18px rgba(245,127,23,.3)' } },
 };
 const SEV_COLORS = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
 const STATUS_CFG = {
-  pending:    { label: '⏳ Pending',    color: '#F9A825', bg: 'rgba(249,168,37,.12)'  },
-  dispatched: { label: '🚨 Dispatched', color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
-  completed:  { label: '✅ Completed',  color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
-  rejected:   { label: '❌ Rejected',   color: '#E53935', bg: 'rgba(229,57,53,.12)'   },
+  pending: { label: 'Pending', icon: <MdAccessTime />, color: '#F9A825', bg: 'rgba(249,168,37,.12)' },
+  dispatched: { label: 'Dispatched', icon: <MdNotificationsActive />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
+  completed: { label: 'Completed', icon: <MdCheckCircle />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
+  rejected: { label: 'Rejected', icon: <MdCancel />, color: '#E53935', bg: 'rgba(229,57,53,.12)' },
 };
 
 /* ── localStorage helpers ── */
@@ -61,7 +72,7 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
     <div style={s.overlay} onClick={onCancel}>
       <div style={s.modal} onClick={e => e.stopPropagation()}>
         <div style={s.mHead}>
-          <span style={{ fontSize: 32 }}>{cfg.icon}</span>
+          <div style={{ fontSize: 32, display: 'flex' }}>{cfg.icon}</div>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800 }}>Confirm Dispatch</div>
             <div style={{ fontSize: 11, color: '#8B949E', marginTop: 2 }}>
@@ -71,7 +82,7 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
         </div>
         <div style={{ padding: '20px 24px' }}>
           {selectedUnitIds.length === 0 ? (
-            <div style={s.noUnitWarn}>⚠️ No units selected — will broadcast to ALL available units.</div>
+            <div style={s.noUnitWarn}><MdWarning /> No units selected — will broadcast to ALL available units.</div>
           ) : (
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Selected Units ({selectedUnitIds.length})</div>
@@ -82,7 +93,7 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
                   const ucfg = UCFG[unit.type] || UCFG.ambulance;
                   return (
                     <div key={uid} style={s.unitCard}>
-                      <span style={{ fontSize: 22 }}>{ucfg.icon}</span>
+                      <span style={{ fontSize: 22, display: 'flex' }}>{ucfg.icon}</span>
                       <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 800 }}>{unit.name}</div><div style={{ fontSize: 10, color: '#8B949E' }}>{unit.id}</div></div>
                       <span style={{ padding: '2px 8px', borderRadius: 8, fontSize: 10, fontWeight: 800, background: 'rgba(52,168,83,.15)', color: '#34A853' }}>Ready</span>
                     </div>
@@ -95,16 +106,16 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
             <div style={s.detCard}><div style={s.detLabel}>Priority</div><div style={{ ...s.detVal, color: SEV_COLORS[severity] }}>{severity?.toUpperCase()}</div></div>
             <div style={s.detCard}><div style={s.detLabel}>Units</div><div style={{ ...s.detVal, color: '#82B4FF' }}>{selectedUnitIds.length || 'Broadcast'}</div></div>
             <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}>Patient / Caller</div><div style={s.detVal}>{answers.f1 || '—'}</div></div>
-            <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}>📍 Location</div><div style={s.detVal}>{answers.f3 || '—'}</div></div>
+            <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}><MdLocationOn style={{ verticalAlign: 'middle', marginRight: 4 }} /> Location</div><div style={s.detVal}>{answers.f3 || '—'}</div></div>
             <div style={s.detCard}><div style={s.detLabel}>Phone</div><div style={s.detVal}>{answers.f2 || '—'}</div></div>
             <div style={s.detCard}><div style={s.detLabel}>Coordinates</div><div style={{ ...s.detVal, fontFamily: 'JetBrains Mono, monospace', fontSize: 10 }}>{pickedLat?.toFixed(5)}, {pickedLng?.toFixed(5)}</div></div>
             {answers.f7 && <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}>Notes</div><div style={s.detVal}>{answers.f7}</div></div>}
           </div>
         </div>
-        <div style={s.mFooter}>
-          <button style={s.cancelBtn} onClick={onCancel}>✕ Cancel</button>
-          <button style={{ ...s.confirmBtn, ...cfg.btnCls }} onClick={onConfirm} disabled={loading}>
-            {loading ? '⏳ Dispatching…' : `${cfg.icon} CONFIRM DISPATCH`}
+        <div style={s.mFoot}>
+          <button style={s.cancelBtn} onClick={onCancel}><MdClose style={{ marginRight: 4 }} /> Cancel</button>
+          <button style={{ ...s.confirmBtn, background: cfg.color }} onClick={onConfirm} disabled={loading}>
+            {loading ? <AiOutlineLoading3Quarters style={{ animation: 'spin 1s linear infinite', marginRight: 6 }} /> : <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{cfg.icon} CONFIRM DISPATCH</span>}
           </button>
         </div>
       </div>
@@ -115,14 +126,14 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
 /* ── Ticket Details Box ── */
 function TicketDetailsBox({ ticket, dispatchedUnits }) {
   if (!ticket) return null;
-  const cfg     = UCFG[ticket.vehicleType] || UCFG.ambulance;
-  const t       = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const cfg = UCFG[ticket.vehicleType] || UCFG.ambulance;
+  const t = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const answers = ticket.answers || {};
-  const stCfg   = STATUS_CFG[ticket.status] || STATUS_CFG.pending;
+  const stCfg = STATUS_CFG[ticket.status] || STATUS_CFG.pending;
   const rows = [
     ['Caller / Patient', ticket.name],
-    ['Phone',            ticket.phone || '—'],
-    ['Address',          ticket.address],
+    ['Phone', ticket.phone || '—'],
+    ['Address', ticket.address],
     ticket.destination && ['Coordinates', `${ticket.destination.latitude?.toFixed(5)}, ${ticket.destination.longitude?.toFixed(5)}`],
     answers.f4 && ['Incident Type', answers.f4],
     ticket.notes && ['Notes', ticket.notes],
@@ -198,12 +209,12 @@ function TicketListScreen({ onSelectTicket }) {
     window.addEventListener('agentTicketsChange', load);
     return () => window.removeEventListener('agentTicketsChange', load);
   }, []);
-  const pendingCount    = agentTickets.filter(t => t.status === 'pending').length;
+  const pendingCount = agentTickets.filter(t => t.status === 'pending').length;
   const filteredTickets = statusFilter === 'all' ? agentTickets : agentTickets.filter(t => t.status === statusFilter);
   return (
     <div style={s.page}>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 4 }}>🚨 Incoming Tickets</div>
+      <div style={s.mainBody}>
+        <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}><MdNotificationsActive color="#E53935" /> Incoming Tickets</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: '#8B949E' }}>Select a ticket to open the dispatch screen</span>
           {pendingCount > 0 && <span style={{ background: 'rgba(249,168,37,.15)', color: '#F9A825', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 6 }}>{pendingCount} pending</span>}
@@ -220,12 +231,13 @@ function TicketListScreen({ onSelectTicket }) {
       ) : (
         <div style={s.grid}>
           {filteredTickets.map(ticket => {
-            const cfg       = UCFG[ticket.vehicleType] || UCFG.ambulance;
-            const t         = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const stCfg     = STATUS_CFG[ticket.status] || STATUS_CFG.pending;
+            const cfg = UCFG[ticket.vehicleType] || UCFG.ambulance;
+            const t = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const stCfg = STATUS_CFG[ticket.status] || STATUS_CFG.pending;
             const isPending = ticket.status === 'pending';
-            const answers   = ticket.answers || {};
+            const answers = ticket.answers || {};
             const unitCount = (ticket.assignedUnits || []).length;
+            const sev = { color: SEV_COLORS[ticket.severity] || '#8B949E' };
             return (
               <div key={ticket.id} style={{ ...s.ticket, ...(isPending ? { border: '1px solid rgba(249,168,37,.4)', boxShadow: '0 0 0 2px rgba(249,168,37,.08)' } : {}) }} onClick={() => onSelectTicket(ticket)}>
                 <div style={{ ...s.ticketBar, background: cfg.barColor }} />
@@ -236,12 +248,12 @@ function TicketListScreen({ onSelectTicket }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 18 }}>{cfg.icon}</span><span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.6px', textTransform: 'uppercase', color: cfg.barColor }}>{cfg.label}</span></div>
                     <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#8B949E' }}>{t}</span>
                   </div>
-                  <div style={s.ticketName}>{ticket.name}</div>
-                  <div style={s.ticketAddr}>📍 {ticket.address}</div>
+                  <div style={s.ticketTime}>{new Date(ticket.timestamp).toLocaleTimeString()}</div>
+                  <div style={s.ticketAddr}><MdLocationOn style={{ marginRight: 4 }} /> {ticket.address}</div>
                   <div style={s.detailsRow}>
                     {ticket.phone && <span style={s.detailChip}>📞 {ticket.phone}</span>}
-                    {answers.f4   && <span style={s.detailChip}>🔖 {answers.f4}</span>}
-                    {unitCount > 0 && <span style={{ ...s.detailChip, color: '#82B4FF', borderColor: 'rgba(26,115,232,.3)' }}>🚑 {unitCount} unit{unitCount > 1 ? 's' : ''} dispatched</span>}
+                    <span style={{ ...s.detailChip, color: sev.color, borderColor: `${sev.color}40`, background: `${sev.color}15` }}>{ticket.severity?.toUpperCase()}</span>
+                    {unitCount > 0 && <span style={{ ...s.detailChip, color: '#82B4FF', borderColor: 'rgba(26,115,232,.3)', display: 'flex', alignItems: 'center', gap: 4 }}><MdLocalHospital size={12} /> {unitCount} unit{unitCount > 1 ? 's' : ''} dispatched</span>}
                   </div>
                   {ticket.destination && <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#1A73E8', marginBottom: 5 }}>🌐 {ticket.destination.latitude?.toFixed(5)}, {ticket.destination.longitude?.toFixed(5)}</div>}
                   {ticket.notes && <div style={s.notesRow}>📝 {ticket.notes}</div>}
@@ -306,9 +318,9 @@ function InlineUnitSelector({ units, selectedUnitIds, onToggleUnit }) {
         /* Scrollable list so it matches form height */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto', maxHeight: 340 }}>
           {onlineUnits.map(u => {
-            const isSel  = selectedUnitIds.includes(u.id);
+            const isSel = selectedUnitIds.includes(u.id);
             const isBusy = u.status === 'busy';
-            const ucfg   = UCFG[u.type] || UCFG.ambulance;
+            const ucfg = UCFG[u.type] || UCFG.ambulance;
             return (
               <div
                 key={u.id}
@@ -373,25 +385,25 @@ export default function DispatchPage() {
   const navigate = useNavigate();
   const incomingTicket = location.state?.agentTicket || null;
 
-  const [selectedTicket,  setSelectedTicket]  = useState(incomingTicket);
-  const [agentTicket,     setAgentTicket]     = useState(incomingTicket);
-  const [severity,        setSeverity]        = useState(incomingTicket?.severity || 'critical');
-  const [pickedLat,       setPickedLat]       = useState(incomingTicket?.destination?.latitude  || null);
-  const [pickedLng,       setPickedLng]       = useState(incomingTicket?.destination?.longitude || null);
-  const [answers,         setAnswers]         = useState(
+  const [selectedTicket, setSelectedTicket] = useState(incomingTicket);
+  const [agentTicket, setAgentTicket] = useState(incomingTicket);
+  const [severity, setSeverity] = useState(incomingTicket?.severity || 'critical');
+  const [pickedLat, setPickedLat] = useState(incomingTicket?.destination?.latitude || null);
+  const [pickedLng, setPickedLng] = useState(incomingTicket?.destination?.longitude || null);
+  const [answers, setAnswers] = useState(
     incomingTicket?.answers || (incomingTicket
       ? { f1: incomingTicket.name, f2: incomingTicket.phone, f3: incomingTicket.address, f7: incomingTicket.notes }
       : {})
   );
   const [selectedUnitIds, setSelectedUnitIds] = useState([]);
-  const [unitList,        setUnitList]        = useState([]);
-  const [showResources,   setShowResources]   = useState(false);
-  const [showModal,       setShowModal]       = useState(false);
-  const [dispatching,     setDispatching]     = useState(false);
-  const [lastAlertIds,    setLastAlertIds]    = useState([]);
-  const [statusBox,       setStatusBox]       = useState({ type: 'waiting', icon: '⏳', text: 'No alert sent yet' });
-  const [logs,            setLogs]            = useState([]);
-  const [allTickets,      setAllTickets]      = useState([]);
+  const [unitList, setUnitList] = useState([]);
+  const [showResources, setShowResources] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [dispatching, setDispatching] = useState(false);
+  const [lastAlertIds, setLastAlertIds] = useState([]);
+  const [statusBox, setStatusBox] = useState({ type: 'waiting', icon: '⏳', text: 'No alert sent yet' });
+  const [logs, setLogs] = useState([]);
+  const [allTickets, setAllTickets] = useState([]);
 
   useEffect(() => {
     const load = () => {
@@ -458,7 +470,7 @@ export default function DispatchPage() {
     if (!pickedLat || !pickedLng) { alert('No location set — cannot dispatch.'); return; }
     setShowModal(true);
   };
-   const {session}= useAuth();
+  const { dispatcher } = useAuth();
 
   const handleDispatch = async () => {
     setDispatching(true);
@@ -467,16 +479,26 @@ export default function DispatchPage() {
     try {
       const vehicleType = agentTicket?.vehicleType || 'ambulance';
       const base = {
-        patientName:  answers.f1 || 'Unknown',
+        patientName: answers.f1 || 'Unknown',
         patientPhone: answers.f2 || '',
-        address:      answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
-        notes:        answers.f7 || '',
-        destination:  { latitude: pickedLat, longitude: pickedLng },
+        address: answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
+        notes: answers.f7 || '',
+        destination: { latitude: pickedLat, longitude: pickedLng },
         vehicleType, severity, answers,
       };
-      const room = await createRoom(session.accessToken, `Ticket-${agentTicket.id}`);
-      const roomId = room.room_id;
-      console.log("✅ Room created:", roomId);
+
+      // ── Matrix room creation (non-blocking — won't stop dispatch if Matrix is offline) ──
+      let roomId = null;
+      if (dispatcher?.accessToken && agentTicket?.id) {
+        try {
+          const room = await createRoom(dispatcher.accessToken, `Ticket-${agentTicket.id}`);
+          roomId = room.room_id;
+          addLog(`✅ Matrix room created: ${roomId}`, 'ok');
+        } catch (matrixErr) {
+          addLog(`⚠️ Matrix room creation skipped: ${matrixErr.message}`, 'warn');
+        }
+      }
+
       if (selectedUnitIds.length === 0) {
         const res = await sendAlert(base);
         ids.push(res.data.id);
@@ -484,29 +506,28 @@ export default function DispatchPage() {
         addLog('📡 Broadcast to all units', 'warn');
       } else {
         for (const unitId of selectedUnitIds) {
-          const matrixUserId = `@${unitId}:localhost`; // ⚠️ adjust domain if needed
-
-          try {
-            await inviteUser(session.accessToken, roomId, matrixUserId);
-            console.log("📨 Invited:", matrixUserId);
-          } catch (err) {
-            console.warn("Invite failed for:", matrixUserId, err.message);
+          // ── Matrix invite (non-blocking) ──
+          if (roomId && dispatcher?.accessToken) {
+            const matrixUserId = `@ragl:localhost`;
+            try {
+              await inviteUser(dispatcher.accessToken, roomId, matrixUserId);
+              addLog(`📨 Matrix invite sent: ${matrixUserId}`, 'ok');
+            } catch (err) {
+              addLog(`⚠️ Matrix invite skipped for ${unitId}`, 'warn');
+            }
           }
+
           const res = await assignUnit({ ...base, unitId });
           ids.push(res.data.id);
           const unit = unitList.find(u => u.id === unitId);
-          addToHistory({ 
-            ...buildEntry(
-              res.data.id, 
-              unitId, 
-              unit?.type || vehicleType   // ✅ FIX HERE
-            ),
-            status: 'pending' 
+          addToHistory({
+            ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
+            status: 'pending'
           });
-          
           addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
         }
       }
+
       if (agentTicket?.id) {
         updateAgentTicket(agentTicket.id, {
           status: 'dispatched',
@@ -529,15 +550,15 @@ export default function DispatchPage() {
   function buildEntry(id, unitId, vehicleType) {
     return {
       id,
-      vehicleType:   vehicleType || agentTicket?.vehicleType || 'ambulance',
+      vehicleType: vehicleType || agentTicket?.vehicleType || 'ambulance',
       severity,
-      name:          answers.f1 || 'Unknown',
-      phone:         answers.f2 || '',
-      address:       answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
-      notes:         answers.f7 || '',
-      destination:   { latitude: pickedLat, longitude: pickedLng },
-      createdAt:     Date.now(),
-      assignedUnit:  unitId,
+      name: answers.f1 || 'Unknown',
+      phone: answers.f2 || '',
+      address: answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
+      notes: answers.f7 || '',
+      destination: { latitude: pickedLat, longitude: pickedLng },
+      createdAt: Date.now(),
+      assignedUnit: unitId,
       agentTicketId: agentTicket?.id || null,
     };
   }
@@ -551,15 +572,15 @@ export default function DispatchPage() {
     addLog('✅ Ticket marked as completed', 'ok');
   }
 
-  const statusColors    = { waiting: '#8B949E', pending: '#F9A825', accepted: '#34A853', rejected: '#E53935' };
+  const statusColors = { waiting: '#8B949E', pending: '#F9A825', accepted: '#34A853', rejected: '#E53935' };
   const dispatchedUnits = agentTicket?.assignedUnits || [];
-  const ticketStatus    = agentTicket?.status || 'pending';
-  const cfg             = UCFG[agentTicket?.vehicleType] || UCFG.ambulance;
-  const stCfg           = STATUS_CFG[ticketStatus] || STATUS_CFG.pending;
+  const ticketStatus = agentTicket?.status || 'pending';
+  const cfg = UCFG[agentTicket?.vehicleType] || UCFG.ambulance;
+  const stCfg = STATUS_CFG[ticketStatus] || STATUS_CFG.pending;
 
   if (!selectedTicket) return <TicketListScreen onSelectTicket={loadTicket} />;
 
-  
+
   return (
     <div>
       <TicketSwitcherStrip tickets={allTickets} activeTicketId={selectedTicket.id} onSelect={loadTicket} />
@@ -682,9 +703,9 @@ export default function DispatchPage() {
             /> */}
           </div>
 
-          
 
-          
+
+
         </div>
 
         {/* ══════════ RIGHT COLUMN ══════════ */}
@@ -747,29 +768,29 @@ export default function DispatchPage() {
    Styles
 ══════════════════════════════════════════════════ */
 const s = {
-  page:      { padding: '20px 28px', maxWidth: 1200, margin: '0 auto' },
-  grid:      { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: 12 },
-  empty:     { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', color: '#8B949E', textAlign: 'center', gap: 10 },
+  page: { padding: '20px 28px', maxWidth: 1200, margin: '0 auto' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: 12 },
+  empty: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', color: '#8B949E', textAlign: 'center', gap: 10 },
   emptyIcon: { fontSize: 48, opacity: .2 },
-  emptyMsg:  { fontSize: 14, fontWeight: 700 },
-  emptySub:  { fontSize: 11, opacity: .6 },
+  emptyMsg: { fontSize: 14, fontWeight: 700 },
+  emptySub: { fontSize: 11, opacity: .6 },
 
-  ticket:      { background: '#161B22', border: '1px solid #30363D', borderRadius: 13, padding: '14px 16px', cursor: 'pointer', transition: 'all .2s', position: 'relative', overflow: 'hidden' },
-  ticketBar:   { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderRadius: '13px 0 0 13px' },
-  newBadge:    { position: 'absolute', top: 10, right: 10, background: 'rgba(249,168,37,.2)', color: '#F9A825', fontSize: 9, fontWeight: 800, padding: '2px 6px', borderRadius: 5, letterSpacing: 1 },
+  ticket: { background: '#161B22', border: '1px solid #30363D', borderRadius: 13, padding: '14px 16px', cursor: 'pointer', transition: 'all .2s', position: 'relative', overflow: 'hidden' },
+  ticketBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderRadius: '13px 0 0 13px' },
+  newBadge: { position: 'absolute', top: 10, right: 10, background: 'rgba(249,168,37,.2)', color: '#F9A825', fontSize: 9, fontWeight: 800, padding: '2px 6px', borderRadius: 5, letterSpacing: 1 },
   ticketInner: { paddingLeft: 6 },
-  ticketTop:   { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
-  ticketName:  { fontSize: 15, fontWeight: 800, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  ticketAddr:  { fontSize: 11, color: '#8B949E', marginBottom: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  detailsRow:  { display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 5 },
-  detailChip:  { fontSize: 10, color: '#8B949E', background: '#0D1117', border: '1px solid #30363D', borderRadius: 6, padding: '2px 7px' },
-  notesRow:    { fontSize: 10, color: '#8B949E', background: '#0D1117', borderRadius: 6, padding: '5px 8px', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  ticketFooter:{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
-  openBtn:     { fontSize: 10, fontWeight: 700, color: '#1A73E8', background: 'rgba(26,115,232,.1)', border: '1px solid rgba(26,115,232,.2)', borderRadius: 7, padding: '4px 10px', cursor: 'pointer', fontFamily: 'Sora, sans-serif', flexShrink: 0 },
+  ticketTop: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
+  ticketName: { fontSize: 15, fontWeight: 800, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  ticketAddr: { fontSize: 11, color: '#8B949E', marginBottom: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  detailsRow: { display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 5 },
+  detailChip: { fontSize: 10, color: '#8B949E', background: '#0D1117', border: '1px solid #30363D', borderRadius: 6, padding: '2px 7px' },
+  notesRow: { fontSize: 10, color: '#8B949E', background: '#0D1117', borderRadius: 6, padding: '5px 8px', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  ticketFooter: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+  openBtn: { fontSize: 10, fontWeight: 700, color: '#1A73E8', background: 'rgba(26,115,232,.1)', border: '1px solid rgba(26,115,232,.2)', borderRadius: 7, padding: '4px 10px', cursor: 'pointer', fontFamily: 'Sora, sans-serif', flexShrink: 0 },
 
-  stripWrap:   { display: 'flex', alignItems: 'center', padding: '10px 28px', background: '#0D1117', borderBottom: '1px solid #30363D', position: 'sticky', top: 0, zIndex: 40 },
+  stripWrap: { display: 'flex', alignItems: 'center', padding: '10px 28px', background: '#0D1117', borderBottom: '1px solid #30363D', position: 'sticky', top: 0, zIndex: 40 },
   stripScroll: { display: 'flex', gap: 7, overflowX: 'auto', flex: 1, scrollbarWidth: 'none', msOverflowStyle: 'none', paddingBottom: 2 },
-  stripPill:   { display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, padding: '5px 11px', borderRadius: 20, border: '1.5px solid #30363D', background: '#161B22', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif', fontSize: 11, fontWeight: 600, transition: 'all .15s', whiteSpace: 'nowrap' },
+  stripPill: { display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, padding: '5px 11px', borderRadius: 20, border: '1.5px solid #30363D', background: '#161B22', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif', fontSize: 11, fontWeight: 600, transition: 'all .15s', whiteSpace: 'nowrap' },
 
   /* Outer: left wide | right 420px */
   outerLayout: { display: 'grid', gridTemplateColumns: '1fr 420px', gap: 20, padding: '20px 28px', maxWidth: 1900, margin: '0 auto' },
@@ -777,43 +798,43 @@ const s = {
   /* Below map: form col | unit selector col — equal halves */
   belowMapGrid: { display: 'grid', gridTemplateColumns: '1fr ', gap: 14, alignItems: 'start' },
 
-  card:      { background: '#161B22', border: '1px solid #30363D', borderRadius: 14, padding: 20, marginBottom: 16 },
+  card: { background: '#161B22', border: '1px solid #30363D', borderRadius: 14, padding: 20, marginBottom: 16 },
   cardTitle: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1.5px', color: '#8B949E', marginBottom: 14 },
 
   backBtn: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif', fontSize: 12, fontWeight: 700 },
 
-  summaryField:    { background: '#0D1117', border: '1px solid #30363D', borderRadius: 9, padding: '9px 12px' },
-  summaryLabel:    { fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: .7, marginBottom: 4 },
-  summaryVal:      { fontSize: 12, fontWeight: 700, color: '#E6EDF3', wordBreak: 'break-word' },
+  summaryField: { background: '#0D1117', border: '1px solid #30363D', borderRadius: 9, padding: '9px 12px' },
+  summaryLabel: { fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: .7, marginBottom: 4 },
+  summaryVal: { fontSize: 12, fontWeight: 700, color: '#E6EDF3', wordBreak: 'break-word' },
   selUnitsSummary: { background: 'rgba(26,115,232,.06)', border: '1px solid rgba(26,115,232,.2)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 },
 
-  dispatchBtn:  { width: '100%', padding: '13px 18px', borderRadius: 11, border: 'none', color: '#fff', fontFamily: 'Sora, sans-serif', fontSize: 14, fontWeight: 800, transition: 'all .15s' },
+  dispatchBtn: { width: '100%', padding: '13px 18px', borderRadius: 11, border: 'none', color: '#fff', fontFamily: 'Sora, sans-serif', fontSize: 14, fontWeight: 800, transition: 'all .15s' },
   completedBtn: { width: '100%', marginTop: 8, padding: '10px 18px', borderRadius: 11, border: '1px solid rgba(52,168,83,.4)', background: 'rgba(52,168,83,.1)', color: '#34A853', fontFamily: 'Sora, sans-serif', fontSize: 12, fontWeight: 800, cursor: 'pointer', transition: 'all .15s' },
 
   /* Inline unit selector */
-  inlineUnitWrap:   { background: '#161B22', border: '1px solid #30363D', borderRadius: 14, padding: 16, marginBottom: 16 },
+  inlineUnitWrap: { background: '#161B22', border: '1px solid #30363D', borderRadius: 14, padding: 16, marginBottom: 16 },
   inlineUnitHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  clearSelBtn:      { fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 7, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
+  clearSelBtn: { fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 7, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
 
-  toggleResBtn:        { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px', borderRadius: 11, border: '2px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'not-allowed', transition: 'all .2s', opacity: .45, marginBottom: 0, width: '100%' },
+  toggleResBtn: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px', borderRadius: 11, border: '2px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'not-allowed', transition: 'all .2s', opacity: .45, marginBottom: 0, width: '100%' },
   toggleResBtnEnabled: { borderColor: 'rgba(26,115,232,.5)', background: 'rgba(26,115,232,.08)', color: '#82B4FF', cursor: 'pointer', opacity: 1 },
-  toggleResBtnActive:  { borderColor: '#34A853', background: 'rgba(52,168,83,.1)', color: '#69F0AE' },
+  toggleResBtnActive: { borderColor: '#34A853', background: 'rgba(52,168,83,.1)', color: '#69F0AE' },
 
   statusBox: { padding: '11px 14px', borderRadius: 11, marginBottom: 11, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 },
-  label:     { fontSize: 10, fontWeight: 700, color: '#8B949E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 7 },
-  btn:       { padding: '6px 14px', fontSize: 12, borderRadius: 8, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
+  label: { fontSize: 10, fontWeight: 700, color: '#8B949E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 7 },
+  btn: { padding: '6px 14px', fontSize: 12, borderRadius: 8, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
 
   ticketBox: { background: '#161B22', border: '1px solid rgba(249,168,37,.3)', borderRadius: 14, padding: 20, marginBottom: 16, boxShadow: '0 0 0 1px rgba(249,168,37,.08)' },
 
-  overlay:    { position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(6px)' },
-  modal:      { background: '#161B22', border: '1px solid #30363D', borderRadius: 20, width: 540, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' },
-  mHead:      { padding: '20px 24px 16px', borderBottom: '1px solid #30363D', display: 'flex', alignItems: 'center', gap: 12 },
-  unitCard:   { background: '#0D1117', border: '1px solid rgba(52,168,83,.25)', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 },
+  overlay: { position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(6px)' },
+  modal: { background: '#161B22', border: '1px solid #30363D', borderRadius: 20, width: 540, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' },
+  mHead: { padding: '20px 24px 16px', borderBottom: '1px solid #30363D', display: 'flex', alignItems: 'center', gap: 12 },
+  unitCard: { background: '#0D1117', border: '1px solid rgba(52,168,83,.25)', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 },
   noUnitWarn: { background: 'rgba(249,168,37,.08)', border: '1px solid rgba(249,168,37,.25)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#F9A825' },
-  detCard:    { background: '#0D1117', border: '1px solid #30363D', borderRadius: 10, padding: '10px 12px' },
-  detLabel:   { fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', marginBottom: 3 },
-  detVal:     { fontSize: 13, fontWeight: 700, color: '#E6EDF3', wordBreak: 'break-word' },
-  mFooter:    { padding: '16px 24px 20px', borderTop: '1px solid #30363D', display: 'flex', gap: 10 },
-  cancelBtn:  { flex: 1, padding: 12, borderRadius: 11, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
+  detCard: { background: '#0D1117', border: '1px solid #30363D', borderRadius: 10, padding: '10px 12px' },
+  detLabel: { fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', marginBottom: 3 },
+  detVal: { fontSize: 13, fontWeight: 700, color: '#E6EDF3', wordBreak: 'break-word' },
+  mFooter: { padding: '16px 24px 20px', borderTop: '1px solid #30363D', display: 'flex', gap: 10 },
+  cancelBtn: { flex: 1, padding: 12, borderRadius: 11, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
   confirmBtn: { flex: 2, padding: 12, borderRadius: 11, border: 'none', color: '#fff', fontFamily: 'Sora, sans-serif', fontSize: 14, fontWeight: 800, cursor: 'pointer' },
 };

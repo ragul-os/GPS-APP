@@ -1,0 +1,30 @@
+# Node.js
+**/node_modules
+**/dist
+**/.env
+**/.env.local
+**/.env.*.local
+.DS_Store
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Vite-specific
+client/dist
+client/node_modules
+
+# Server-specific
+server/node_modules
+server/public/uploads
+server/public/media
+server/public/thumbnails
+
+# IDEs
+.vscode
+.idea
+.fleet
+.gemini

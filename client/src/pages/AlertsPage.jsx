@@ -47,6 +47,7 @@ export default function AlertsPage() {
   const [filter, setFilter] = useState('all');
   const [liveStatusMap, setLiveStatusMap] = useState({});
   const navigate = useNavigate();
+  const alertsRef = React.useRef([]); // stable ref to avoid restarting interval on every render
 
   useEffect(() => {
     const loadAlerts = () => {
@@ -59,6 +60,7 @@ export default function AlertsPage() {
         severity:    a.severity    || 'medium',
       }));
       setAlerts(normalised);
+      alertsRef.current = normalised; // keep ref in sync for the polling interval
     };
     loadAlerts();
     window.addEventListener('alertHistoryChange', loadAlerts);
@@ -66,33 +68,27 @@ export default function AlertsPage() {
   }, []);
 
   useEffect(() => {
-  const fetchStatuses = async () => {
-    const map = {};
+    const fetchStatuses = async () => {
+      const currentAlerts = alertsRef.current;
+      if (!currentAlerts.length) return;
 
-    for (const a of alerts) {
-      if (!a.assignedUnit) continue;
-
-      try {
-        const res = await fetch(`http://localhost:5000/unit-location/${a.assignedUnit}`);
-        const data = await res.json();
-
-        map[a.id] = data.tripStatus; // ✅ only for monitoring
-      } catch (err) {
-        console.log("Status fetch error", err);
+      const map = {};
+      for (const a of currentAlerts) {
+        if (!a.assignedUnit) continue;
+        try {
+          const res = await fetch(`http://localhost:5000/unit-location/${a.assignedUnit}`);
+          const data = await res.json();
+          map[a.id] = data.tripStatus;
+        } catch { /* ignore */ }
       }
-    }
+      setLiveStatusMap(map);
+    };
 
-    setLiveStatusMap(map);
-  };
-
-  if (alerts.length > 0) {
     fetchStatuses();
-  }
+    const interval = setInterval(fetchStatuses, 10000); // 10s — status updates are not critical
+    return () => clearInterval(interval);
+  }, []); // run once — reads from alertsRef, not alerts state
 
-  const interval = setInterval(fetchStatuses, 3000);
-  return () => clearInterval(interval);
-
-}, [alerts]);
 
   const visibleAlerts = filter === 'all'
     ? alerts
