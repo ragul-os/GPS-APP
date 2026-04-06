@@ -1,4 +1,18 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { 
+  PushpinOutlined, 
+  SafetyOutlined, 
+  FireOutlined, 
+  MedicineBoxOutlined, 
+  AlertOutlined, 
+  WarningOutlined, 
+  ClockCircleOutlined, 
+  SearchOutlined, 
+  StarFilled,
+  AimOutlined,
+  ReloadOutlined,
+  EnvironmentOutlined
+} from '@ant-design/icons';
 import { getUnits } from '../api/api';
 
 const DARK_MAP_STYLES = [
@@ -13,15 +27,21 @@ const DARK_MAP_STYLES = [
 ];
 
 const NEARBY_TYPES = {
-  hospital:     { label: 'Hospital',       icon: '🏥', color: '#E53935', placeType: 'hospital',     radius: 5000 },
-  blood_bank:   { label: 'Blood Bank',     icon: '🩸', color: '#D32F2F', placeType: 'blood_bank',   radius: 8000 },
-  police:       { label: 'Police Station', icon: '🚔', color: '#1565C0', placeType: 'police',       radius: 5000 },
-  fire_station: { label: 'Fire Station',   icon: '🚒', color: '#FF6D00', placeType: 'fire_station', radius: 5000 },
-  pharmacy:     { label: 'Pharmacy',       icon: '💊', color: '#7B1FA2', placeType: 'pharmacy',     radius: 3000 },
+  hospital:     { label: 'Hospital',       icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#E53935', placeType: 'hospital',     radius: 5000 },
+  blood_bank:   { label: 'Blood Bank',     icon: <PushpinOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#D32F2F', placeType: 'blood_bank',   radius: 8000 },
+  police:       { label: 'Police Station', icon: <SafetyOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#1565C0', placeType: 'police',       radius: 5000 },
+  fire_station: { label: 'Fire Station',   icon: <FireOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#FF6D00', placeType: 'fire_station', radius: 5000 },
+  pharmacy:     { label: 'Pharmacy',       icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#7B1FA2', placeType: 'pharmacy',     radius: 3000 },
 };
 
 const UNIT_COLORS = { ambulance: '#4CAF50', fire: '#FB8C00', police: '#1E88E5', rescue: '#8E24AA', hazmat: '#F57F17' };
-const UNIT_ICONS  = { ambulance: '🚑', fire: '🚒', police: '🚔', rescue: '🚁', hazmat: '☢️' };
+const UNIT_ICONS  = { 
+  ambulance: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, 
+  fire: <FireOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, 
+  police: <SafetyOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, 
+  rescue: <AlertOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, 
+  hazmat: <WarningOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> 
+};
 
 function haversineMetres(la1, lo1, la2, lo2) {
   const R = 6371000, φ1 = la1 * Math.PI / 180, φ2 = la2 * Math.PI / 180;
@@ -111,7 +131,7 @@ function ResourcesMap({ pickedLat, pickedLng }) {
       markers.current[key] = [];
       const cfg = NEARBY_TYPES[key];
       places.forEach(p => {
-        const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="13" fill="${cfg.color}" stroke="white" stroke-width="2"/><text x="15" y="20" text-anchor="middle" font-size="13">${cfg.icon}</text></svg>`;
+        const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="13" fill="${cfg.color}" stroke="white" stroke-width="2"/><text x="15" y="20" text-anchor="middle" font-size="11" fill="white" font-family="Arial" font-weight="bold">${cfg.label[0]}</text></svg>`;
         const mk = new window.google.maps.Marker({
           position: { lat: p.lat, lng: p.lng }, map: layers[key] ? mapObj.current : null,
           title: p.name, zIndex: 20,
@@ -124,15 +144,15 @@ function ResourcesMap({ pickedLat, pickedLng }) {
         const d = haversineMetres(pickedLat, pickedLng, p.lat, p.lng);
         mk.addListener('click', () => {
           infoWin.current.setContent(`<div style="font-family:Sora,sans-serif;padding:8px;min-width:170px;">
-            <div style="font-weight:800;font-size:13px;margin-bottom:4px;">${cfg.icon} ${p.name}</div>
+            <div style="font-weight:800;font-size:13px;margin-bottom:4px;">${p.name}</div>
             <div style="font-size:11px;color:#555;margin-bottom:6px;">${p.vicinity}</div>
             <div style="display:flex;gap:10px;font-size:11px;margin-bottom:6px;">
               <span style="color:#1E88E5;font-weight:700;">${fmtDist(d)}</span>
               <span style="color:#34A853;font-weight:700;">${fmtEta(d)}</span>
-              ${p.rating ? `<span>⭐ ${p.rating}</span>` : ''}
+              ${p.rating ? `<span>★ ${p.rating}</span>` : ''}
             </div>
             <a href="https://www.google.com/maps/search/?api=1&query_place_id=${p.place_id}" target="_blank"
-              style="display:block;background:${cfg.color};color:#fff;border-radius:7px;padding:7px;font-size:11px;font-weight:700;text-align:center;text-decoration:none;">📍 Open Maps</a>
+              style="display:block;background:${cfg.color};color:#fff;border-radius:7px;padding:7px;font-size:11px;font-weight:700;text-align:center;text-decoration:none;">Open Maps</a>
           </div>`);
           infoWin.current.open(mapObj.current, mk);
         });
@@ -167,7 +187,7 @@ function ResourcesMap({ pickedLat, pickedLng }) {
     <div style={s.mapPanel}>
       {/* Header */}
       <div style={s.panelHeader}>
-        <div style={s.panelTitle}>🏥 Nearby Resources <span style={s.badgeBlue}>{total} found</span></div>
+        <div style={s.panelTitle}><PushpinOutlined style={{ fontSize: '14px', verticalAlign: 'middle' }} /> Nearby Resources <span style={s.badgeBlue}>{total} found</span></div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <span style={{ fontSize: 10, color: '#8B949E' }}>Radius:</span>
           <input type="range" min={1} max={20} value={radius}
@@ -175,7 +195,7 @@ function ResourcesMap({ pickedLat, pickedLng }) {
             style={{ width: 70, accentColor: '#1A73E8' }} />
           <span style={{ fontSize: 11, fontWeight: 700, color: '#82B4FF', minWidth: 28 }}>{radius} km</span>
           <button style={s.iconBtn} onClick={search} disabled={loading}>
-            {loading ? '⏳' : '🔍'}
+            {loading ? <ClockCircleOutlined spin style={{ verticalAlign: 'middle' }} /> : <SearchOutlined style={{ verticalAlign: 'middle' }} />}
           </button>
         </div>
       </div>
@@ -216,9 +236,9 @@ function ResourcesMap({ pickedLat, pickedLng }) {
           </thead>
           <tbody>
             {!pickedLat ? (
-              <tr><td colSpan={5} style={s.tEmpty}>📍 Set location &amp; search resources</td></tr>
+              <tr><td colSpan={5} style={s.tEmpty}><EnvironmentOutlined style={{ fontSize: '24px', opacity: .2, display: 'block', margin: '0 auto 8px' }} /> Set location &amp; search resources</td></tr>
             ) : allPlaces.length === 0 ? (
-              <tr><td colSpan={5} style={s.tEmpty}>{loading ? '🔍 Searching…' : 'Click 🔍 to search'}</td></tr>
+              <tr><td colSpan={5} style={s.tEmpty}>{loading ? <><ClockCircleOutlined spin style={{ marginRight: 8 }} /> Searching…</> : <><SearchOutlined style={{ marginRight: 8 }} /> Click search button to find resources</>}</td></tr>
             ) : (
               allPlaces.slice(0, 30).map((p, i) => (
                 <tr key={i}>
@@ -229,7 +249,7 @@ function ResourcesMap({ pickedLat, pickedLng }) {
                   <td style={s.td}><span style={{ ...s.typeBadge, color: p.cfg.color, borderColor: p.cfg.color + '33', background: p.cfg.color + '15' }}>{p.cfg.label}</span></td>
                   <td style={s.td}><span style={s.distVal}>{fmtDist(p.d)}</span></td>
                   <td style={s.td}><span style={s.etaVal}>{fmtEta(p.d)}</span></td>
-                  <td style={s.td}>{p.rating ? `⭐ ${p.rating}` : '—'}</td>
+                  <td style={s.td}>{p.rating ? <><StarFilled style={{ color: '#faad14', marginRight: 4 }} /> {p.rating}</> : '—'}</td>
                 </tr>
               ))
             )}
@@ -316,7 +336,6 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
       if (!lat || !lng) return;
 
       const color = UNIT_COLORS[u.type] || '#4CAF50';
-      const icon  = UNIT_ICONS[u.type]  || '🚑';
       const isSel = u.id === selectedUnitId;
       const s2 = isSel ? 42 : 34;
       const busyColor = '#FFC107';
@@ -324,7 +343,7 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
       const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${s2}" height="${s2}" viewBox="0 0 ${s2} ${s2}">
         ${isSel ? `<circle cx="${s2/2}" cy="${s2/2}" r="${s2/2-1}" fill="none" stroke="#1A73E8" stroke-width="3" stroke-dasharray="5 3"/>` : ''}
         <circle cx="${s2/2}" cy="${s2/2}" r="${s2/2-3}" fill="${fillColor}" stroke="white" stroke-width="2"/>
-        <text x="${s2/2}" y="${s2/2+5}" text-anchor="middle" font-size="${Math.round(s2*0.38)}">${icon}</text>
+        <text x="${s2/2}" y="${s2/2+4}" text-anchor="middle" font-size="11" fill="white" font-family="Arial" font-weight="bold">${u.type[0].toUpperCase()}</text>
       </svg>`;
 
       const layerKey = !u.isOnline ? 'offline' : u.status === 'busy' ? 'busy' : 'available';
@@ -348,9 +367,10 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
         mk.addListener('click', () => {
           const ds = u.distanceM != null ? fmtDist(u.distanceM) : 'GPS Active';
           const statusColor = u.status === 'available' ? '#34A853' : u.status === 'busy' ? '#FFC107' : '#9E9E9E';
+          const typeChar = u.type[0].toUpperCase();
           infoWin.current.setContent(`<div style="font-family:Sora,sans-serif;padding:10px 12px;min-width:190px;">
             <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
-              <span style="font-size:22px;">${icon}</span>
+              <div style="width:36px;height:36px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:18px;">${typeChar}</div>
               <div><div style="font-weight:800;font-size:13px;color:#111;">${u.name}</div>
               <div style="font-size:10px;color:#888;">${u.id}</div></div>
             </div>
@@ -416,12 +436,12 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
       {/* Header */}
       <div style={s.panelHeader}>
         <div style={s.panelTitle}>
-          🚑 Online Units <span style={s.badgeGreen}>{onlineUnits.length} online</span>
+          <MedicineBoxOutlined style={{ fontSize: '14px', verticalAlign: 'middle' }} /> Online Units <span style={s.badgeGreen}>{onlineUnits.length} online</span>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button style={s.iconBtn} onClick={fitBounds}>⛶ Fit</button>
           <button style={s.iconBtn} onClick={fetchAndRenderUnits} disabled={loading}>
-            {loading ? '⏳' : '↺'}
+            {loading ? <ClockCircleOutlined spin style={{ verticalAlign: 'middle' }} /> : <ReloadOutlined style={{ verticalAlign: 'middle' }} />}
           </button>
         </div>
       </div>
@@ -468,7 +488,7 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
           </thead>
           <tbody>
             {!onlineUnits.length ? (
-              <tr><td colSpan={5} style={s.tEmpty}>📵 No units online — add mock units in dispatch</td></tr>
+              <tr><td colSpan={5} style={s.tEmpty}><MedicineBoxOutlined style={{ fontSize: '24px', opacity: .2, display: 'block', margin: '0 auto 8px' }} /> No units online — add mock units in dispatch</td></tr>
             ) : (
               onlineUnits.map((u, i) => {
                 const color = UNIT_COLORS[u.type] || '#4CAF50';

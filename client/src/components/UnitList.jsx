@@ -1,12 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { 
+  MedicineBoxOutlined, 
+  FireOutlined, 
+  SafetyOutlined, 
+  AlertOutlined, 
+  WarningOutlined, 
+  ExperimentOutlined, 
+  DeleteOutlined, 
+  WifiOutlined, 
+  SearchOutlined, 
+  CheckCircleOutlined, 
+  EnvironmentOutlined,
+  ApartmentOutlined
+} from '@ant-design/icons';
 import { getUnits, getNearestUnits, registerUnit, updateUnitLoc } from '../api/api';
 
 const UCFG = {
-  ambulance: { icon: '🚑', label: 'Ambulance',  color: '#E53935' },
-  fire:      { icon: '🚒', label: 'Fire Engine', color: '#FF6D00' },
-  police:    { icon: '🚔', label: 'Police Unit', color: '#1565C0' },
-  rescue:    { icon: '🚁', label: 'Rescue',      color: '#9C27B0' },
-  hazmat:    { icon: '☢️',  label: 'Hazmat',      color: '#F57F17' },
+  ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Ambulance',  color: '#E53935' },
+  fire:      { icon: <FireOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Fire Engine', color: '#FF6D00' },
+  police:    { icon: <SafetyOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Police Unit', color: '#1565C0' },
+  rescue:    { icon: <AlertOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Rescue',      color: '#9C27B0' },
+  hazmat:    { icon: <WarningOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,  label: 'Hazmat',      color: '#F57F17' },
 };
 
 const MOCK_DEFS = [
@@ -138,7 +152,7 @@ export default function UnitList({
     {/* ════════ MOCK UNITS BOX ════════ */}
     <div style={s.wrap}>
       <div style={s.boxHeader}>
-        <span>🧪 Mock Units</span>
+        <span><ExperimentOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Mock Units</span>
         {Object.keys(mockUnits).length > 0 && (
           <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9,
             background: 'rgba(249,168,37,.15)', color: '#F9A825' }}>
@@ -163,7 +177,7 @@ export default function UnitList({
                 }}
                 onClick={() => toggleMock(def)}
               >
-                <span style={{ fontSize: 18 }}>{cfg.icon}</span>
+                <span style={{ fontSize: 18, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
                 <div style={{ textAlign: 'left', minWidth: 0 }}>
                   <div style={{ fontSize: 10, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {def.name}
@@ -183,7 +197,7 @@ export default function UnitList({
           })}
         </div>
         <button style={s.clearAllMockBtn} onClick={clearAllMocks}>
-          🗑️ Clear All Mock Units
+          <DeleteOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Clear All Mock Units
         </button>
       </div>
     </div>
@@ -191,7 +205,7 @@ export default function UnitList({
     {/* ════════ ONLINE UNITS BOX ════════ */}
     <div style={s.wrap}>
       <div style={s.boxHeader}>
-        <span>📡 Online Units</span>
+        <span><ApartmentOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Online Units</span>
         {onlineUnits.length > 0 && (
           <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9,
             background: 'rgba(52,168,83,.15)', color: '#34A853' }}>
@@ -207,13 +221,13 @@ export default function UnitList({
         </div>
 
         <button style={s.nearestBtn} onClick={findNearest}>
-          🔍 Auto-select Nearest Available
+          <SearchOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Auto-select Nearest Available
         </button>
 
         {selectedUnitIds.length > 0 && (
           <div style={s.selBanner}>
             <span style={{ fontSize: 11, fontWeight: 700, color: '#82B4FF' }}>
-              ✅ {selectedUnitIds.length} unit(s) queued for dispatch
+              <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> {selectedUnitIds.length} unit(s) queued for dispatch
             </span>
             <button
               style={s.clearBtn}
@@ -226,7 +240,7 @@ export default function UnitList({
 
         {onlineUnits.length === 0 ? (
           <div style={s.emptyMsg}>
-            <div style={{ fontSize: 30, marginBottom: 7 }}>📵</div>
+            <div style={{ fontSize: 30, marginBottom: 7 }}><WifiOutlined style={{ opacity: .2 }} /></div>
             <div style={{ fontSize: 12, fontWeight: 700 }}>No units online</div>
             <div style={{ fontSize: 10, marginTop: 3, opacity: .6 }}>
               Use the Mock Units panel above to add test units
@@ -259,7 +273,7 @@ export default function UnitList({
                     {isSel && <span style={{ fontSize: 10, color: '#fff', fontWeight: 900 }}>✓</span>}
                   </div>
 
-                  <span style={{ fontSize: 22, flexShrink: 0 }}>{cfg.icon}</span>
+                  <span style={{ fontSize: 22, flexShrink: 0, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -274,7 +288,7 @@ export default function UnitList({
                     </div>
                     <div style={{ fontSize: 9, color: '#8B949E', marginTop: 1 }}>
                       {u.id} · {u.isOnline ? (u.secondsAgo + 's ago') : 'Offline'}
-                      {u.location?.latitude ? ' · 📡 GPS' : ''}
+                      {u.location?.latitude ? <><ApartmentOutlined style={{ fontSize: '10px', verticalAlign: 'middle', marginLeft: 4 }} /> GPS</> : ''}
                     </div>
                   </div>
 
@@ -288,7 +302,7 @@ export default function UnitList({
                     </span>
                     {u.distanceM != null && (
                       <span style={{ fontSize: 9, color: '#82B4FF', fontWeight: 700 }}>
-                        📍 {fmtDist(u.distanceM)}
+                        <EnvironmentOutlined style={{ fontSize: '10px', verticalAlign: 'middle', marginRight: 4 }} /> {fmtDist(u.distanceM)}
                       </span>
                     )}
                   </div>

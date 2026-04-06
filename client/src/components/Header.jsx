@@ -1,7 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getStatus } from '../api/api';
-import { MdReport, MdPerson, MdDashboard, MdBarChart, MdSensors } from 'react-icons/md';
+import { useAuth } from '../context/AuthContext';
+import { 
+  LogoutOutlined, 
+  UserOutlined, 
+  FileTextOutlined, 
+  BarChartOutlined, 
+  AlertOutlined,
+  CheckCircleFilled,
+  ExclamationCircleFilled
+} from '@ant-design/icons';
 
 const styles = {
   header: {
@@ -27,12 +36,12 @@ const styles = {
     background: connected ? 'rgba(52,168,83,.2)' : 'rgba(229,57,53,.2)',
     color: connected ? '#34A853' : '#E53935',
   }),
-  dot: (connected) => ({
-    width: 8, height: 8, borderRadius: '50%',
-    background: connected ? '#34A853' : '#E53935',
-    animation: 'pulse 1.2s infinite',
-    flexShrink: 0,
-  }),
+  logoutBtn: {
+    padding: '6px 12px', borderRadius: 8, background: 'rgba(229,57,53,.1)',
+    border: '1px solid rgba(229,57,53,.2)', color: '#E53935',
+    fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'flex',
+    alignItems: 'center', gap: 6, transition: 'all .2s',
+  },
   tabs: {
     display: 'flex',
     borderBottom: '1px solid #30363D',
@@ -43,8 +52,9 @@ const styles = {
     padding: '13px 22px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
     color: active ? '#1A73E8' : '#8B949E',
     borderBottom: active ? '3px solid #1A73E8' : '3px solid transparent',
-    transition: 'all .2s', display: 'flex', alignItems: 'center', gap: 6,
-    background: 'none', border: 'none', fontFamily: 'Sora, sans-serif',
+    transition: 'all .2s', display: 'flex', alignItems: 'center', gap: 8,
+    background: 'none', borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+    fontFamily: 'Sora, sans-serif', outline: 'none',
   }),
   badge: {
     background: 'rgba(229,57,53,.2)', color: '#FF8A80',
@@ -60,6 +70,7 @@ export default function Header() {
   const [connected,     setConnected]     = useState(false);
   const [alertCount,    setAlertCount]    = useState(0);
   const [pendingCount,  setPendingCount]  = useState(0);
+  const { logout } = useAuth();
   const navigate  = useNavigate();
   const location  = useLocation();
 
@@ -73,11 +84,10 @@ export default function Header() {
       }
     };
     check();
-    const iv = setInterval(check, 60000); // 60s — server connectivity changes slowly
+    const iv = setInterval(check, 60000); // 60s
     return () => clearInterval(iv);
   }, []);
 
-  // Sync dispatched alert count from localStorage
   useEffect(() => {
     const sync = () => {
       const stored = JSON.parse(localStorage.getItem('alertHistory') || '[]');
@@ -88,7 +98,6 @@ export default function Header() {
     return () => window.removeEventListener('alertHistoryChange', sync);
   }, []);
 
-  // Sync pending agent ticket count from localStorage
   useEffect(() => {
     const sync = () => {
       const tickets = JSON.parse(localStorage.getItem('agentTickets') || '[]');
@@ -99,6 +108,11 @@ export default function Header() {
     return () => window.removeEventListener('agentTicketsChange', sync);
   }, []);
 
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
   const isDispatch = location.pathname.startsWith('/dispatch');
   const isAlerts   = location.pathname.startsWith('/alerts');
   const isAgent    = location.pathname.startsWith('/agent');
@@ -108,69 +122,53 @@ export default function Header() {
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
       <header style={styles.header}>
         <div style={{ ...styles.logo, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <MdReport color="#E53935" size={24} /> Emergency Control System
+          <AlertOutlined style={{ color: "#E53935", fontSize: '20px', verticalAlign: 'middle' }} /> 
+          <span>Emergency Control System</span>
         </div>
         <div style={styles.right}>
           <div style={styles.unitsBadge} id="hdr-units">0 units online</div>
           <div style={styles.pill(connected)}>
-            <span style={styles.dot(connected)} />
+            {connected ? (
+              <CheckCircleFilled style={{ color: '#52c41a', fontSize: '16px', verticalAlign: 'middle' }} />
+            ) : (
+              <ExclamationCircleFilled style={{ color: '#ff4d4f', fontSize: '16px', verticalAlign: 'middle', animation: 'pulse 1.2s infinite' }} />
+            )}
             <span>{connected ? 'Connected' : 'Disconnected'}</span>
           </div>
-   {/*
-          <button
-    onClick={() => {
-      localStorage.removeItem('alertHistory');
-      localStorage.removeItem('agentTickets');
-
-      window.dispatchEvent(new Event('alertHistoryChange'));
-      window.dispatchEvent(new Event('agentTicketsChange'));
-    }}
-    style={{
-      marginLeft: '10px',
-      padding: '5px 10px',
-      borderRadius: '6px',
-      border: 'none',
-      background: '#E53935',
-      color: 'white',
-      cursor: 'pointer',
-      fontSize: '12px'
-    }}
-  >
-    Clear Data
-  </button> */}
+          <button 
+            style={styles.logoutBtn} 
+            onClick={handleLogout}
+          >
+            <LogoutOutlined style={{ fontSize: '20px', verticalAlign: 'middle' }} /> Logout
+          </button>
         </div>
       </header>
       <nav style={styles.tabs}>
-
-        {/* AGENT TAB */}
         <button
           style={styles.tab(isAgent)}
           onClick={() => navigate('/agent')}
         >
-          <MdPerson size={16} /> Agent
+          <UserOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> Agent
         </button>
 
-        {/* DISPATCH TAB — badge shows pending agent tickets */}
         <button
           style={styles.tab(isDispatch)}
           onClick={() => navigate('/dispatch')}
         >
-          <MdDashboard size={16} /> Dispatch
+          <FileTextOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> Dispatch
           {pendingCount > 0 && (
             <span style={styles.badgeWarning}>{pendingCount} new</span>
           )}
         </button>
 
-        {/* MONITORING TAB */}
         <button
           style={styles.tab(isAlerts)}
           onClick={() => navigate('/alerts')}
         >
-          <MdBarChart size={16} /> Monitoring
+          <BarChartOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> Monitoring
           <span style={styles.badge}>{alertCount}</span>
         </button>
-
       </nav>
     </>
   );
-}
+}

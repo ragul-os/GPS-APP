@@ -1,42 +1,61 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { 
+  MedicineBoxOutlined, 
+  FireOutlined, 
+  SafetyOutlined, 
+  AlertOutlined, 
+  WarningOutlined, 
+  ClockCircleOutlined, 
+  CheckCircleOutlined, 
+  NodeIndexOutlined, 
+  CloseCircleOutlined, 
+  SendOutlined, 
+  EnvironmentOutlined, 
+  AimOutlined, 
+  ApartmentOutlined 
+} from '@ant-design/icons';
+import { API_BASE_URL } from '../config/apiConfig';
 
 const UCFG = {
-  ambulance: { icon: '🚑', label: 'Ambulance',  barColor: '#E53935' },
-  fire:      { icon: '🚒', label: 'Fire Engine', barColor: '#FF6D00' },
-  police:    { icon: '🚔', label: 'Police Unit', barColor: '#1565C0' },
-  rescue:    { icon: '🚁', label: 'Rescue',      barColor: '#9C27B0' },
-  hazmat:    { icon: '☢️',  label: 'Hazmat',      barColor: '#F57F17' },
+  ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Ambulance',  barColor: '#E53935' },
+  fire:      { icon: <FireOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Fire Engine', barColor: '#FF6D00' },
+  police:    { icon: <SafetyOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Police Unit', barColor: '#1565C0' },
+  rescue:    { icon: <AlertOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Rescue',      barColor: '#9C27B0' },
+  hazmat:    { icon: <WarningOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,  label: 'Hazmat',      barColor: '#F57F17' },
 };
 
 const FILTERS = [
   { key: 'all',       label: 'All'          },
-  { key: 'ambulance', label: '🚑 Ambulance' },
-  { key: 'fire',      label: '🚒 Fire'      },
-  { key: 'police',    label: '🚔 Police'    },
-  { key: 'rescue',    label: '🚁 Rescue'    },
-  { key: 'hazmat',    label: '☢️ Hazmat'    },
+  { key: 'ambulance', label: <><MedicineBoxOutlined style={{ marginRight: 4 }} /> Ambulance</> },
+  { key: 'fire',      label: <><FireOutlined style={{ marginRight: 4 }} /> Fire</>      },
+  { key: 'police',    label: <><SafetyOutlined style={{ marginRight: 4 }} /> Police</>    },
+  { key: 'rescue',    label: <><AlertOutlined style={{ marginRight: 4 }} /> Rescue</>    },
+  { key: 'hazmat',    label: <><WarningOutlined style={{ marginRight: 4 }} /> Hazmat</>    },
 ];
 
 const SEV_COLORS  = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
 const STATUS_CFG  = {
-  pending:    { label: '⏳ Pending',    color: '#F9A825', bg: 'rgba(249,168,37,.12)'  },
-  accepted:   { label: '✅ Accepted',   color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
-  dispatched: { label: '🚨 Dispatched', color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
-  completed:  { label: '✅ Completed',  color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
-  rejected:   { label: '❌ Rejected',   color: '#E53935', bg: 'rgba(229,57,53,.12)'   },
+  pending:    { label: 'Pending',    icon: <ClockCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#F9A825', bg: 'rgba(249,168,37,.12)'  },
+  accepted:   { label: 'Accepted',   icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
+  dispatched: { label: 'Dispatched', icon: <NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
+  completed:  { label: 'Completed',  icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
+  rejected:   { label: 'Rejected',   icon: <CloseCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#E53935', bg: 'rgba(229,57,53,.12)'   },
   en_route: {
-  label: '🚗 En Route',
+  label: 'En Route',
+  icon: <MedicineBoxOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
   color: '#1A73E8',
   bg: 'rgba(26,115,232,.12)'
 },
 on_action: {
-  label: '⚡ On Action',
+  label: 'On Action',
+  icon: <SendOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
   color: '#FF6D00',
   bg: 'rgba(255,109,0,.12)'
 },
 arrived: {
-  label: '📍 Arrived',
+  label: 'Arrived',
+  icon: <EnvironmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
   color: '#34A853',
   bg: 'rgba(52,168,83,.12)'
 },
@@ -76,7 +95,7 @@ export default function AlertsPage() {
       for (const a of currentAlerts) {
         if (!a.assignedUnit) continue;
         try {
-          const res = await fetch(`http://localhost:5000/unit-location/${a.assignedUnit}`);
+          const res = await fetch(`${API_BASE_URL}/unit-location/${a.assignedUnit}`);
           const data = await res.json();
           map[a.id] = data.tripStatus;
         } catch { /* ignore */ }
@@ -105,7 +124,7 @@ export default function AlertsPage() {
     <div style={s.page}>
       {/* Header */}
       <div style={s.pageHeader}>
-        <div style={s.title}>📡 Dispatched Incidents</div>
+        <div style={s.title}><ApartmentOutlined style={{ color: "#1A73E8", fontSize: '20px', verticalAlign: 'middle', marginRight: 8 }} /> Dispatched Incidents</div>
         <div style={{ fontSize: 11, color: '#8B949E', marginTop: 2 }}>
           {alerts.length} total · Click a ticket to open live tracking
         </div>
@@ -144,7 +163,7 @@ export default function AlertsPage() {
       {/* Cards */}
       {visibleAlerts.length === 0 ? (
         <div style={s.empty}>
-          <div style={s.emptyIcon}>{filter === 'all' ? '📡' : (UCFG[filter]?.icon || '📡')}</div>
+          <div style={s.emptyIcon}>{filter === 'all' ? <ApartmentOutlined /> : (UCFG[filter]?.icon || <ApartmentOutlined />)}</div>
           <div style={s.emptyMsg}>
             {filter === 'all' ? 'No incidents dispatched yet' : `No ${UCFG[filter]?.label || filter} incidents`}
           </div>
@@ -176,7 +195,7 @@ export default function AlertsPage() {
                   {/* Top row: icon + label + time */}
                   <div style={s.ticketTop}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 18 }}>{cfg.icon}</span>
+                      <span style={{ fontSize: 18, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
                       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.6px', textTransform: 'uppercase', color: cfg.barColor }}>
                         {cfg.label}
                       </span>
@@ -188,19 +207,19 @@ export default function AlertsPage() {
                   <div style={s.ticketName}>{a.name || 'Unknown'}</div>
 
                   {/* Address */}
-                  <div style={s.ticketAddr}>📍 {a.address || '—'}</div>
+                  <div style={s.ticketAddr}><EnvironmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} /> {a.address || '—'}</div>
 
                   {/* Assigned unit chip */}
                   {a.assignedUnit && (
-                    <div style={{ fontSize: 10, color: '#82B4FF', marginBottom: 5 }}>
-                      🚑 Assigned: {a.assignedUnit}
+                    <div style={{ fontSize: 10, color: '#82B4FF', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <MedicineBoxOutlined style={{ fontSize: '12px' }} /> Assigned: {a.assignedUnit}
                     </div>
                   )}
 
                   {/* Coordinates */}
                   {a.destination?.latitude && (
-                    <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#1A73E8', marginBottom: 5 }}>
-                      🌐 {a.destination.latitude.toFixed(5)}, {a.destination.longitude.toFixed(5)}
+                    <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#1A73E8', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <AimOutlined style={{ fontSize: '12px' }} /> {a.destination.latitude.toFixed(5)}, {a.destination.longitude.toFixed(5)}
                     </div>
                   )}
 
@@ -223,7 +242,7 @@ export default function AlertsPage() {
                         background: stCfg.bg, color: stCfg.color,
                         display: 'inline-flex', alignItems: 'center', gap: 4,
                       }}>
-                        {stCfg.label}
+                        {stCfg.icon} {stCfg.label}
                       </span>
                     </div>
 

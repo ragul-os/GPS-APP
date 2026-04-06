@@ -544,10 +544,21 @@ app.get('/ambulance-location', (req, res) => res.json(ambulanceLocation));
 // GET /unit-location/:unitId — THE FIX: returns ONLY this unit's trip state
 app.get('/unit-location/:unitId', (req, res) => {
   const unit = units.get(req.params.unitId);
-  if (!unit) return res.status(404).json({ error: 'Unit not found' });
+  const tripState = unitTripState.get(req.params.unitId) || makeFreshTripState({ tripStatus: 'idle' });
+
+  if (!unit) {
+    // Return 200 with idle state for units not yet heartbeated (prevents red 404 console errors)
+    return res.json({
+      ...tripState,
+      unitId: req.params.unitId,
+      name: 'Unknown Unit',
+      status: 'offline',
+      tripStatus: 'idle'
+    });
+  }
 
   // Get this unit's own trip state (never shared with other units)
-  const tripState = unitTripState.get(req.params.unitId) || makeFreshTripState();
+  // Prefilled above from actual store or fresh idle state
 
   // Also pull the per-unit assignment to get tripStatus from /my-alert side
   const assignment = assignments.get(req.params.unitId);
@@ -567,7 +578,7 @@ app.get('/unit-location/:unitId', (req, res) => {
     tripStatus:
       tripState.tripStatus === 'completed'
         ? 'completed'
-        : (tripState.tripStatus || 'dispatched'),
+        : (tripState.tripStatus || 'idle'),
   });
 });
 

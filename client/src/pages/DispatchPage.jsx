@@ -6,31 +6,56 @@ import UnitList from '../components/UnitList';
 import { sendAlert, assignUnit } from '../api/api';
 import { useAuth } from "../context/AuthContext";
 import { createRoom, inviteUser } from "../services/MatrixService";
+import { matrixUserId } from "../config/apiConfig";
 import { 
-  MdLocalHospital, MdFireTruck, MdLocalPolice, MdWarning, 
-  MdCheckCircle, MdCancel, MdAccessTime, MdNotificationsActive,
-  MdPause, MdFiberManualRecord, MdFlag, MdBlock,
-  MdAssignment, MdGpsFixed, MdSettings, MdRoad, MdStar,
-  MdLocationOn, MdOpacity, MdMedicalServices, MdSearch, MdClose,
-  MdSend, MdReport
-} from 'react-icons/md';
-import { FaHelicopter, FaHospital, FaAmbulance } from 'react-icons/fa';
-import { GiRadioactive } from 'react-icons/gi';
-import { AiOutlineLoading3Quarters } from 'react-icons/ai';
+  AimOutlined,
+  AlertOutlined, 
+  ApartmentOutlined, 
+  ArrowLeftOutlined, 
+  BarChartOutlined,
+  CheckCircleFilled, 
+  CheckCircleOutlined, 
+  ClockCircleFilled, 
+  ClockCircleOutlined, 
+  CloseCircleOutlined, 
+  CloseOutlined, 
+  CompassOutlined, 
+  DownOutlined, 
+  EditOutlined, 
+  EnvironmentOutlined, 
+  ExclamationCircleFilled, 
+  FileTextOutlined, 
+  FireOutlined, 
+  LoadingOutlined,
+  LockOutlined, 
+  MedicineBoxOutlined, 
+  NodeIndexOutlined, 
+  PhoneOutlined,
+  PlusOutlined, 
+  PushpinOutlined,
+  ReloadOutlined, 
+  SafetyOutlined, 
+  SearchOutlined, 
+  SendOutlined, 
+  SettingOutlined, 
+  UpOutlined, 
+  WarningOutlined, 
+  WifiOutlined
+} from '@ant-design/icons';
 /* ── Unit config ── */
 const UCFG = {
-  ambulance: { icon: <MdLocalHospital />, label: 'Ambulance', color: '#E53935', barColor: '#E53935', btnCls: { background: '#E53935', boxShadow: '0 4px 18px rgba(229,57,53,.35)' } },
-  fire: { icon: <MdFireTruck />, label: 'Fire Engine', color: '#FF6D00', barColor: '#FF6D00', btnCls: { background: '#FF6D00', boxShadow: '0 4px 18px rgba(255,109,0,.3)' } },
-  police: { icon: <MdLocalPolice />, label: 'Police Unit', color: '#1565C0', barColor: '#1565C0', btnCls: { background: '#1565C0', boxShadow: '0 4px 18px rgba(21,101,192,.35)' } },
-  rescue: { icon: <FaHelicopter />, label: 'Rescue', color: '#9C27B0', barColor: '#9C27B0', btnCls: { background: '#9C27B0', boxShadow: '0 4px 18px rgba(156,39,176,.3)' } },
-  hazmat: { icon: <GiRadioactive />, label: 'Hazmat', color: '#F57F17', barColor: '#F57F17', btnCls: { background: '#F57F17', boxShadow: '0 4px 18px rgba(245,127,23,.3)' } },
+  ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '20px', verticalAlign: 'middle' }} />, label: 'Ambulance', color: '#E53935', barColor: '#E53935', btnCls: { background: '#E53935', boxShadow: '0 4px 18px rgba(229,57,53,.35)' } },
+  fire: { icon: <FireOutlined style={{ fontSize: '20px', verticalAlign: 'middle' }} />, label: 'Fire Engine', color: '#FF6D00', barColor: '#FF6D00', btnCls: { background: '#FF6D00', boxShadow: '0 4px 18px rgba(255,109,0,.3)' } },
+  police: { icon: <SafetyOutlined style={{ fontSize: '20px', verticalAlign: 'middle' }} />, label: 'Police Unit', color: '#1565C0', barColor: '#1565C0', btnCls: { background: '#1565C0', boxShadow: '0 4px 18px rgba(21,101,192,.35)' } },
+  rescue: { icon: <AlertOutlined style={{ fontSize: '20px', verticalAlign: 'middle' }} />, label: 'Rescue', color: '#9C27B0', barColor: '#9C27B0', btnCls: { background: '#9C27B0', boxShadow: '0 4px 18px rgba(156,39,176,.3)' } },
+  hazmat: { icon: <WarningOutlined style={{ fontSize: '20px', verticalAlign: 'middle' }} />, label: 'Hazmat', color: '#F57F17', barColor: '#F57F17', btnCls: { background: '#F57F17', boxShadow: '0 4px 18px rgba(245,127,23,.3)' } },
 };
 const SEV_COLORS = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
 const STATUS_CFG = {
-  pending: { label: 'Pending', icon: <MdAccessTime />, color: '#F9A825', bg: 'rgba(249,168,37,.12)' },
-  dispatched: { label: 'Dispatched', icon: <MdNotificationsActive />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
-  completed: { label: 'Completed', icon: <MdCheckCircle />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
-  rejected: { label: 'Rejected', icon: <MdCancel />, color: '#E53935', bg: 'rgba(229,57,53,.12)' },
+  pending: { label: 'Pending', icon: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#F9A825', bg: 'rgba(249,168,37,.12)' },
+  dispatched: { label: 'Dispatched', icon: <NodeIndexOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
+  completed: { label: 'Completed', icon: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
+  rejected: { label: 'Rejected', icon: <CloseCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#E53935', bg: 'rgba(229,57,53,.12)' },
 };
 
 /* ── localStorage helpers ── */
@@ -56,10 +81,20 @@ function ActivityLog({ logs }) {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [logs]);
   const clr = { info: '#8B949E', ok: '#34A853', warn: '#F9A825', error: '#E53935' };
+  const icons = {
+    info: <ApartmentOutlined style={{ marginRight: 4 }} />,
+    ok: <CheckCircleOutlined style={{ marginRight: 4 }} />,
+    warn: <WarningOutlined style={{ marginRight: 4 }} />,
+    error: <CloseCircleOutlined style={{ marginRight: 4 }} />
+  };
   return (
     <div ref={ref} style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 9, padding: 10, height: 120, overflowY: 'auto', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 }}>
       {logs.length === 0 && <div style={{ color: '#30363D' }}>No activity yet…</div>}
-      {logs.map((l, i) => <div key={i} style={{ color: clr[l.type] || '#8B949E', marginBottom: 2, lineHeight: 1.5 }}>{l.msg}</div>)}
+      {logs.map((l, i) => (
+        <div key={i} style={{ color: clr[l.type] || '#8B949E', marginBottom: 2, lineHeight: 1.5, display: 'flex', alignItems: 'center' }}>
+          {icons[l.type] || icons.info} {l.msg}
+        </div>
+      ))}
     </div>
   );
 }
@@ -82,7 +117,7 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
         </div>
         <div style={{ padding: '20px 24px' }}>
           {selectedUnitIds.length === 0 ? (
-            <div style={s.noUnitWarn}><MdWarning /> No units selected — will broadcast to ALL available units.</div>
+            <div style={s.noUnitWarn}><WarningOutlined style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: 4 }} /> No units selected — will broadcast to ALL available units.</div>
           ) : (
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Selected Units ({selectedUnitIds.length})</div>
@@ -93,7 +128,7 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
                   const ucfg = UCFG[unit.type] || UCFG.ambulance;
                   return (
                     <div key={uid} style={s.unitCard}>
-                      <span style={{ fontSize: 22, display: 'flex' }}>{ucfg.icon}</span>
+                      <span style={{ fontSize: 22, display: 'flex', alignItems: 'center' }}>{ucfg.icon}</span>
                       <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 800 }}>{unit.name}</div><div style={{ fontSize: 10, color: '#8B949E' }}>{unit.id}</div></div>
                       <span style={{ padding: '2px 8px', borderRadius: 8, fontSize: 10, fontWeight: 800, background: 'rgba(52,168,83,.15)', color: '#34A853' }}>Ready</span>
                     </div>
@@ -106,16 +141,26 @@ function ConfirmModal({ open, ticket, severity, answers, pickedLat, pickedLng, s
             <div style={s.detCard}><div style={s.detLabel}>Priority</div><div style={{ ...s.detVal, color: SEV_COLORS[severity] }}>{severity?.toUpperCase()}</div></div>
             <div style={s.detCard}><div style={s.detLabel}>Units</div><div style={{ ...s.detVal, color: '#82B4FF' }}>{selectedUnitIds.length || 'Broadcast'}</div></div>
             <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}>Patient / Caller</div><div style={s.detVal}>{answers.f1 || '—'}</div></div>
-            <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}><MdLocationOn style={{ verticalAlign: 'middle', marginRight: 4 }} /> Location</div><div style={s.detVal}>{answers.f3 || '—'}</div></div>
+            <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}><EnvironmentOutlined style={{ verticalAlign: 'middle', marginRight: 4, fontSize: '14px' }} /> Location</div><div style={s.detVal}>{answers.f3 || '—'}</div></div>
             <div style={s.detCard}><div style={s.detLabel}>Phone</div><div style={s.detVal}>{answers.f2 || '—'}</div></div>
             <div style={s.detCard}><div style={s.detLabel}>Coordinates</div><div style={{ ...s.detVal, fontFamily: 'JetBrains Mono, monospace', fontSize: 10 }}>{pickedLat?.toFixed(5)}, {pickedLng?.toFixed(5)}</div></div>
             {answers.f7 && <div style={{ ...s.detCard, gridColumn: 'span 2' }}><div style={s.detLabel}>Notes</div><div style={s.detVal}>{answers.f7}</div></div>}
           </div>
         </div>
         <div style={s.mFoot}>
-          <button style={s.cancelBtn} onClick={onCancel}><MdClose style={{ marginRight: 4 }} /> Cancel</button>
+          <button style={s.cancelBtn} onClick={onCancel}>
+            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <CloseOutlined style={{ fontSize: '18px', verticalAlign: 'middle' }} /> Cancel
+            </span>
+          </button>
           <button style={{ ...s.confirmBtn, background: cfg.color }} onClick={onConfirm} disabled={loading}>
-            {loading ? <AiOutlineLoading3Quarters style={{ animation: 'spin 1s linear infinite', marginRight: 6 }} /> : <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{cfg.icon} CONFIRM DISPATCH</span>}
+            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+              {loading ? (
+                <LoadingOutlined style={{ fontSize: '18px', verticalAlign: 'middle' }} spin />
+              ) : (
+                <>{cfg.icon} CONFIRM DISPATCH</>
+              )}
+            </span>
           </button>
         </div>
       </div>
@@ -143,7 +188,9 @@ function TicketDetailsBox({ ticket, dispatchedUnits }) {
       <div style={{ height: 4, background: cfg.color, borderRadius: '14px 14px 0 0', margin: '-20px -20px 16px' }} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ background: 'rgba(249,168,37,.15)', color: '#F9A825', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, letterSpacing: 1 }}>📥 AGENT TICKET</span>
+          <span style={{ background: 'rgba(249,168,37,.15)', color: '#F9A825', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <FileTextOutlined style={{ fontSize: '10px', verticalAlign: 'middle' }} /> AGENT TICKET
+          </span>
           <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#8B949E' }}>{t}</span>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -214,7 +261,7 @@ function TicketListScreen({ onSelectTicket }) {
   return (
     <div style={s.page}>
       <div style={s.mainBody}>
-        <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}><MdNotificationsActive color="#E53935" /> Incoming Tickets</div>
+        <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}><NodeIndexOutlined style={{ color: "#E53935", fontSize: '20px', verticalAlign: 'middle' }} /> Incoming Tickets</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: '#8B949E' }}>Select a ticket to open the dispatch screen</span>
           {pendingCount > 0 && <span style={{ background: 'rgba(249,168,37,.15)', color: '#F9A825', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 6 }}>{pendingCount} pending</span>}
@@ -227,7 +274,7 @@ function TicketListScreen({ onSelectTicket }) {
         ))}
       </div>
       {filteredTickets.length === 0 ? (
-        <div style={s.empty}><div style={s.emptyIcon}>📥</div><div style={s.emptyMsg}>No agent tickets yet</div><div style={s.emptySub}>Tickets submitted by field agents appear here</div></div>
+        <div style={s.empty}><div style={s.emptyIcon}><FileTextOutlined style={{ fontSize: '48px', opacity: .2 }} /></div><div style={s.emptyMsg}>No agent tickets yet</div><div style={s.emptySub}>Tickets submitted by field agents appear here</div></div>
       ) : (
         <div style={s.grid}>
           {filteredTickets.map(ticket => {
@@ -245,18 +292,18 @@ function TicketListScreen({ onSelectTicket }) {
                 {isPending && <div style={s.newBadge}>NEW</div>}
                 <div style={s.ticketInner}>
                   <div style={s.ticketTop}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 18 }}>{cfg.icon}</span><span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.6px', textTransform: 'uppercase', color: cfg.barColor }}>{cfg.label}</span></div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 18, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span><span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.6px', textTransform: 'uppercase', color: cfg.barColor }}>{cfg.label}</span></div>
                     <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#8B949E' }}>{t}</span>
                   </div>
                   <div style={s.ticketTime}>{new Date(ticket.timestamp).toLocaleTimeString()}</div>
-                  <div style={s.ticketAddr}><MdLocationOn style={{ marginRight: 4 }} /> {ticket.address}</div>
+                  <div style={s.ticketAddr}><EnvironmentOutlined style={{ marginRight: 4, fontSize: '12px', verticalAlign: 'middle' }} /> {ticket.address}</div>
                   <div style={s.detailsRow}>
-                    {ticket.phone && <span style={s.detailChip}>📞 {ticket.phone}</span>}
+                    {ticket.phone && <span style={{ ...s.detailChip, display: 'flex', alignItems: 'center', gap: 4 }}><PhoneOutlined style={{ fontSize: '10px' }} /> {ticket.phone}</span>}
                     <span style={{ ...s.detailChip, color: sev.color, borderColor: `${sev.color}40`, background: `${sev.color}15` }}>{ticket.severity?.toUpperCase()}</span>
-                    {unitCount > 0 && <span style={{ ...s.detailChip, color: '#82B4FF', borderColor: 'rgba(26,115,232,.3)', display: 'flex', alignItems: 'center', gap: 4 }}><MdLocalHospital size={12} /> {unitCount} unit{unitCount > 1 ? 's' : ''} dispatched</span>}
+                    {unitCount > 0 && <span style={{ ...s.detailChip, color: '#82B4FF', borderColor: 'rgba(26,115,232,.3)', display: 'flex', alignItems: 'center', gap: 4 }}><MedicineBoxOutlined style={{ fontSize: '12px' }} /> {unitCount} unit{unitCount > 1 ? 's' : ''} dispatched</span>}
                   </div>
-                  {ticket.destination && <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#1A73E8', marginBottom: 5 }}>🌐 {ticket.destination.latitude?.toFixed(5)}, {ticket.destination.longitude?.toFixed(5)}</div>}
-                  {ticket.notes && <div style={s.notesRow}>📝 {ticket.notes}</div>}
+                  {ticket.destination && <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#1A73E8', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}><AimOutlined style={{ fontSize: '10px' }} /> {ticket.destination.latitude?.toFixed(5)}, {ticket.destination.longitude?.toFixed(5)}</div>}
+                  {ticket.notes && <div style={{ ...s.notesRow, display: 'flex', alignItems: 'center', gap: 4 }}><FileTextOutlined style={{ fontSize: '10px' }} /> {ticket.notes}</div>}
                   <div style={s.ticketFooter}>
                     <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 7, textTransform: 'uppercase', background: `${SEV_COLORS[ticket.severity] || '#8B949E'}18`, color: SEV_COLORS[ticket.severity] || '#8B949E' }}>{ticket.severity || 'medium'}</span>
                     <button style={{ ...s.openBtn, ...(isPending ? { background: 'rgba(249,168,37,.1)', border: '1px solid rgba(249,168,37,.3)', color: '#F9A825' } : {}) }}>{isPending ? 'Dispatch →' : 'Open →'}</button>
@@ -286,7 +333,7 @@ function InlineUnitSelector({ units, selectedUnitIds, onToggleUnit }) {
       {/* Header */}
       <div style={s.inlineUnitHeader}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ fontSize: 11, fontWeight: 800, color: '#E6EDF3' }}>📡 Online Units</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: '#E6EDF3', display: 'flex', alignItems: 'center', gap: 6 }}><ApartmentOutlined style={{ fontSize: '14px', verticalAlign: 'middle' }} /> Online Units</span>
           <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 7px', borderRadius: 9, background: 'rgba(52,168,83,.15)', color: '#34A853' }}>
             {onlineUnits.length} online
           </span>
@@ -310,7 +357,7 @@ function InlineUnitSelector({ units, selectedUnitIds, onToggleUnit }) {
 
       {onlineUnits.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '22px 10px', color: '#8B949E' }}>
-          <div style={{ fontSize: 28, marginBottom: 7 }}>📵</div>
+          <div style={{ fontSize: 28, marginBottom: 7 }}><WifiOutlined style={{ opacity: .2 }} /></div>
           <div style={{ fontSize: 11, fontWeight: 700 }}>No units online</div>
           <div style={{ fontSize: 10, opacity: .6, marginTop: 3 }}>Add mock units from the panel on the right →</div>
         </div>
@@ -401,7 +448,7 @@ export default function DispatchPage() {
   const [showModal, setShowModal] = useState(false);
   const [dispatching, setDispatching] = useState(false);
   const [lastAlertIds, setLastAlertIds] = useState([]);
-  const [statusBox, setStatusBox] = useState({ type: 'waiting', icon: '⏳', text: 'No alert sent yet' });
+  const [statusBox, setStatusBox] = useState({ type: 'waiting', icon: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: 'No alert sent yet' });
   const [logs, setLogs] = useState([]);
   const [allTickets, setAllTickets] = useState([]);
 
@@ -417,8 +464,8 @@ export default function DispatchPage() {
           setAgentTicket(fresh);
           setSelectedTicket(fresh);
           if (fresh.status === 'completed') {
-            setStatusBox({ type: 'accepted', icon: '✅', text: 'All units completed — ticket auto-closed' });
-            addLog('✅ Ticket marked completed by live tracking', 'ok');
+            setStatusBox({ type: 'accepted', icon: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: 'All units completed — ticket auto-closed' });
+            addLog('Ticket marked completed by live tracking', 'ok');
           }
         }
       }
@@ -444,16 +491,16 @@ export default function DispatchPage() {
     setPickedLng(t.destination?.longitude || null);
     setAnswers(t.answers || { f1: t.name, f2: t.phone, f3: t.address, f7: t.notes });
     setSelectedUnitIds([]); setLastAlertIds([]);
-    setStatusBox({ type: 'waiting', icon: '⏳', text: 'No alert sent yet' });
+    setStatusBox({ type: 'waiting', icon: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: 'No alert sent yet' });
     setLogs([]); setShowResources(false);
-    addLog(`📥 Ticket loaded: ${t.name}`, 'warn');
+    addLog(`FileTextOutlined Ticket loaded: ${t.name}`, 'warn');
   }
 
   function handleBackToList() {
     setSelectedTicket(null); setAgentTicket(null); setSeverity('critical');
     setPickedLat(null); setPickedLng(null); setAnswers({});
     setSelectedUnitIds([]); setShowResources(false); setLogs([]);
-    setLastAlertIds([]); setStatusBox({ type: 'waiting', icon: '⏳', text: 'No alert sent yet' });
+    setLastAlertIds([]); setStatusBox({ type: 'waiting', icon: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: 'No alert sent yet' });
     navigate('/dispatch', { replace: true });
   }
 
@@ -493,9 +540,9 @@ export default function DispatchPage() {
         try {
           const room = await createRoom(dispatcher.accessToken, `Ticket-${agentTicket.id}`);
           roomId = room.room_id;
-          addLog(`✅ Matrix room created: ${roomId}`, 'ok');
+          addLog(`Matrix room created: ${roomId}`, 'ok');
         } catch (matrixErr) {
-          addLog(`⚠️ Matrix room creation skipped: ${matrixErr.message}`, 'warn');
+          addLog(`Matrix room creation skipped: ${matrixErr.message}`, 'warn');
         }
       }
 
@@ -503,17 +550,17 @@ export default function DispatchPage() {
         const res = await sendAlert(base);
         ids.push(res.data.id);
         addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
-        addLog('📡 Broadcast to all units', 'warn');
+        addLog('Broadcast to all units', 'warn');
       } else {
         for (const unitId of selectedUnitIds) {
           // ── Matrix invite (non-blocking) ──
           if (roomId && dispatcher?.accessToken) {
-            const matrixUserId = `@ragl:localhost`;
+            const matrixInviteeId = matrixUserId('matrixuser');
             try {
-              await inviteUser(dispatcher.accessToken, roomId, matrixUserId);
-              addLog(`📨 Matrix invite sent: ${matrixUserId}`, 'ok');
+              await inviteUser(dispatcher.accessToken, roomId, matrixInviteeId);
+              addLog(`Matrix invite sent: ${matrixInviteeId}`, 'ok');
             } catch (err) {
-              addLog(`⚠️ Matrix invite skipped for ${unitId}`, 'warn');
+              addLog(`Matrix invite skipped for ${unitId}`, 'warn');
             }
           }
 
@@ -524,7 +571,7 @@ export default function DispatchPage() {
             ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
             status: 'pending'
           });
-          addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
+          addLog(`Assigned → ${unit?.name || unitId}`, 'ok');
         }
       }
 
@@ -538,11 +585,11 @@ export default function DispatchPage() {
         if (fresh) { setAgentTicket(fresh); setSelectedTicket(fresh); }
       }
       setLastAlertIds(ids);
-      setStatusBox({ type: 'pending', icon: '📡', text: `${ids.length} alert(s) sent — waiting for units…` });
-      addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
+      setStatusBox({ type: 'pending', icon: <NodeIndexOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: `${ids.length} alert(s) sent — waiting for units…` });
+      addLog(`Done — ${ids.length} alert(s) sent`, 'ok');
       setShowModal(false); setSelectedUnitIds([]);
     } catch (e) {
-      addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
+      addLog('Failed: ' + (e.response?.data?.error || e.message), 'error');
     }
     setDispatching(false);
   };
@@ -568,8 +615,8 @@ export default function DispatchPage() {
     updateAgentTicket(agentTicket.id, { status: 'completed' });
     const fresh = getAgentTickets().find(t => t.id === agentTicket.id);
     if (fresh) { setAgentTicket(fresh); setSelectedTicket(fresh); }
-    setStatusBox({ type: 'accepted', icon: '✅', text: 'All units completed — ticket closed' });
-    addLog('✅ Ticket marked as completed', 'ok');
+    setStatusBox({ type: 'accepted', icon: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: 'All units completed — ticket closed' });
+    addLog('Ticket marked as completed', 'ok');
   }
 
   const statusColors = { waiting: '#8B949E', pending: '#F9A825', accepted: '#34A853', rejected: '#E53935' };
@@ -591,7 +638,7 @@ export default function DispatchPage() {
         <div>
           {/* Toolbar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-            <button style={s.backBtn} onClick={handleBackToList}>← All Tickets</button>
+            <button style={s.backBtn} onClick={handleBackToList}><ArrowLeftOutlined style={{ fontSize: '12px', verticalAlign: 'middle' }} /> All Tickets</button>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 12px', borderRadius: 8, background: `${SEV_COLORS[severity]}18`, color: SEV_COLORS[severity], textTransform: 'uppercase' }}>{severity}</span>
             <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 12px', borderRadius: 8, background: stCfg.bg, color: stCfg.color }}>{stCfg.label}</span>
@@ -611,9 +658,9 @@ export default function DispatchPage() {
               disabled={!pickedLat}
               onClick={() => setShowResources(v => !v)}
             >
-              <span>🏥</span>
+              <PushpinOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />
               <span>{showResources ? 'Hide Nearby Resources' : 'View Nearby Resources & Units'}</span>
-              <span style={{ fontSize: 11, transition: 'transform .3s', transform: showResources ? 'rotate(180deg)' : 'none' }}>▼</span>
+              <DownOutlined style={{ fontSize: '11px', transition: 'transform .3s', transform: showResources ? 'rotate(180deg)' : 'none', verticalAlign: 'middle' }} />
             </button>
           </div>
           {showResources && pickedLat && (
@@ -631,18 +678,20 @@ export default function DispatchPage() {
             {/* Incident Form + Dispatch */}
             <div style={s.card}>
               <div style={s.cardTitle}>{cfg.icon} {agentTicket?.name} — Ready to Dispatch</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
-                {[['Patient / Caller', answers.f1 || '—'], ['Phone', answers.f2 || '—']].map(([label, val]) => (
-                  <div key={label} style={s.summaryField}>
-                    <div style={s.summaryLabel}>{label}</div>
-                    <div style={s.summaryVal}>{val}</div>
-                  </div>
-                ))}
-                <div style={{ ...s.summaryField, gridColumn: 'span 2' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
+                <div style={s.summaryField}>
+                  <div style={s.summaryLabel}>Patient / Caller</div>
+                  <div style={s.summaryVal}>{answers.f1 || '—'}</div>
+                </div>
+                <div style={s.summaryField}>
+                  <div style={s.summaryLabel}>Phone</div>
+                  <div style={s.summaryVal}>{answers.f2 || '—'}</div>
+                </div>
+                <div style={s.summaryField}>
                   <div style={s.summaryLabel}>Address</div>
                   <div style={s.summaryVal}>{answers.f3 || '—'}</div>
                 </div>
-                <div style={{ ...s.summaryField, gridColumn: 'span 2' }}>
+                <div style={s.summaryField}>
                   <div style={s.summaryLabel}>Coordinates</div>
                   <div style={{ ...s.summaryVal, fontFamily: 'JetBrains Mono, monospace', color: '#1A73E8' }}>
                     {pickedLat ? `${pickedLat.toFixed(6)}, ${pickedLng.toFixed(6)}` : '—'}
@@ -669,7 +718,7 @@ export default function DispatchPage() {
                       return (
                         <span key={uid} style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 7, background: `${ucfg.color}18`, color: ucfg.color, border: `1px solid ${ucfg.color}30`, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           {ucfg.icon} {unit?.name || uid}
-                          <span style={{ cursor: 'pointer', color: '#8B949E', marginLeft: 2 }} onClick={() => handleToggleUnit(uid)}>✕</span>
+                          <CloseOutlined style={{ cursor: 'pointer', color: '#8B949E', marginLeft: 2, fontSize: '10px' }} onClick={() => handleToggleUnit(uid)} />
                         </span>
                       );
                     })}
@@ -679,18 +728,18 @@ export default function DispatchPage() {
 
               {/* Dispatch button */}
               <button
-                style={{ ...s.dispatchBtn, ...cfg.btnCls, opacity: (dispatching || ticketStatus === 'completed') ? .5 : 1, cursor: ticketStatus === 'completed' ? 'default' : 'pointer' }}
+                style={{ ...s.dispatchBtn, ...cfg.btnCls, opacity: (dispatching || ticketStatus === 'completed') ? .5 : 1, cursor: ticketStatus === 'completed' ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
                 onClick={openModal}
                 disabled={dispatching || ticketStatus === 'completed'}
               >
                 {ticketStatus === 'completed'
-                  ? '✅ Ticket Already Completed'
-                  : `🚨 DISPATCH${selectedUnitIds.length > 0 ? ` ${selectedUnitIds.length} UNIT(S)` : ' (BROADCAST)'}`}
+                  ? <><CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> Ticket Already Completed</>
+                  : <><SendOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> DISPATCH{selectedUnitIds.length > 0 ? ` ${selectedUnitIds.length} UNIT(S)` : ' (BROADCAST)'}</>}
               </button>
 
               {ticketStatus === 'dispatched' && (
                 <button style={s.completedBtn} onClick={handleMarkCompleted}>
-                  ✅ All Units Done — Mark Ticket Completed
+                  <CheckCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> All Units Done — Mark Ticket Completed
                 </button>
               )}
             </div>
@@ -712,7 +761,7 @@ export default function DispatchPage() {
         <div>
           {/* Dispatch status */}
           <div style={s.card}>
-            <div style={s.cardTitle}>📡 Dispatch Status</div>
+            <div style={s.cardTitle}><NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> Dispatch Status</div>
             <div style={{ ...s.statusBox, background: `${statusColors[statusBox.type] || '#8B949E'}18`, color: statusColors[statusBox.type] || '#8B949E' }}>
               <span>{statusBox.icon}</span><span>{statusBox.text}</span>
             </div>
@@ -724,7 +773,9 @@ export default function DispatchPage() {
                 </div>
               </>
             )}
-            <button style={{ ...s.btn, width: '100%' }} onClick={() => navigate('/alerts')}>📋 View Monitoring</button>
+            <button style={{ ...s.btn, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }} onClick={() => navigate('/alerts')}>
+              <BarChartOutlined style={{ fontSize: '14px', verticalAlign: 'middle' }} /> View Monitoring
+            </button>
           </div>
 
           {/* Ticket details */}
@@ -732,7 +783,7 @@ export default function DispatchPage() {
 
           {/* Activity Log */}
           <div style={s.card}>
-            <div style={s.cardTitle}>📋 Activity Log</div>
+            <div style={s.cardTitle}><ApartmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> Activity Log</div>
             <ActivityLog logs={logs} />
           </div>
 
@@ -834,7 +885,7 @@ const s = {
   detCard: { background: '#0D1117', border: '1px solid #30363D', borderRadius: 10, padding: '10px 12px' },
   detLabel: { fontSize: 9, color: '#8B949E', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', marginBottom: 3 },
   detVal: { fontSize: 13, fontWeight: 700, color: '#E6EDF3', wordBreak: 'break-word' },
-  mFooter: { padding: '16px 24px 20px', borderTop: '1px solid #30363D', display: 'flex', gap: 10 },
-  cancelBtn: { flex: 1, padding: 12, borderRadius: 11, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
-  confirmBtn: { flex: 2, padding: 12, borderRadius: 11, border: 'none', color: '#fff', fontFamily: 'Sora, sans-serif', fontSize: 14, fontWeight: 800, cursor: 'pointer' },
+  mFoot: { padding: '16px 24px 20px', borderTop: '1px solid #30363D', display: 'flex', gap: 10, alignItems: 'center' },
+  cancelBtn: { flex: 1, height: 46, borderRadius: 12, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'pointer', transition: 'all .2s' },
+  confirmBtn: { flex: 1, height: 46, borderRadius: 12, border: 'none', color: '#fff', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 800, cursor: 'pointer', transition: 'all .2s' },
 };

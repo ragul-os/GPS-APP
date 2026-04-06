@@ -1,4 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { 
+  CheckCircleOutlined, 
+  CloseCircleOutlined, 
+  ClockCircleOutlined 
+} from '@ant-design/icons';
 import { getForm } from '../api/api';
 
 const FALLBACK_FORMS = {
@@ -151,7 +156,7 @@ function Field({ field, value, onChange }) {
               <input type="radio" name={`yesno_${field.id}`} value={o} checked={value === o}
                 onChange={() => onChange(field.id, o)}
                 style={{ accentColor: o === 'Yes' ? '#34A853' : '#E53935' }} />
-              {o === 'Yes' ? '✅ Yes' : '❌ No'}
+              {o === 'Yes' ? <><CheckCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} /> Yes</> : <><CloseCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} /> No</>}
             </label>
           ))}
         </div>
@@ -227,7 +232,7 @@ export default function IncidentForm({ unitType, pickedLat, pickedLng, answers, 
     <div>
       {loading && (
         <div style={{ textAlign: 'center', padding: 20, color: '#8B949E' }}>
-          <div style={{ fontSize: 24, marginBottom: 6 }}>⏳</div>
+          <div style={{ fontSize: 24, marginBottom: 6 }}><ClockCircleOutlined spin /></div>
           <div style={{ fontSize: 12 }}>Loading form fields…</div>
         </div>
       )}

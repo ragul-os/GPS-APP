@@ -10,12 +10,25 @@ import {
   sendImageMessage, sendVideoMessage, sendAudioMessage, sendFileMessage,
   downloadMedia,
 } from '../services/MatrixService';
+import { SYNAPSE_BASE_URL, matrixRoomAlias } from '../config/apiConfig';
 import { 
-  MdAttachFile, MdMic, MdStop, MdSend, MdHistory, 
-  MdWarning, MdLock, MdChat, MdMovie, MdMusicNote,
-  MdCloudUpload, MdCheckCircle, MdCancel, MdArrowForward
-} from 'react-icons/md';
-import { AiOutlineLoading3Quarters } from 'react-icons/ai';
+  PaperClipOutlined, 
+  AudioOutlined, 
+  StopOutlined, 
+  SendOutlined, 
+  HistoryOutlined, 
+  WarningOutlined, 
+  LockOutlined, 
+  MessageOutlined, 
+  VideoCameraOutlined, 
+  SoundOutlined,
+  CloudUploadOutlined, 
+  CheckCircleOutlined, 
+  CloseCircleOutlined, 
+  ArrowRightOutlined,
+  LoadingOutlined,
+  ExclamationCircleFilled
+} from '@ant-design/icons';
 
 // ── Module-level room cache: ticketId → roomId ────────────────────────────────
 // Persisted to localStorage so it survives tab switches within the same session.
@@ -92,14 +105,14 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     if (!mxc) return '';
     const parts = mxc.replace('mxc://', '').split('/');
     if (parts.length !== 2) return mxc;
-    return `http://localhost:8008/_matrix/client/v1/media/download/${parts[0]}/${parts[1]}?allow_redirect=true&access_token=${accessToken}`;
+    return `${SYNAPSE_BASE_URL}/_matrix/client/v1/media/download/${parts[0]}/${parts[1]}?allow_redirect=true&access_token=${accessToken}`;
   };
 
   const buildThumbnailUrl = (mxc, w, h) => {
     if (!mxc) return '';
     const parts = mxc.replace('mxc://', '').split('/');
     if (parts.length !== 2) return mxc;
-    return `http://localhost:8008/_matrix/client/v1/media/thumbnail/${parts[0]}/${parts[1]}?width=${w}&height=${h}&method=scale&allow_redirect=true&access_token=${accessToken}`;
+    return `${SYNAPSE_BASE_URL}/_matrix/client/v1/media/thumbnail/${parts[0]}/${parts[1]}?width=${w}&height=${h}&method=scale&allow_redirect=true&access_token=${accessToken}`;
   };
 
   useEffect(() => {
@@ -144,7 +157,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     try {
       const canonicalRoomName = `Ticket-${ticketId}`;
       const safeAlias = canonicalRoomName.replace(/[^a-zA-Z0-9_\-]/g, '_');
-      const fullAlias = `#${safeAlias}:localhost`;
+      const fullAlias = matrixRoomAlias(safeAlias);
       let rid = null;
 
       // Step 1: Check local cache first (fastest)
@@ -154,7 +167,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       if (!rid) {
         try {
           const aliasRes = await fetch(
-            `http://localhost:8008/_matrix/client/v3/directory/room/${encodeURIComponent(fullAlias)}`,
+            `${SYNAPSE_BASE_URL}/_matrix/client/v3/directory/room/${encodeURIComponent(fullAlias)}`,
             { headers: { 'Authorization': `Bearer ${accessToken}` } }
           );
           if (aliasRes.ok) {
@@ -179,11 +192,13 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       // Join (idempotent)
       try { await joinRoom(accessToken, rid); } catch { /* already member */ }
 
+      window.dispatchEvent(new CustomEvent('matrixTicketRoomReady', { detail: { ticketId, roomId: rid } }));
+
       // Load history
-      await loadHistory(rid);
+      await loadHistory(rid, gen);
 
       // Start sync
-      startSync(rid);
+      startSync(rid, gen);
     } catch (e) {
       console.error('[InteractionsTab] initRoom error:', e);
       setError('Could not open chat: ' + (e.message || 'Unknown error'));
@@ -247,10 +262,12 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
   const fmtDuration = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  async function loadHistory(rid) {
+  async function loadHistory(rid, gen) {
     try {
       // getRoomMessages — HTTP/2 preferred for potentially large payloads
       const res = await getRoomMessages(accessToken, rid, null, 50);
+      if (gen !== initGenRef.current) return; // Guard against stale history load
+      
       const events = [...(res.chunk || [])].reverse(); // chunk is newest-first
       const msgs = parseEvents(events).filter(m => {
         if (seenIds.current.has(m.id)) return false;
@@ -258,59 +275,41 @@ export default function InteractionsTab({ ticketId, alertObj }) {
         return true;
       });
       setMessages(msgs);
-    } catch (e) { console.warn('[InteractionsTab] loadHistory:', e.message); }
+    } catch (e) {
+      if (gen === initGenRef.current) console.warn('[InteractionsTab] loadHistory:', e.message);
+    }
   }
 
   // ── Sync loop — HTTP/2 long-polling via native fetch ─────────────────────
-  function startSync(rid) {
+  function startSync(rid, gen) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    // Bug 4 fix — always start sync with null (never use getRoomMessages pagination token)
+    
     let currentSince = null;
     const poll = async () => {
       while (!ctrl.signal.aborted) {
         try {
-          // sync() uses native fetch() — HTTP/2 mandatory (browser negotiates automatically)
           const data = await sync(accessToken, currentSince, ctrl.signal);
           if (ctrl.signal.aborted) break;
-
-          // Debug logs to diagnose roomId mismatch
-          const joinedRooms = Object.keys(data.rooms?.join || {});
-          console.log('[Sync] next_batch:', data.next_batch);
-          console.log('[Sync] joined room keys:', joinedRooms);
-          console.log('[Sync] our roomId:', rid);
-          console.log('[Sync] match found:', joinedRooms.includes(rid));
+          // One final guard: if the entire component instance (or ticket) switched
+          if (gen !== initGenRef.current) break;
 
           if (data.next_batch) currentSince = data.next_batch;
 
-          // Resolve roomId — exact match first.
-          // Fallback: scan ALL joined rooms (covers edge case where rid encoding differs).
-          // Messages from other rooms are deduped by seenIds so no cross-contamination.
-          const roomsToProcess = joinedRooms.includes(rid)
-            ? [rid]
-            : joinedRooms; // fallback: process all — seenIds prevents cross-room pollution
+          // CRITICAL: Filter events by the current room ID to prevent "room bleeding"
+          const timelineEvents = data.rooms?.join?.[rid]?.timeline?.events || [];
 
-          if (!joinedRooms.includes(rid) && joinedRooms.length > 0) {
-            console.warn('[Sync] Exact roomId not found — scanning all joined rooms as fallback:', joinedRooms);
-          }
-
-          const allNewEvents = roomsToProcess.flatMap(rId =>
-            data.rooms?.join?.[rId]?.timeline?.events || []
-          );
-
-          if (allNewEvents.length) {
-            // Filter raw events BEFORE parseEvents so we can read unsigned.transaction_id
-            const filtered = allNewEvents.filter(e => {
-              // Skip our own optimistic sends — identified by transaction_id in the closure
+          if (timelineEvents.length) {
+            const filtered = timelineEvents.filter(e => {
+              // 1. Skip our own confirm messages (optimistic UI)
               if (e.unsigned?.transaction_id && pendingTxns.current.has(e.unsigned.transaction_id)) {
-                // The server confirmed our send — register the real event_id and skip (already shown optimistically)
                 if (e.event_id) seenIds.current.add(e.event_id);
                 return false;
               }
-              // Skip duplicates
+              // 2. Skip duplicates
               if (seenIds.current.has(e.event_id)) return false;
               if (e.event_id) seenIds.current.add(e.event_id);
-              // Only render message events
+              // 3. Only message types
               return e.type === 'm.room.message' && e.content?.msgtype;
             });
 
@@ -329,7 +328,8 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           }
         } catch (e) {
           if (e.name === 'AbortError' || ctrl.signal.aborted) break;
-          console.warn('[InteractionsTab] Sync error, retrying in 4s:', e.message);
+          if (gen !== initGenRef.current) break;
+          console.warn('[Sync] Retrying in 4s:', e.message);
           await new Promise(r => setTimeout(r, 4000));
         }
       }
@@ -420,7 +420,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     const [failed, setFailed] = useState(false);
     return failed ? (
       <div style={{ padding: '16px 12px', textAlign: 'center', background: 'rgba(0,0,0,0.2)', border: '1px dashed rgba(229,57,53,0.3)', borderRadius: 7, color: '#E53935', fontSize: 9, fontFamily: 'Sora, sans-serif' }}>
-        <div style={{ fontSize: 16, marginBottom: 4 }}>⚠️</div>
+        <div style={{ fontSize: 16, marginBottom: 4 }}><WarningOutlined /></div>
         Media missing from server
       </div>
     ) : (
@@ -459,7 +459,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     const isMedia = ['m.video', 'm.audio', 'm.file'].includes(msg.msgtype) || isImage;
 
     if (isMedia && msg.url) {
-      const icon = msg.msgtype === 'm.video' ? <MdMovie /> : msg.msgtype === 'm.audio' ? <MdMusicNote /> : <MdAttachFile />;
+      const icon = msg.msgtype === 'm.video' ? <VideoCameraOutlined /> : msg.msgtype === 'm.audio' ? <SoundOutlined /> : <PaperClipOutlined />;
       const thumb = isImage ? buildThumbnailUrl(msg.url, 220, 160) : null;
       const full = buildMediaUrl(msg.url);
 
@@ -559,19 +559,19 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   // ── States: auth missing, loading, error ──────────────────────────────────
   if (!accessToken) return (
     <div style={st.stateWrap}>
-      <div style={{ fontSize: 22, marginBottom: 6, color: '#8B949E' }}><MdLock /></div>
+      <div style={{ fontSize: 22, marginBottom: 6, color: '#8B949E' }}><LockOutlined /></div>
       <div style={st.stateMsg}>Not authenticated — log in to use chat</div>
     </div>
   );
   if (loading) return (
     <div style={st.stateWrap}>
-      <div style={{ fontSize: 20, marginBottom: 6, color: '#1A73E8', animation: 'spin 1s linear infinite' }}><AiOutlineLoading3Quarters /></div>
+      <div style={{ fontSize: 20, marginBottom: 6, color: '#1A73E8' }}><LoadingOutlined spin /></div>
       <div style={st.stateMsg}>Opening chat room…</div>
     </div>
   );
   if (error) return (
     <div style={st.stateWrap}>
-      <div style={{ fontSize: 20, marginBottom: 6, color: '#E53935' }}><MdWarning /></div>
+      <div style={{ fontSize: 20, marginBottom: 6, color: '#E53935' }}><WarningOutlined /></div>
       <div style={{ ...st.stateMsg, color: '#E53935' }}>{error}</div>
       <button onClick={initRoom} style={st.retryBtn}>Retry</button>
     </div>
@@ -580,19 +580,11 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div style={st.wrap}>
-      {/* Room ID header */}
-      <div style={st.roomRow}>
-        <span style={{ fontSize: 8, color: '#8B949E', fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-          {roomId}
-        </span>
-        <span style={{ fontSize: 8, fontWeight: 800, color: '#34A853', background: 'rgba(52,168,83,.12)', border: '1px solid rgba(52,168,83,.25)', borderRadius: 4, padding: '1px 5px', flexShrink: 0 }}>LIVE</span>
-      </div>
-
       {/* Message list */}
       <div style={st.msgList}>
         {messages.length === 0 ? (
           <div style={{ textAlign: 'center', color: '#8B949E', fontSize: 10, paddingTop: 24 }}>
-            <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.4 }}><MdChat /></div>
+            <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.4 }}><MessageOutlined /></div>
             No messages yet — start the conversation
           </div>
         ) : (
@@ -611,7 +603,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       {/* Upload progress */}
       {uploading && (
         <div style={st.uploadBanner}>
-          <MdCloudUpload style={{ fontSize: 12, color: '#1A73E8' }} />
+          <CloudUploadOutlined style={{ fontSize: 12, color: '#1A73E8' }} />
           <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{uploadName}</span>
           <span style={{ opacity: 0.6 }}>Uploading…</span>
         </div>
@@ -625,7 +617,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           style={{ width: 28, height: 28, borderRadius: 6, background: '#161B22', border: '1px solid #30363D', color: '#8B949E', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        ><MdAttachFile /></button>
+        ><PaperClipOutlined /></button>
 
         <button
           type="button"
@@ -639,14 +631,14 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             position: 'relative'
           }}
         >
-          {isRecording ? <MdStop size={18} /> : <MdMic size={18} />}
+          {isRecording ? <StopOutlined style={{ fontSize: '18px' }} /> : <AudioOutlined style={{ fontSize: '18px' }} />}
           {isRecording && (
             <div style={{
               position: 'absolute', top: -20, left: '50%', transform: 'translateX(-50%)',
               background: '#E53935', color: '#fff', fontSize: 8, fontWeight: 800,
               padding: '2px 6px', borderRadius: 10, whiteSpace: 'nowrap',
               display: 'flex', alignItems: 'center', gap: 3
-            }}><MdFiberManualRecord style={{ animation: 'livePulse 1s infinite' }} /> REC {fmtDuration(recordingTime)}</div>
+            }}><ExclamationCircleFilled style={{ animation: 'livePulse 1s infinite', color: '#fff', fontSize: '8px' }} /> REC {fmtDuration(recordingTime)}</div>
           )}
         </button>
 
@@ -669,7 +661,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           onClick={handleSend}
           disabled={!inputText.trim() || !roomId}
           style={{ padding: '0 10px', height: 28, borderRadius: 6, background: inputText.trim() ? '#1A73E8' : '#30363D', border: 'none', color: inputText.trim() ? '#fff' : '#8B949E', cursor: inputText.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'Sora, sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        ><MdSend /></button>
+        ><SendOutlined /></button>
       </div>
 
       {/* Lightbox */}
@@ -687,7 +679,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
               if (wrap && !wrap.querySelector('.lb-err')) {
                 const err = document.createElement('div');
                 err.className = 'lb-err';
-                err.innerHTML = '<div style="font-size: 32px; margin-bottom: 8px;">⚠️</div><div style="color: #fff; font-family: Sora; font-size: 14px; text-align: center;">Full resolution media missing on server</div>';
+                err.innerHTML = '<div style="font-size: 32px; margin-bottom: 8px;"><svg viewBox="0 0 1024 1024" width="32" height="32" fill="#E53935"><path d="M955.7 856L544.2 163.5c-6.1-10.2-15-18.3-25.7-23.2-10.7-4.8-22.1-7.3-33.6-7.3s-22.9 2.5-33.6 7.3c-10.7 4.9-19.5 13-25.7 23.2L14.4 856c-11.8 19.8-11.8 44.2 0 64s31.7 32 55.4 32h823.1c23.7 0 45.3-13 57.1-32 11.8-19.8 11.8-44.2 0-64zM512 816c-22.1 0-40-17.9-40-40s17.9-40 40-40 40 17.9 40 40-17.9 40-40 40z m40-160c0 4.4-3.6 8-8 8h-64c-4.4 0-8-3.6-8-8V336c0-4.4 3.6-8 8-8h64c4.4 0 8 3.6 8 8v320z"></path></svg></div><div style="color: #fff; font-family: Sora; font-size: 14px; text-align: center;">Full resolution media missing on server</div>';
                 wrap.appendChild(err);
               }
             }}
@@ -703,7 +695,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 const st = {
   wrap: {
     display: 'flex', flexDirection: 'column',
-    height: 420, marginTop: 8,
+    height: '100%', padding: '0 12px 12px 12px',
   },
   roomRow: {
     display: 'flex', alignItems: 'center', gap: 6,

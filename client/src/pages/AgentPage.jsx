@@ -1,22 +1,37 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import MapView from '../components/MapView';
+import { 
+  MedicineBoxOutlined, 
+  FireOutlined, 
+  SafetyOutlined, 
+  AlertOutlined, 
+  WarningOutlined, 
+  ExclamationCircleOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  CheckCircleFilled,
+  ExclamationCircleFilled,
+  ClockCircleFilled,
+  PlusOutlined
+} from '@ant-design/icons';
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
 
 
 const UNIT_TYPES = [
-  { key: 'ambulance', icon: '🚑', label: 'Ambulance', borderColor: '#E53935', bgColor: 'rgba(229,57,53,.1)'  },
-  { key: 'fire',      icon: '🚒', label: 'Fire',      borderColor: '#FF6D00', bgColor: 'rgba(255,109,0,.1)'  },
-  { key: 'police',    icon: '🚔', label: 'Police',    borderColor: '#5C9CE5', bgColor: 'rgba(21,101,192,.12)'},
-  { key: 'rescue',    icon: '🚁', label: 'Rescue',    borderColor: '#9C27B0', bgColor: 'rgba(156,39,176,.1)' },
-  { key: 'hazmat',    icon: '☢️',  label: 'Hazmat',    borderColor: '#F57F17', bgColor: 'rgba(245,127,23,.1)' },
+  { key: 'ambulance', icon: <MedicineBoxOutlined style={{ fontSize: '24px', verticalAlign: 'middle' }} />, label: 'Ambulance', borderColor: '#E53935', bgColor: 'rgba(229,57,53,.1)'  },
+  { key: 'fire',      icon: <FireOutlined style={{ fontSize: '24px', verticalAlign: 'middle' }} />, label: 'Fire',      borderColor: '#FF6D00', bgColor: 'rgba(255,109,0,.1)'  },
+  { key: 'police',    icon: <SafetyOutlined style={{ fontSize: '24px', verticalAlign: 'middle' }} />, label: 'Police',    borderColor: '#5C9CE5', bgColor: 'rgba(21,101,192,.12)'},
+  { key: 'rescue',    icon: <AlertOutlined style={{ fontSize: '24px', verticalAlign: 'middle' }} />, label: 'Rescue',    borderColor: '#9C27B0', bgColor: 'rgba(156,39,176,.1)' },
+  { key: 'hazmat',    icon: <WarningOutlined style={{ fontSize: '24px', verticalAlign: 'middle' }} />,  label: 'Hazmat',    borderColor: '#F57F17', bgColor: 'rgba(245,127,23,.1)' },
 ];
 
 const SEVERITIES = [
-  { key: 'critical', label: '🔴 Critical', color: '#E53935', bg: 'rgba(229,57,53,.1)'  },
-  { key: 'high',     label: '🟠 High',     color: '#FF6D00', bg: 'rgba(255,109,0,.1)'  },
-  { key: 'medium',   label: '🟡 Medium',   color: '#F9A825', bg: 'rgba(249,168,37,.1)' },
-  { key: 'low',      label: '🟢 Low',      color: '#34A853', bg: 'rgba(52,168,83,.1)'  },
+  { key: 'critical', icon: <ExclamationCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'Critical', color: '#E53935', bg: 'rgba(229,57,53,.1)'  },
+  { key: 'high',     icon: <ExclamationCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'High',     color: '#FF6D00', bg: 'rgba(255,109,0,.1)'  },
+  { key: 'medium',   icon: <ClockCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'Medium',   color: '#F9A825', bg: 'rgba(249,168,37,.1)' },
+  { key: 'low',      icon: <CheckCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'Low',      color: '#34A853', bg: 'rgba(52,168,83,.1)'  },
 ];
 
 const FALLBACK_FORMS = {
@@ -172,7 +187,7 @@ function FormField({ field, value, onChange }) {
               <input type="radio" name={field.id} value={o} checked={value === o}
                 onChange={() => handleRadio(o)}
                 style={{ accentColor: o === 'Yes' ? '#34A853' : '#E53935' }} />
-              {o === 'Yes' ? '✅ Yes' : '❌ No'}
+              {o === 'Yes' ? <><CheckCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} /> Yes</> : <><CloseCircleOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 4 }} /> No</>}
             </label>
           ))}
         </div>
@@ -252,12 +267,12 @@ export default function AgentPage() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '80vh', padding: 24 }}>
         <div style={{ background: '#161B22', border: '1px solid rgba(52,168,83,.4)', borderRadius: 20, padding: 36, maxWidth: 500, width: '100%', textAlign: 'center' }}>
-          <div style={{ fontSize: 56, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 56, marginBottom: 12 }}><CheckCircleOutlined style={{ color: '#34A853' }} /></div>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#34A853', marginBottom: 6 }}>Ticket Submitted!</div>
           <div style={{ fontSize: 13, color: '#8B949E', marginBottom: 24 }}>Your incident has been sent to the dispatcher.</div>
           <div style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 12, padding: '14px 18px', marginBottom: 24, textAlign: 'left' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <span style={{ fontSize: 28 }}>{cfg?.icon}</span>
+              <span style={{ fontSize: 28, display: 'flex', alignItems: 'center' }}>{cfg?.icon}</span>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800 }}>{lastTicket.name}</div>
                 <div style={{ fontSize: 11, color: '#8B949E' }}>{lastTicket.id}</div>
@@ -275,8 +290,8 @@ export default function AgentPage() {
               </div>
             ))}
           </div>
-          <button style={{ ...s.dispatchBtn, background: '#1A73E8', boxShadow: '0 4px 18px rgba(26,115,232,.35)', width: '100%' }} onClick={handleReset}>
-            + Submit Another Ticket
+          <button style={{ ...s.dispatchBtn, background: '#1A73E8', boxShadow: '0 4px 18px rgba(26,115,232,.35)', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }} onClick={handleReset}>
+            <PlusOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} /> Submit Another Ticket
           </button>
         </div>
       </div>
@@ -287,32 +302,34 @@ export default function AgentPage() {
     <div style={s.pageLayout}>
       {/* Unit type selector */}
       <div style={s.card}>
-        <div style={s.cardTitle}>🚒 Select Emergency Unit Type</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 14 }}>
+        <div style={s.cardTitle}><FireOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> Select Emergency Unit Type</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {UNIT_TYPES.map(u => (
             <button key={u.key} onClick={() => handleUnitChange(u.key)} style={{
-              padding: '11px 6px', borderRadius: 10, border: '2px solid',
+              flex: 1, padding: '12px 6px', borderRadius: 10, border: '2px solid',
               cursor: 'pointer', textAlign: 'center', transition: 'all .18s',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
               borderColor: unitType === u.key ? u.borderColor : '#30363D',
               background:  unitType === u.key ? u.bgColor    : '#0D1117',
             }}>
-              <span style={{ fontSize: 22, display: 'block', marginBottom: 3 }}>{u.icon}</span>
+              <span style={{ fontSize: 22, display: 'flex', alignItems: 'center' }}>{u.icon}</span>
               <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', color: unitType === u.key ? u.borderColor : '#8B949E', fontFamily: 'Sora, sans-serif' }}>{u.label}</div>
             </button>
           ))}
         </div>
 
-        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1.5px', color: '#8B949E', marginBottom: 7 }}>Priority Level</div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1.5px', color: '#8B949E', marginBottom: 8 }}>Priority Level</div>
+        <div style={{ display: 'flex', gap: 8 }}>
           {SEVERITIES.map(sv => (
             <button key={sv.key} onClick={() => setSeverity(sv.key)} style={{
-              flex: 1, padding: '7px 4px', borderRadius: 8, border: '1.5px solid', cursor: 'pointer',
+              flex: 1, padding: '8px 4px', borderRadius: 8, border: '1.5px solid', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
               textAlign: 'center', fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
               fontFamily: 'Sora, sans-serif', transition: 'all .15s',
               borderColor: severity === sv.key ? sv.color : '#30363D',
               background:  severity === sv.key ? sv.bg    : '#0D1117',
               color:       severity === sv.key ? sv.color : '#8B949E',
-            }}>{sv.label}</button>
+            }}>{sv.icon}{sv.label}</button>
           ))}
         </div>
       </div>
@@ -330,7 +347,7 @@ export default function AgentPage() {
         <div style={s.cardTitle}>{ucfg?.icon} {ucfg?.label} — Incident Details</div>
 
         {fields.map(field => (
-          <div key={field.id} style={{ marginBottom: 11 }}>
+          <div key={field.id} style={{ marginBottom: 12 }}>
             <label style={{ display: 'block', fontSize: 11, color: '#8B949E', marginBottom: 4, fontWeight: 600 }}>
               {field.label}
               {field.required && <span style={{ color: '#E53935', marginLeft: 2 }}>*</span>}
@@ -340,7 +357,7 @@ export default function AgentPage() {
         ))}
 
         {/* Lat / Lng readonly */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
           <div>
             <label style={{ display: 'block', fontSize: 11, color: '#8B949E', marginBottom: 4, fontWeight: 600 }}>Latitude</label>
             <input readOnly value={pickedLat?.toFixed(6) || ''} placeholder="11.0168" style={{ ...s.input, opacity: .7 }} />
@@ -352,12 +369,12 @@ export default function AgentPage() {
         </div>
 
         {error && (
-          <div style={{ background: 'rgba(229,57,53,.1)', border: '1px solid rgba(229,57,53,.3)', borderRadius: 9, padding: '10px 14px', marginTop: 10, fontSize: 12, color: '#EF5350' }}>
-            ⚠️ {error}
+          <div style={{ background: 'rgba(229,57,53,.1)', border: '1px solid rgba(229,57,53,.3)', borderRadius: 9, padding: '10px 14px', marginTop: 12, fontSize: 12, color: '#EF5350', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <WarningOutlined style={{ fontSize: '14px', verticalAlign: 'middle' }} /> {error}
           </div>
         )}
 
-        <button style={{ ...s.dispatchBtn, ...ucfg && { background: ucfg.borderColor }, marginTop: 14 }} onClick={handleSubmit}>
+        <button style={{ ...s.dispatchBtn, ...ucfg && { background: ucfg.borderColor }, marginTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }} onClick={handleSubmit}>
           {ucfg?.icon} SUBMIT INCIDENT TICKET
         </button>
       </div>

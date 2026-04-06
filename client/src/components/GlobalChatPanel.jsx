@@ -1,43 +1,67 @@
-/**
- * GlobalChatPanel — Floating chat overlay for all dispatched ticket rooms.
- *
- * Features:
- * - Trigger button (rendered in LiveTrackingPage topBar) with animated unread badge
- * - Slides in from right side of the screen as a fixed overlay
- * - Resizable left sidebar listing all Ticket-* Matrix rooms with unread counts
- * - Right pane: InteractionsTab for the selected room
- * - Background sync loop to detect incoming messages per room
- */
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  MessageOutlined, 
+  SearchOutlined, 
+  SendOutlined, 
+  PaperClipOutlined, 
+  MoreOutlined, 
+  InfoCircleOutlined, 
+  CloseOutlined, 
+  SmileOutlined,
+  DoubleLeftOutlined, 
+  DoubleRightOutlined
+} from '@ant-design/icons';
+import { 
+  getAlertHistory, 
+  getAgentTickets, 
+  SYNAPSE_BASE, 
+  getSession 
+} from '../services/api';
 import InteractionsTab from './InteractionsTab';
-import { MdChat, MdSearch, MdClose } from 'react-icons/md';
 
-const SYNAPSE_BASE = 'http://localhost:8008';
-const SEV_COLORS   = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
-const STATUS_CFG   = {
-  pending:    { label: '⏳ Pending',    color: '#F9A825' },
-  dispatched: { label: '🚨 Dispatch',  color: '#1A73E8' },
-  completed:  { label: '✅ Done',      color: '#34A853' },
-  rejected:   { label: '❌ Rejected',  color: '#E53935' },
-  en_route:   { label: '🚑 En Route',  color: '#1A73E8' },
-  on_action:  { label: '⚡ On Action', color: '#FF6D00' },
-  arrived:    { label: '📍 Arrived',   color: '#34A853' },
+// Status styling config
+const STATUS_CFG = {
+  dispatched: { label: 'Dispatched', color: '#E53935' },
+  en_route: { label: 'En Route', color: '#FB8C00' },
+  on_action: { label: 'On Scene', color: '#43A047' },
+  idle: { label: 'Active', color: '#1A73E8' },
+  completed: { label: 'Archived', color: '#8B949E' },
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function getSession() {
-  try { return JSON.parse(localStorage.getItem('dispatcher') || '{}'); } catch { return {}; }
+// Severity colors
+const SEV_COLORS = {
+  CRITICAL: '#E53935',
+  HIGH: '#FB8C00',
+  MEDIUM: '#1A73E8',
+  LOW: '#43A047',
+};
+
+function pickAlertForTicket(ticket, alertHistory) {
+  if (!ticket?.id) return null;
+  const ids = ticket.alertIds || [];
+  const alerts = alertHistory.filter(
+    (a) => a.agentTicketId === ticket.id || ids.includes(a.id)
+  );
+  if (!alerts.length) return null;
+  const rank = { on_action: 4, en_route: 3, dispatched: 2, accepted: 2, pending: 1, completed: 0 };
+  alerts.sort(
+    (a, b) =>
+      (rank[b.status] ?? 0) - (rank[a.status] ?? 0) ||
+      (b.createdAt || 0) - (a.createdAt || 0)
+  );
+  return alerts[0];
 }
-function getAlertHistory() {
-  try { return JSON.parse(localStorage.getItem('alertHistory') || '[]'); } catch { return []; }
-}
-function getAgentTickets() {
-  try { return JSON.parse(localStorage.getItem('agentTickets') || '[]'); } catch { return []; }
+
+function shouldListAgentTicket(ticket, primaryAgentTicketId) {
+  if (!ticket?.id || ticket.status === 'rejected') return false;
+  if (primaryAgentTicketId && ticket.id === primaryAgentTicketId) return true;
+  if (['dispatched', 'en_route', 'on_action'].includes(ticket.status)) return true;
+  if (ticket.status === 'pending' && (ticket.alertIds || []).length > 0) return true;
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trigger button — rendered by LiveTrackingPage inside the topBar
+// Floating trigger component (bubble)
 // ─────────────────────────────────────────────────────────────────────────────
 export function ChatTriggerButton({ open, onClick, unread }) {
   return (
@@ -46,29 +70,41 @@ export function ChatTriggerButton({ open, onClick, unread }) {
       onClick={onClick}
       style={{
         position: 'relative',
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '7px 14px', borderRadius: 9,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 52, height: 52, borderRadius: '50%',
         background: open ? 'rgba(26,115,232,.22)' : '#161B22',
-        border: `1px solid ${open ? 'rgba(26,115,232,.55)' : '#30363D'}`,
+        border: `2px solid ${open ? '#1A73E8' : '#30363D'}`,
         color: open ? '#82B4FF' : '#E6EDF3',
-        fontFamily: 'Sora, sans-serif', fontSize: 12, fontWeight: 700,
-        cursor: 'pointer', transition: 'all .2s',
-        boxShadow: open ? '0 0 14px rgba(26,115,232,.28)' : 'none',
+        cursor: 'pointer', transition: 'all .25s ease',
+        boxShadow: open ? '0 8px 32px rgba(26,115,232,.35)' : '0 4px 12px rgba(0,0,0,.4)',
         pointerEvents: 'auto',
+        outline: 'none',
+      }}
+      onMouseEnter={e => {
+        if (!open) {
+          e.currentTarget.style.borderColor = '#1A73E8';
+          e.currentTarget.style.transform = 'translateY(-2px)';
+        }
+      }}
+      onMouseLeave={e => {
+        if (!open) {
+          e.currentTarget.style.borderColor = '#30363D';
+          e.currentTarget.style.transform = 'translateY(0)';
+        }
       }}
     >
-      <span style={{ fontSize: 14 }}><MdChat /></span>
-      Chat
+      <span style={{ fontSize: 22, display: 'flex' }}><MessageOutlined style={{ verticalAlign: 'middle' }} /></span>
       {unread > 0 && (
         <span style={{
-          position: 'absolute', top: -7, right: -7,
-          minWidth: 18, height: 18, borderRadius: 9,
+          position: 'absolute', top: -4, right: -4,
+          minWidth: 20, height: 20, borderRadius: 10,
           background: '#E53935', color: '#fff',
-          fontSize: 9, fontWeight: 800,
+          fontSize: 10, fontWeight: 900,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: '0 4px', border: '2px solid #0D1117',
+          padding: '0 5px', border: '2px solid #0D1117',
           animation: 'livePulse 1.2s infinite',
           zIndex: 10,
+          boxShadow: '0 0 10px rgba(229,57,53,.4)',
         }}>
           {unread > 99 ? '99+' : unread}
         </span>
@@ -80,28 +116,54 @@ export function ChatTriggerButton({ open, onClick, unread }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Main panel component
 // ─────────────────────────────────────────────────────────────────────────────
-export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
-  const [rooms, setRooms]               = useState([]); // [{roomId, name, ticketId, alertObj}]
+export default function GlobalChatPanel({ open, onClose, onUnreadChange, primaryTicketId, onTicketClick }) {
+  const [rooms, setRooms] = useState([]); // [{roomId, name, ticketId, alertObj}]
   const [selectedRoomId, setSelectedRoomId] = useState(null);
-  const [sidebarWidth, setSidebarWidth]     = useState(270);
-  const [unreadMap, setUnreadMap]           = useState({});  // roomId → count
-  const [loadingRooms, setLoadingRooms]     = useState(false);
-  const [searchQuery, setSearchQuery]       = useState('');
+  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [unreadMap, setUnreadMap] = useState({});  // roomId → count
+  const [loadingRooms, setLoadingRooms] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const abortRef          = useRef(null);
-  const sinceRef          = useRef(null);
-  const selectedRef       = useRef(null);   // mirror of selectedRoomId for closure
-  const isDragging        = useRef(false);
-  const dragStartX        = useRef(0);
-  const dragStartW        = useRef(270);
-  const roomsRef          = useRef([]);     // stable ref for sync closure
+  // Draggable / Resizable State
+  const [panelPos, setPanelPos] = useState({ x: 100, y: 80 });
+  const [panelSize, setPanelSize] = useState({ w: 900, h: 620 });
+  const isDraggingPanel = useRef(false);
+  const dragPanelStart = useRef({ x: 0, y: 0 });
+  const isResizingPanel = useRef(false);
+  const resizePanelStart = useRef({ x: 0, y: 0, w: 0, h: 0 });
 
-  const session     = getSession();
+  const abortRef = useRef(null);
+  const sinceRef = useRef(null);
+  const selectedRef = useRef(null);   // mirror of selectedRoomId for closure
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartW = useRef(250);
+  const roomsRef = useRef([]);     // stable ref for sync closure
+  const prevPrimaryTicketIdRef = useRef(undefined);
+
+  const session = getSession();
   const accessToken = session.accessToken || '';
-  const myUserId    = session.userId || session.user_id || '';
+  const myUserId = session.userId || session.user_id || '';
 
   // ── Keep selectedRef in sync ──────────────────────────────────────────────
   useEffect(() => { selectedRef.current = selectedRoomId; }, [selectedRoomId]);
+
+  // When live-tracking switches incident (primaryTicketId), make that chat the selected + PRIMARY row.
+  useEffect(() => {
+    if (!open || !primaryTicketId) return;
+    const primaryRoom = rooms.find(r => r.ticketId === primaryTicketId);
+    if (!primaryRoom) return;
+    const primaryChanged = prevPrimaryTicketIdRef.current !== primaryTicketId;
+    prevPrimaryTicketIdRef.current = primaryTicketId;
+    const selValid = selectedRoomId && rooms.some(r => r.roomId === selectedRoomId);
+    if (primaryChanged || !selValid) {
+      if (selectedRoomId !== primaryRoom.roomId) {
+        setSelectedRoomId(primaryRoom.roomId);
+        selectedRef.current = primaryRoom.roomId;
+      }
+    }
+  }, [open, primaryTicketId, rooms, selectedRoomId]);
 
   // ── Total unread → propagate to parent ───────────────────────────────────
   useEffect(() => {
@@ -109,67 +171,94 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
     onUnreadChange?.(total);
   }, [unreadMap, onUnreadChange]);
 
-  // ── Load all Ticket-* Matrix rooms ───────────────────────────────────────
+  // ── Load Matrix joined rooms + local agent tickets (virtual rows until Matrix join syncs) ──
   const loadRooms = useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setRooms([]);
+      setLoadingRooms(false);
+      return;
+    }
     setLoadingRooms(true);
+    const alertHistory = getAlertHistory();
+    const agentTickets = getAgentTickets();
+    const ticketIdsSeen = new Set();
+    const list = [];
+
     try {
       const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/v3/joined_rooms`, {
         headers: { 'Authorization': `Bearer ${accessToken}` },
       });
-      if (!res.ok) return;
-      const { joined_rooms = [] } = await res.json();
+      if (res.ok) {
+        const { joined_rooms = [] } = await res.json();
+        console.log('[GlobalChatPanel] joined_rooms found:', joined_rooms.length);
 
-      const alertHistory = getAlertHistory();
-      const agentTickets = getAgentTickets();
-      const list = [];
-
-      for (const roomId of joined_rooms) {
-        try {
-          // Optimization: Fetch room name ONLY if we don't have a better label
-          // and use a very fast state fetch.
-          const stRes = await fetch(
-            `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
-            { headers: { 'Authorization': `Bearer ${accessToken}` } }
-          );
-          let roomName = '';
-          if (stRes.ok) {
-            const stData = await stRes.json();
-            roomName = stData.name || '';
-          }
-
-          // If no name found, try to resolve via canonical alias (very common for ticket rooms)
-          if (!roomName) {
-            const aliasRes = await fetch(
-              `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.canonical_alias`,
+        for (const roomId of joined_rooms) {
+          try {
+            const stRes = await fetch(
+              `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`,
               { headers: { 'Authorization': `Bearer ${accessToken}` } }
             );
-            if (aliasRes.ok) {
-              const aliasData = await aliasRes.json();
-              roomName = aliasData.alias || '';
+
+            let roomName = '';
+            if (stRes.ok) {
+              const stateEvents = await stRes.json();
+              const nameEv = stateEvents.find(e => e.type === 'm.room.name');
+              const aliasEv = stateEvents.find(e => e.type === 'm.room.canonical_alias');
+              roomName = nameEv?.content?.name || aliasEv?.content?.alias || '';
             }
+
+            console.log(`[GlobalChatPanel] DEBUG: Processing room ${roomId}. Found name: "${roomName}"`);
+
+            const ticketId = roomName.replace(/^Ticket-/, '').replace(/#/, '').split(':')[0] || roomId;
+
+            const alertObj = alertHistory.find(a => a.id === ticketId || a.id === roomId) || null;
+            const ticketObj = agentTickets.find(t =>
+              t.id === ticketId || t.id === roomId || (t.alertIds || []).includes(ticketId) || (t.alertIds || []).includes(roomId)
+            ) || null;
+
+            const resolvedAlert = alertObj || (ticketObj ? pickAlertForTicket(ticketObj, alertHistory) : null);
+
+            if (resolvedAlert) console.log(`[GlobalChatPanel] SUCCESS: Matched alert ${resolvedAlert.name} for ticket ${ticketId}`);
+            else if (ticketObj) console.log(`[GlobalChatPanel] SUCCESS: Matched ticket for room ${roomId}`);
+            else console.log(`[GlobalChatPanel] WARN: No local ticket match for ${roomId} / ${ticketId}`);
+
+            list.push({
+              roomId,
+              name: roomName || roomId,
+              ticketId,
+              alertObj: resolvedAlert,
+              ticketObj,
+              virtual: false,
+            });
+            ticketIdsSeen.add(ticketId);
+          } catch (e) {
+            console.warn('[GlobalChatPanel] Failed to load room details:', roomId, e.message);
           }
-
-          // If still no name, use roomId as fallback
-          if (!roomName) roomName = roomId;
-          
-          if (!roomName.includes('Ticket-') && !roomId.includes('Ticket-')) continue;
-
-          // "Ticket-TICKET-xxx-yyy" → "TICKET-xxx-yyy"
-          const ticketId = roomName.replace(/^Ticket-/, '').replace(/#/, '').split(':')[0] || roomId;
-
-          // Try to find matching alert / ticket
-          const alertObj = alertHistory.find(a => a.id === ticketId) || null;
-          const ticketObj = agentTickets.find(t =>
-            t.id === ticketId || (t.alertIds || []).includes(ticketId)
-          ) || null;
-
-          list.push({ roomId, name: roomName, ticketId, alertObj, ticketObj });
-        } catch { /* skip rooms we can't read */ }
+        }
+      } else {
+        console.warn('[GlobalChatPanel] joined_rooms request failed:', res.status);
       }
 
-      // Sort: dispatched/active first, then by creation order
+      for (const t of agentTickets) {
+        if (!shouldListAgentTicket(t, primaryTicketId)) continue;
+        if (ticketIdsSeen.has(t.id)) continue;
+        ticketIdsSeen.add(t.id);
+        const alertObj = pickAlertForTicket(t, alertHistory);
+        list.push({
+          roomId: `virtual:${t.id}`,
+          name: `Ticket-${t.id}`,
+          ticketId: t.id,
+          alertObj,
+          ticketObj: t,
+          virtual: true,
+        });
+      }
+
       list.sort((a, b) => {
+        if (primaryTicketId) {
+          if (a.ticketId === primaryTicketId) return -1;
+          if (b.ticketId === primaryTicketId) return 1;
+        }
         const aActive = ['dispatched', 'en_route', 'on_action'].includes(a.alertObj?.status);
         const bActive = ['dispatched', 'en_route', 'on_action'].includes(b.alertObj?.status);
         if (aActive && !bActive) return -1;
@@ -180,16 +269,26 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
       setRooms(list);
       roomsRef.current = list;
 
-      // Auto-select first room if none selected
+      const sel = selectedRef.current;
+      if (sel?.startsWith?.('virtual:')) {
+        const tid = sel.slice('virtual:'.length);
+        const real = list.find(r => !r.virtual && r.ticketId === tid);
+        if (real) {
+          setSelectedRoomId(real.roomId);
+          selectedRef.current = real.roomId;
+        }
+      }
+
       if (!selectedRef.current && list.length > 0) {
-        setSelectedRoomId(list[0].roomId);
-        selectedRef.current = list[0].roomId;
+        const initial = list.find(r => r.ticketId === primaryTicketId) || list[0];
+        setSelectedRoomId(initial.roomId);
+        selectedRef.current = initial.roomId;
       }
     } catch (e) {
       console.error('[GlobalChatPanel] loadRooms error:', e);
     }
     setLoadingRooms(false);
-  }, [accessToken]);
+  }, [accessToken, primaryTicketId]);
 
   // ── Background sync for unread counts ────────────────────────────────────
   const startSync = useCallback(() => {
@@ -218,8 +317,7 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
           const delta = {};
 
           for (const [roomId, roomData] of Object.entries(joinedRooms)) {
-            // Only count messages from OTHER users in rooms we track
-            const trackedRoom = roomsRef.current.find(r => r.roomId === roomId);
+            const trackedRoom = roomsRef.current.find(r => r.roomId === roomId && !r.virtual);
             if (!trackedRoom) continue;
 
             const events = roomData.timeline?.events || [];
@@ -268,9 +366,11 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
     const refresh = () => loadRooms();
     window.addEventListener('alertHistoryChange', refresh);
     window.addEventListener('agentTicketsChange', refresh);
+    window.addEventListener('matrixTicketRoomReady', refresh);
     return () => {
       window.removeEventListener('alertHistoryChange', refresh);
       window.removeEventListener('agentTicketsChange', refresh);
+      window.removeEventListener('matrixTicketRoomReady', refresh);
     };
   }, [loadRooms]);
 
@@ -283,7 +383,52 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
       delete next[roomId];
       return next;
     });
-  }, []);
+
+    // Notify parent to sync Live Tracking
+    const room = roomsRef.current.find(r => r.roomId === roomId);
+    if (room?.ticketId && room.ticketId !== primaryTicketId) {
+      const alertId = room.alertObj?.id || room.ticketObj?.alertIds?.[0];
+      if (alertId) onTicketClick?.(alertId);
+    }
+  }, [onTicketClick, primaryTicketId]);
+
+  // ── Panel Draggable Logic ────────────────────────────────────────────────
+  const onPanelDragStart = useCallback((e) => {
+    if (e.target.closest('button')) return; // ignore buttons
+    isDraggingPanel.current = true;
+    dragPanelStart.current = { x: e.clientX - panelPos.x, y: e.clientY - panelPos.y };
+    const onMove = (ev) => {
+      if (!isDraggingPanel.current) return;
+      setPanelPos({ x: ev.clientX - dragPanelStart.current.x, y: ev.clientY - dragPanelStart.current.y });
+    };
+    const onUp = () => {
+      isDraggingPanel.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [panelPos]);
+
+  // ── Panel Resizable Logic ────────────────────────────────────────────────
+  const onPanelResizeStart = useCallback((e) => {
+    e.stopPropagation();
+    isResizingPanel.current = true;
+    resizePanelStart.current = { x: e.clientX, y: e.clientY, w: panelSize.w, h: panelSize.h };
+    const onMove = (ev) => {
+      if (!isResizingPanel.current) return;
+      const dw = ev.clientX - resizePanelStart.current.x;
+      const dh = ev.clientY - resizePanelStart.current.y;
+      setPanelSize({ w: Math.max(600, resizePanelStart.current.w + dw), h: Math.max(400, resizePanelStart.current.h + dh) });
+    };
+    const onUp = () => {
+      isResizingPanel.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [panelSize]);
 
   // ── Sidebar resize drag ───────────────────────────────────────────────────
   const onDragStart = useCallback((e) => {
@@ -308,54 +453,64 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
   const filteredRooms = rooms.filter(r => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    const name = (r.alertObj?.name || r.name || '').toLowerCase();
-    const addr = (r.alertObj?.address || '').toLowerCase();
+    const name = (r.alertObj?.name || r.ticketObj?.name || r.name || '').toLowerCase();
+    const addr = (r.alertObj?.address || r.ticketObj?.address || '').toLowerCase();
     const tid = (r.ticketId || '').toLowerCase();
     return name.includes(q) || addr.includes(q) || tid.includes(q);
   });
 
   const selectedRoom = rooms.find(r => r.roomId === selectedRoomId);
-  const totalUnread  = Object.values(unreadMap).reduce((a, b) => a + b, 0);
+  const totalUnread = Object.values(unreadMap).reduce((a, b) => a + b, 0);
 
   if (!open) return null;
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 250,
-      display: 'flex', alignItems: 'stretch',
-      pointerEvents: 'none',
-    }}>
+    <div 
+      id="chat-modal-root"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 250,
+        display: 'flex', alignItems: 'stretch',
+        pointerEvents: 'none',
+      }}
+    >
       {/* ── Backdrop ── */}
       <div
         onClick={onClose}
         style={{
           position: 'absolute', inset: 0,
-          background: 'rgba(0,0,0,.45)',
-          backdropFilter: 'blur(2px)',
+          background: 'rgba(0,0,0,.3)',
           pointerEvents: 'auto',
         }}
       />
 
-      {/* ── Panel ── */}
-      <div style={{
-        position: 'absolute', top: 0, right: 0, bottom: 0,
-        width: 'clamp(560px, 78vw, 1140px)',
-        background: '#0D1117',
-        borderLeft: '1px solid #30363D',
-        borderRadius: '18px 0 0 18px',
-        display: 'flex', flexDirection: 'column',
-        boxShadow: '-12px 0 60px rgba(0,0,0,.75)',
-        pointerEvents: 'auto',
-        overflow: 'hidden',
-        animation: 'slideInRight .22s cubic-bezier(.22,1,.36,1)',
-      }}>
-
-        {/* Panel header */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '13px 18px', borderBottom: '1px solid #30363D',
-          background: '#161B22', flexShrink: 0,
-        }}>
+      {/* ── Draggable/Resizable Panel ── */}
+      <div 
+        id="chat-modal-panel"
+        style={{
+          position: 'absolute',
+          transform: `translate(${panelPos.x}px, ${panelPos.y}px)`,
+          width: panelSize.w,
+          height: panelSize.h,
+          background: '#0D1117',
+          border: '1px solid #30363D',
+          borderRadius: 16,
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 24px 64px rgba(0,0,0,.85)',
+          pointerEvents: 'auto',
+          overflow: 'hidden',
+          animation: 'modalPop .2s cubic-bezier(.34,1.56,.64,1)',
+        }}
+      >
+        {/* Panel header (Drag Handle) */}
+        <div 
+          onMouseDown={onPanelDragStart}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '12px 18px', borderBottom: '1px solid #30363D',
+            background: '#161B22', flexShrink: 0,
+            cursor: 'grab', userSelect: 'none',
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
               width: 32, height: 32, borderRadius: 8,
@@ -364,7 +519,7 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
               alignItems: 'center', justifyContent: 'center',
               fontSize: 18,
             }}>
-              <MdChat />
+              <MessageOutlined style={{ verticalAlign: 'middle' }} />
             </div>
             <div>
               <div style={{ fontFamily: 'Sora, sans-serif', fontWeight: 800, fontSize: 14, color: '#E6EDF3' }}>
@@ -391,41 +546,47 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
             onMouseEnter={e => { e.currentTarget.style.background = 'rgba(229,57,53,.15)'; e.currentTarget.style.color = '#E53935'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'rgba(139,148,158,.1)'; e.currentTarget.style.color = '#8B949E'; }}
           >
-            ✕ Close
+            ✕
           </button>
         </div>
 
         {/* Body: sidebar + chat */}
-        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-
-          {/* ── Room list sidebar ── */}
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0, position: 'relative' }}>
+          {/* Sidebar */}
           <div style={{
-            width: sidebarWidth, flexShrink: 0,
-            background: '#161B22',
-            borderRight: '1px solid #30363D',
-            display: 'flex', flexDirection: 'column',
+            width: sidebarCollapsed ? 0 : sidebarWidth, 
+            flexShrink: 0,
+            background: '#161B22', borderRight: sidebarCollapsed ? 'none' : '1px solid #30363D',
+            display: 'flex', flexDirection: 'column', 
             overflow: 'hidden',
+            transition: 'width .2s cubic-bezier(.4, 0, .2, 1)',
           }}>
-            {/* Sidebar header */}
-            <div style={{
-              padding: '10px 14px 8px',
-              borderBottom: '1px solid rgba(48,54,61,.6)',
-              flexShrink: 0,
+            <div style={{ 
+              padding: '10px 14px 8px', borderBottom: '1px solid rgba(48,54,61,.6)', 
+              flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' 
             }}>
-              <div style={{
-                fontSize: 9, fontWeight: 700, color: '#8B949E',
-                textTransform: 'uppercase', letterSpacing: 1, marginBottom: 3,
-              }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: '#8B949E', textTransform: 'uppercase', letterSpacing: 1 }}>
                 Ticket Rooms
               </div>
-              <div style={{ fontSize: 10, color: '#8B949E', marginBottom: 10 }}>
-                {loadingRooms ? 'Loading…' : `${filteredRooms.length} of ${rooms.length} rooms`}
-              </div>
-
-              {/* Search Bar */}
+              <button 
+                onClick={() => setSidebarCollapsed(true)}
+                style={{ 
+                  background: 'rgba(255,255,255,.05)', border: 'none', color: '#8B949E', 
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 24, height: 24, borderRadius: 6, transition: 'all .15s'
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.1)'; e.currentTarget.style.color = '#E6EDF3'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.05)'; e.currentTarget.style.color = '#8B949E'; }}
+                title="Collapse sidebar"
+              >
+                <DoubleLeftOutlined style={{ fontSize: '16px' }} />
+              </button>
+            </div>
+            
+            <div style={{ padding: '8px 14px', flexShrink: 0 }}>
               <div style={{ position: 'relative' }}>
                 <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, opacity: 0.5, display: 'flex', color: '#8B949E' }}>
-                  <MdSearch />
+                  <SearchOutlined style={{ verticalAlign: 'middle' }} />
                 </span>
                 <input
                   type="text"
@@ -433,222 +594,128 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange }) {
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   style={{
-                    width: '100%',
-                    background: '#0D1117',
-                    border: '1px solid #30363D',
-                    borderRadius: 8,
-                    padding: '7px 10px 7px 30px',
-                    fontSize: 11,
-                    color: '#E6EDF3',
-                    fontFamily: 'Sora, sans-serif',
-                    outline: 'none',
-                    transition: 'border-color .15s',
+                    width: '100%', background: '#0D1117', border: '1px solid #30363D', borderRadius: 8,
+                    padding: '7px 10px 7px 30px', fontSize: 11, color: '#E6EDF3', outline: 'none',
                   }}
-                  onFocus={e => e.currentTarget.style.borderColor = '#1A73E8'}
-                  onBlur={e => e.currentTarget.style.borderColor = '#30363D'}
                 />
               </div>
             </div>
 
-            {/* Room list */}
             <div style={{ flex: 1, overflowY: 'auto' }}>
-              {filteredRooms.length === 0 && !loadingRooms && (
-                <div style={{
-                  padding: '24px 16px', textAlign: 'center',
-                  color: '#8B949E', fontSize: 11,
-                }}>
-                  <div style={{ fontSize: 28, opacity: .2, marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
-                    <MdSearch />
-                  </div>
-                  <div style={{ fontWeight: 700 }}>No matches found</div>
-                  <div style={{ opacity: .7, marginTop: 4 }}>Try a different search term</div>
-                </div>
-              )}
               {filteredRooms.map(room => {
                 const isSelected = room.roomId === selectedRoomId;
-                const unread     = unreadMap[room.roomId] || 0;
-                const alert      = room.alertObj;
-                const stCfg      = STATUS_CFG[alert?.status] || STATUS_CFG.dispatched;
-                const sevColor   = SEV_COLORS[alert?.severity] || '#8B949E';
-                const initials   = (alert?.name || room.ticketId).slice(0, 2).toUpperCase();
+                const isPrimary = room.ticketId === primaryTicketId;
+                const unread = unreadMap[room.roomId] || 0;
+                const alert = room.alertObj;
+                const stCfg = STATUS_CFG[alert?.status] || STATUS_CFG.dispatched;
+                const sevColor = SEV_COLORS[alert?.severity] || '#8B949E';
+                const initials = (alert?.name || room.ticketObj?.name || room.ticketId).slice(0, 2).toUpperCase();
 
                 return (
-                  <div
-                    key={room.roomId}
-                    onClick={() => selectRoom(room.roomId)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '10px 12px', cursor: 'pointer',
-                      background: isSelected
-                        ? 'linear-gradient(90deg, rgba(26,115,232,.18) 0%, rgba(26,115,232,.08) 100%)'
-                        : 'transparent',
-                      borderLeft: `3px solid ${isSelected ? '#1A73E8' : 'transparent'}`,
-                      borderBottom: '1px solid rgba(48,54,61,.35)',
-                      transition: 'background .15s',
-                    }}
-                    onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(48,54,61,.3)'; }}
-                    onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
-                  >
-                    {/* Avatar */}
-                    <div style={{
-                      width: 36, height: 36, borderRadius: 10, flexShrink: 0,
-                      background: `linear-gradient(135deg, ${sevColor}44, ${sevColor}22)`,
-                      border: `1.5px solid ${sevColor}55`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 12, fontWeight: 800, color: sevColor,
-                      fontFamily: 'Sora, sans-serif',
-                    }}>
-                      {initials}
-                    </div>
-
-                    {/* Info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontSize: 11, fontWeight: 700,
-                        color: isSelected ? '#82B4FF' : '#E6EDF3',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {alert?.name || room.ticketId}
-                      </div>
-                      <div style={{
-                        fontSize: 9, color: '#8B949E', marginTop: 2,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {alert?.address || room.name}
-                      </div>
-                      {alert && (
-                        <div style={{ display: 'flex', gap: 5, marginTop: 3, alignItems: 'center' }}>
-                          <span style={{
-                            fontSize: 7, fontWeight: 800, textTransform: 'uppercase',
-                            padding: '1px 5px', borderRadius: 4,
-                            background: `${sevColor}18`, color: sevColor,
-                          }}>
-                            {alert.severity}
-                          </span>
-                          <span style={{
-                            fontSize: 7, fontWeight: 800,
-                            color: stCfg.color, opacity: .85,
-                          }}>
-                            {stCfg.label}
-                          </span>
-                        </div>
+                  <React.Fragment key={room.roomId}>
+                    <div
+                      onClick={() => selectRoom(room.roomId)}
+                      style={{
+                        position: 'relative', display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '12px 12px', cursor: 'pointer', borderBottom: '1px solid rgba(48,54,61,.35)',
+                        background: isPrimary ? 'rgba(52,168,83,.08)' : (isSelected ? 'rgba(26,115,232,.1)' : 'transparent'),
+                        borderLeft: `3px solid ${isPrimary ? '#34A853' : (isSelected ? '#1A73E8' : 'transparent')}`,
+                      }}
+                    >
+                      {isPrimary && (
+                        <div style={{ position: 'absolute', top: 4, right: 8, fontSize: 8, fontWeight: 900, color: '#34A853', textTransform: 'uppercase' }}>Primary</div>
                       )}
+                      <div style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, background: `linear-gradient(135deg, ${sevColor}44, ${sevColor}22)`, border: `1.5px solid ${sevColor}55`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, color: sevColor }}>
+                        {initials}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: isSelected ? '#82B4FF' : '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {alert?.name || room.ticketObj?.name || room.ticketId}
+                        </div>
+                        <div style={{ fontSize: 9, color: '#8B949E', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {alert?.address || room.ticketObj?.address || room.name}
+                        </div>
+                      </div>
+                      {unread > 0 && <div style={{ minWidth: 18, height: 18, borderRadius: 9, background: '#1A73E8', color: '#fff', fontSize: 9, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>{unread}</div>}
                     </div>
-
-                    {/* Unread badge */}
-                    {unread > 0 && (
-                      <div style={{
-                        minWidth: 18, height: 18, borderRadius: 9,
-                        background: '#1A73E8', color: '#fff',
-                        fontSize: 9, fontWeight: 800, flexShrink: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        padding: '0 4px', boxShadow: '0 0 8px rgba(26,115,232,.5)',
-                        animation: 'livePulse 1.5s infinite',
-                      }}>
-                        {unread > 99 ? '99+' : unread}
+                    {isPrimary && rooms.length > 1 && (
+                      <div style={{ padding: '4px 12px', background: 'rgba(48,54,61,.2)', borderBottom: '1px solid #30363D', fontSize: 8, fontWeight: 700, color: '#8B949E', display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ flex: 1, height: 1, background: 'rgba(48,54,61,.4)' }} />
+                          OTHER CHATS
+                          <div style={{ flex: 1, height: 1, background: 'rgba(48,54,61,.4)' }} />
                       </div>
                     )}
-                  </div>
+                  </React.Fragment>
                 );
               })}
             </div>
           </div>
 
-          {/* ── Resize handle ── */}
-          <div
-            onMouseDown={onDragStart}
-            style={{
-              width: 5, cursor: 'col-resize', flexShrink: 0,
-              background: 'transparent', transition: 'background .2s',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#1A73E8'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-          />
+            {/* Sidebar Resizer */}
+            {!sidebarCollapsed && (
+              <div 
+                onMouseDown={onDragStart} 
+                style={{ 
+                  width: 4, cursor: 'col-resize', background: 'transparent',
+                  transition: 'background .2s',
+                  zIndex: 2,
+                }} 
+                onMouseEnter={e => e.target.style.background = '#1A73E888'}
+                onMouseLeave={e => e.target.style.background = 'transparent'}
+              />
+            )}
 
-          {/* ── Chat area ── */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-            {!selectedRoom ? (
+            {/* Vertical strip if collapsed */}
+            {sidebarCollapsed && (
               <div style={{
-                flex: 1, display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center',
-                color: '#8B949E', gap: 12,
+                width: 32, flexShrink: 0, background: '#0D1117', borderRight: '1px solid #30363D',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 10
               }}>
-                <div style={{ fontSize: 52, opacity: .15 }}>💬</div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: '#E6EDF3' }}>Select a ticket room</div>
-                <div style={{ fontSize: 11, opacity: .6, textAlign: 'center', maxWidth: 240 }}>
-                  Choose a room from the sidebar to view the chat for that dispatched ticket
-                </div>
+                <button
+                  onClick={() => setSidebarCollapsed(false)}
+                  style={{
+                    width: 24, height: 24, background: 'rgba(255,255,255,.05)', border: 'none', borderRadius: 6,
+                    color: '#8B949E', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', transition: 'all .15s'
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.1)'; e.currentTarget.style.color = '#E6EDF3'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.05)'; e.currentTarget.style.color = '#8B949E'; }}
+                  title="Expand sidebar"
+                >
+                  <DoubleRightOutlined style={{ fontSize: '16px' }} />
+                </button>
               </div>
-            ) : (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                {/* Room header */}
-                <div style={{
-                  padding: '10px 16px', borderBottom: '1px solid #30363D',
-                  background: '#161B22', flexShrink: 0,
-                  display: 'flex', alignItems: 'center', gap: 10,
-                }}>
-                  {selectedRoom.alertObj && (
-                    <>
-                      <div style={{
-                        width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-                        background: `${SEV_COLORS[selectedRoom.alertObj.severity] || '#8B949E'}22`,
-                        border: `1.5px solid ${SEV_COLORS[selectedRoom.alertObj.severity] || '#8B949E'}44`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 14,
-                      }}>
-                        🚑
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {selectedRoom.alertObj.name || selectedRoom.ticketId}
-                        </div>
-                        <div style={{ fontSize: 10, color: '#8B949E', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {selectedRoom.alertObj.address || '—'}
-                          {selectedRoom.alertObj.severity && (
-                            <span style={{ marginLeft: 6, color: SEV_COLORS[selectedRoom.alertObj.severity] || '#8B949E', fontWeight: 700, textTransform: 'uppercase' }}>
-                              · {selectedRoom.alertObj.severity}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{
-                        fontSize: 9, fontWeight: 800, padding: '3px 8px', borderRadius: 6,
-                        background: `${STATUS_CFG[selectedRoom.alertObj.status]?.color || '#8B949E'}18`,
-                        color: STATUS_CFG[selectedRoom.alertObj.status]?.color || '#8B949E',
-                        border: `1px solid ${STATUS_CFG[selectedRoom.alertObj.status]?.color || '#8B949E'}33`,
-                        flexShrink: 0,
-                      }}>
-                        {STATUS_CFG[selectedRoom.alertObj.status]?.label || '—'}
-                      </div>
-                    </>
-                  )}
-                  {!selectedRoom.alertObj && (
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#E6EDF3' }}>
-                      {selectedRoom.name}
-                    </div>
-                  )}
-                </div>
+            )}
 
-                {/* InteractionsTab for this room */}
-                <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                  <InteractionsTab
-                    key={selectedRoom.roomId}
-                    ticketId={selectedRoom.ticketId}
-                    alertObj={selectedRoom.alertObj}
-                  />
-                </div>
-              </div>
+            {/* Chat Area */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+            {!selectedRoom ? (
+               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8B949E' }}>Select a ticket room</div>
+            ) : (
+               <InteractionsTab key={selectedRoom.ticketId} ticketId={selectedRoom.ticketId} alertObj={selectedRoom.alertObj} />
             )}
           </div>
         </div>
+
+        {/* Resize Handle */}
+        <div 
+          onMouseDown={onPanelResizeStart}
+          style={{
+            position: 'absolute', bottom: 0, right: 0, width: 20, height: 20,
+            cursor: 'nwse-resize', zIndex: 10, pointerEvents: 'auto',
+            background: 'linear-gradient(135deg, transparent 50%, rgba(48,54,61,.5) 50%)',
+          }}
+        />
       </div>
 
-      {/* ── Slide-in animation ── */}
       <style>{`
-        @keyframes slideInRight {
-          from { transform: translateX(100%); opacity: 0; }
-          to   { transform: translateX(0);    opacity: 1; }
+        @keyframes modalPop {
+          from { transform: translate(${panelPos.x}px, ${panelPos.y}px) scale(.92); opacity: 0; }
+          to   { transform: translate(${panelPos.x}px, ${panelPos.y}px) scale(1);   opacity: 1; }
+        }
+        @keyframes livePulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.1); opacity: 0.8; }
         }
       `}</style>
     </div>

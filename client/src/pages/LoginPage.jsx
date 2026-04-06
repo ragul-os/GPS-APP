@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { 
+  AlertOutlined, 
+  UserOutlined, 
+  LockOutlined, 
+  LockFilled, 
+  EyeOutlined, 
+  EyeInvisibleOutlined, 
+  WarningOutlined, 
+  CheckOutlined 
+} from '@ant-design/icons';
 
 export default function LoginPage() {
   const { login, dispatcher } = useAuth();
@@ -82,7 +92,7 @@ export default function LoginPage() {
       {/* ── Top bar ───────────────────────────────────────────────── */}
       <div style={s.topBar}>
         <div style={s.topBarLeft}>
-          <span style={{ fontSize: 16 }}>🚨</span>
+          <AlertOutlined style={{ color: "#ef4444", fontSize: '16px', verticalAlign: 'middle' }} />
           <span style={s.topBarTitle}>Emergency Control System</span>
         </div>
         <div style={s.topBarRight}>
@@ -100,7 +110,7 @@ export default function LoginPage() {
 
           {/* Title block — sits ABOVE the card */}
           <div style={s.titleBlock}>
-            <span style={s.titleIcon}>🚨</span>
+            <AlertOutlined style={{ color: "#ef4444", fontSize: '28px', verticalAlign: 'middle' }} />
             <div>
               <div style={s.titleMain}>EMERGENCY CONTROL SYSTEM</div>
               <div style={s.titleSub}>Dispatcher Access Portal — Authorised Personnel Only</div>
@@ -135,7 +145,7 @@ export default function LoginPage() {
                                  : active ? "2px solid #ef4444" : "2px solid #334155",
                       boxShadow:   active ? "0 0 12px rgba(239,68,68,0.6)" : "none",
                     }}>
-                      {done ? "✓" : i + 1}
+                      {done ? <CheckOutlined style={{ fontSize: '12px' }} /> : i + 1}
                     </div>
                     <span style={{
                       ...s.stepLabel,
@@ -161,7 +171,7 @@ export default function LoginPage() {
             {/* Error banner */}
             {error && (
               <div style={s.errorBanner}>
-                <span style={{ marginRight: 8, fontSize: 13 }}>⚠</span>
+                <WarningOutlined style={{ marginRight: 8, fontSize: 13, color: "#ef4444" }} />
                 {error}
               </div>
             )}
@@ -175,7 +185,7 @@ export default function LoginPage() {
                   USER NAME <span style={s.asterisk}>*</span>
                 </label>
                 <div style={s.inputRow}>
-                  <span style={s.inputIcon}>👤</span>
+                  <span style={s.inputIcon}><UserOutlined style={{ color: "#475569" }} /></span>
                   <input
                     style={s.input}
                     type="text"
@@ -196,7 +206,7 @@ export default function LoginPage() {
                   PASSWORD <span style={s.asterisk}>*</span>
                 </label>
                 <div style={s.inputRow}>
-                  <span style={s.inputIcon}>🔒</span>
+                  <span style={s.inputIcon}><LockOutlined style={{ color: "#475569" }} /></span>
                   <input
                     ref={passwordRef}
                     style={{ ...s.input, paddingRight: 44 }}
@@ -213,7 +223,7 @@ export default function LoginPage() {
                     style={s.eyeBtn}
                     tabIndex={-1}
                   >
-                    {showPass ? "🙈" : "👁"}
+                    {showPass ? <EyeInvisibleOutlined style={{ fontSize: '14px' }} /> : <EyeOutlined style={{ fontSize: '14px' }} />}
                   </button>
                 </div>
               </div>
@@ -238,7 +248,7 @@ export default function LoginPage() {
                   </>
                 ) : (
                   <>
-                    <span>🔐</span>
+                    <LockFilled style={{ fontSize: '16px', verticalAlign: 'middle' }} />
                     SIGN IN TO CONTROL SYSTEM
                   </>
                 )}

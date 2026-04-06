@@ -1,12 +1,24 @@
-const SYNAPSE_BASE = "http://localhost:8008";
-const ADMIN_TOKEN = "syt_YWRtaW4x_ORxyHHzfMxvFIQxGouDM_0bUXx3";
+import {
+  SYNAPSE_BASE_URL as SYNAPSE_BASE,
+  SYNAPSE_ADMIN_TOKEN as ADMIN_TOKEN,
+  matrixUserId,
+} from '../config/apiConfig';
+
+/** Localpart only — Synapse expects this for m.id.user (not full @user:server). */
+function toLoginLocalpart(input) {
+  const s = (input || '').trim();
+  if (!s.startsWith('@')) return s;
+  const rest = s.slice(1);
+  const i = rest.indexOf(':');
+  return i === -1 ? rest : rest.slice(0, i);
+}
 
 // ── 1. Check if user exists (admin API) ──────────────────────────────────────
 export async function userExists(username) {
   console.log("[Matrix] Checking userExists:", username);
 
   const res = await fetch(
-    `${SYNAPSE_BASE}/_synapse/admin/v2/users/@${username}:localhost`,
+    `${SYNAPSE_BASE}/_synapse/admin/v2/users/${encodeURIComponent(matrixUserId(username))}`,
     {
       headers: { "Authorization": `Bearer ${ADMIN_TOKEN}` }
     }
@@ -20,13 +32,16 @@ export async function userExists(username) {
 export async function matrixLogin(username, password) {
   console.log("[Matrix] matrixLogin attempt for:", username);
 
+  const localpart = toLoginLocalpart(username);
+
   const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/v3/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       type: "m.login.password",
-      user: username,
+      identifier: { type: "m.id.user", user: localpart },
       password,
+      initial_device_display_name: "GPS Dispatch",
     }),
   });
 
@@ -45,7 +60,7 @@ export async function createSynapseUser(username, password) {
   console.log("[Matrix] createSynapseUser:", username);
 
   const res = await fetch(
-    `${SYNAPSE_BASE}/_synapse/admin/v2/users/@${username}:localhost`,
+    `${SYNAPSE_BASE}/_synapse/admin/v2/users/${encodeURIComponent(matrixUserId(username))}`,
     {
       method: "PUT",
       headers: {
@@ -178,16 +193,10 @@ export async function getRoomMessages(accessToken, roomId, from = null, limit = 
 }
 
 // ── 10. Sync — mandatory HTTP/2 long-polling via native fetch ─────────────────
-// Uses native fetch() directly so the browser can negotiate HTTP/2 automatically.
-// HTTP/2 requires TLS. For plain HTTP (localhost:8008) the browser falls back to HTTP/1.1.
-// No Connection header / keepalive override — browser/server negotiate freely.
 export async function sync(accessToken, since = null, signal = null) {
   const params = new URLSearchParams({ timeout: '20000' });
   if (since) params.set('since', since);
-  // Warn once if server is plain HTTP (cannot do HTTP/2 in browsers without TLS)
-  if (!SYNAPSE_BASE.startsWith('https')) {
-    console.warn('[MatrixService] Warning: Server did not negotiate HTTP/2 for sync. Falling back to HTTP/1.1. (HTTP/2 requires HTTPS/TLS)');
-  }
+
   // HTTP/2: Using native fetch() — browser negotiates HTTP/2 automatically when TLS is available
   const fetchOpts = { method: 'GET', headers: { 'Authorization': `Bearer ${accessToken}` } };
   if (signal) fetchOpts.signal = signal;

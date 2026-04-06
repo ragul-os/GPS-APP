@@ -1,24 +1,34 @@
 import React from 'react';
+import { 
+  MedicineBoxOutlined, 
+  FireOutlined, 
+  SafetyOutlined, 
+  AlertOutlined, 
+  WarningOutlined, 
+  ExclamationCircleOutlined,
+  ClockCircleOutlined,
+  CheckCircleOutlined
+} from '@ant-design/icons';
 
 const UNIT_TYPES = [
-  { key: 'ambulance', icon: '🚑', label: 'Ambulance', borderColor: '#E53935', bgColor: 'rgba(229,57,53,.07)' },
-  { key: 'fire',      icon: '🚒', label: 'Fire',      borderColor: '#FF6D00', bgColor: 'rgba(255,109,0,.07)' },
-  { key: 'police',    icon: '🚔', label: 'Police',    borderColor: '#5C9CE5', bgColor: 'rgba(21,101,192,.1)' },
-  { key: 'rescue',    icon: '🚁', label: 'Rescue',    borderColor: '#9C27B0', bgColor: 'rgba(156,39,176,.07)' },
-  { key: 'hazmat',    icon: '☢️',  label: 'Hazmat',    borderColor: '#F57F17', bgColor: 'rgba(245,127,23,.07)' },
+  { key: 'ambulance', icon: <MedicineBoxOutlined style={{ fontSize: '22px', verticalAlign: 'middle' }} />, label: 'Ambulance', borderColor: '#E53935', bgColor: 'rgba(229,57,53,.07)' },
+  { key: 'fire',      icon: <FireOutlined style={{ fontSize: '22px', verticalAlign: 'middle' }} />, label: 'Fire',      borderColor: '#FF6D00', bgColor: 'rgba(255,109,0,.07)' },
+  { key: 'police',    icon: <SafetyOutlined style={{ fontSize: '22px', verticalAlign: 'middle' }} />, label: 'Police',    borderColor: '#5C9CE5', bgColor: 'rgba(21,101,192,.1)' },
+  { key: 'rescue',    icon: <AlertOutlined style={{ fontSize: '22px', verticalAlign: 'middle' }} />, label: 'Rescue',    borderColor: '#9C27B0', bgColor: 'rgba(156,39,176,.07)' },
+  { key: 'hazmat',    icon: <WarningOutlined style={{ fontSize: '22px', verticalAlign: 'middle' }} />,  label: 'Hazmat',    borderColor: '#F57F17', bgColor: 'rgba(245,127,23,.07)' },
 ];
 
 const SEVERITIES = [
-  { key: 'critical', label: '🔴 Critical', activeColor: '#E53935', activeBg: 'rgba(229,57,53,.1)' },
-  { key: 'high',     label: '🟠 High',     activeColor: '#FF6D00', activeBg: 'rgba(255,109,0,.1)' },
-  { key: 'medium',   label: '🟡 Medium',   activeColor: '#F9A825', activeBg: 'rgba(249,168,37,.1)' },
-  { key: 'low',      label: '🟢 Low',      activeColor: '#34A853', activeBg: 'rgba(52,168,83,.1)' },
+  { key: 'critical', icon: <ExclamationCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'Critical', activeColor: '#E53935', activeBg: 'rgba(229,57,53,.1)' },
+  { key: 'high',     icon: <ExclamationCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'High',     activeColor: '#FF6D00', activeBg: 'rgba(255,109,0,.1)' },
+  { key: 'medium',   icon: <ClockCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'Medium',   activeColor: '#F9A825', activeBg: 'rgba(249,168,37,.1)' },
+  { key: 'low',      icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, label: 'Low',      activeColor: '#34A853', activeBg: 'rgba(52,168,83,.1)' },
 ];
 
 export default function UnitSelector({ unitType, severity, onUnitChange, onSeverityChange }) {
   return (
     <div style={s.card}>
-      <div style={s.cardTitle}>🚒 Select Emergency Unit Type</div>
+      <div style={s.cardTitle}><FireOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> Select Emergency Unit Type</div>
       <div style={s.unitGrid}>
         {UNIT_TYPES.map(u => {
           const active = unitType === u.key;
@@ -52,9 +62,10 @@ export default function UnitSelector({ unitType, severity, onUnitChange, onSever
                 borderColor: active ? sv.activeColor : '#30363D',
                 background:  active ? sv.activeBg   : '#0D1117',
                 color:       active ? sv.activeColor : '#8B949E',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
             >
-              {sv.label}
+              {sv.icon} {sv.label}
             </button>
           );
         })}
