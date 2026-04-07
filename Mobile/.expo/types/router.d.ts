@@ -1,0 +1,14 @@
+/* eslint-disable */
+import * as Router from 'expo-router';
+
+export * from 'expo-router';
+
+declare module 'expo-router' {
+  export namespace ExpoRouter {
+    export interface __routes<T extends string | object = string> {
+      hrefInputParams: { pathname: Router.RelativePathString, params?: Router.UnknownInputParams } | { pathname: Router.ExternalPathString, params?: Router.UnknownInputParams } | { pathname: `/`; params?: Router.UnknownInputParams; } | { pathname: `/_sitemap`; params?: Router.UnknownInputParams; } | { pathname: `${'/(app)'}/alert` | `/alert`; params?: Router.UnknownInputParams; } | { pathname: `${'/(app)'}${'/(dispatch)'}/chat` | `/chat`; params?: Router.UnknownInputParams; } | { pathname: `${'/(app)'}${'/(dispatch)'}/map` | `/map`; params?: Router.UnknownInputParams; } | { pathname: `${'/(auth)'}/login` | `/login`; params?: Router.UnknownInputParams; };
+      hrefOutputParams: { pathname: Router.RelativePathString, params?: Router.UnknownOutputParams } | { pathname: Router.ExternalPathString, params?: Router.UnknownOutputParams } | { pathname: `/`; params?: Router.UnknownOutputParams; } | { pathname: `/_sitemap`; params?: Router.UnknownOutputParams; } | { pathname: `${'/(app)'}/alert` | `/alert`; params?: Router.UnknownOutputParams; } | { pathname: `${'/(app)'}${'/(dispatch)'}/chat` | `/chat`; params?: Router.UnknownOutputParams; } | { pathname: `${'/(app)'}${'/(dispatch)'}/map` | `/map`; params?: Router.UnknownOutputParams; } | { pathname: `${'/(auth)'}/login` | `/login`; params?: Router.UnknownOutputParams; };
+      href: Router.RelativePathString | Router.ExternalPathString | `/${`?${string}` | `#${string}` | ''}` | `/_sitemap${`?${string}` | `#${string}` | ''}` | `${'/(app)'}/alert${`?${string}` | `#${string}` | ''}` | `/alert${`?${string}` | `#${string}` | ''}` | `${'/(app)'}${'/(dispatch)'}/chat${`?${string}` | `#${string}` | ''}` | `/chat${`?${string}` | `#${string}` | ''}` | `${'/(app)'}${'/(dispatch)'}/map${`?${string}` | `#${string}` | ''}` | `/map${`?${string}` | `#${string}` | ''}` | `${'/(auth)'}/login${`?${string}` | `#${string}` | ''}` | `/login${`?${string}` | `#${string}` | ''}` | { pathname: Router.RelativePathString, params?: Router.UnknownInputParams } | { pathname: Router.ExternalPathString, params?: Router.UnknownInputParams } | { pathname: `/`; params?: Router.UnknownInputParams; } | { pathname: `/_sitemap`; params?: Router.UnknownInputParams; } | { pathname: `${'/(app)'}/alert` | `/alert`; params?: Router.UnknownInputParams; } | { pathname: `${'/(app)'}${'/(dispatch)'}/chat` | `/chat`; params?: Router.UnknownInputParams; } | { pathname: `${'/(app)'}${'/(dispatch)'}/map` | `/map`; params?: Router.UnknownInputParams; } | { pathname: `${'/(auth)'}/login` | `/login`; params?: Router.UnknownInputParams; };
+    }
+  }
+}
