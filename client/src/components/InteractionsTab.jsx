@@ -6,28 +6,34 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   createRoom, joinRoom, sendMessage, getRoomMessages,
-  sync, uploadMedia,
+  sync, uploadMedia, getRoomMembers,
   sendImageMessage, sendVideoMessage, sendAudioMessage, sendFileMessage,
   downloadMedia,
 } from '../services/MatrixService';
-import { SYNAPSE_BASE_URL, matrixRoomAlias } from '../config/apiConfig';
-import { 
-  PaperClipOutlined, 
-  AudioOutlined, 
-  StopOutlined, 
-  SendOutlined, 
-  HistoryOutlined, 
-  WarningOutlined, 
-  LockOutlined, 
-  MessageOutlined, 
-  VideoCameraOutlined, 
+import { SYNAPSE_BASE_URL, matrixRoomAlias, MATRIX_MAX_UPLOAD_SIZE } from '../config/apiConfig';
+import {
+  PaperClipOutlined,
+  AudioOutlined,
+  StopOutlined,
+  SendOutlined,
+  HistoryOutlined,
+  WarningOutlined,
+  LockOutlined,
+  MessageOutlined,
+  VideoCameraOutlined,
   SoundOutlined,
-  CloudUploadOutlined, 
-  CheckCircleOutlined, 
-  CloseCircleOutlined, 
+  CloudUploadOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
   ArrowRightOutlined,
   LoadingOutlined,
-  ExclamationCircleFilled
+  ExclamationCircleFilled,
+  EnvironmentOutlined,
+  MoreOutlined,
+  SmileOutlined,
+  CompassOutlined,
+  PushpinOutlined,
+  FieldTimeOutlined
 } from '@ant-design/icons';
 
 // ── Module-level room cache: ticketId → roomId ────────────────────────────────
@@ -56,6 +62,7 @@ function parseEvents(events = []) {
       msgtype: e.content.msgtype,
       body: e.content.body || e.content.info?.name || '',
       url: e.content.url || null,
+      geo_uri: e.content.geo_uri || null,
       info: e.content.info || {},
     }));
 }
@@ -81,6 +88,16 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const [roomMembers, setRoomMembers] = useState([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionSearch, setMentionSearch] = useState('');
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showLocModal, setShowLocModal] = useState(false);
+  const [showLiveDurations, setShowLiveDurations] = useState(false);
+
   const timerRef = useRef(null);
 
   const sinceRef = useRef(null);
@@ -91,6 +108,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   const bottomRef = useRef(null);
   const messagesEndRef = bottomRef;      // alias — both point to the scroll anchor
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
   const warned = useRef(false);
   const activeTicketRef = useRef(null); // truly prevent redundant re-init
   const initGenRef = useRef(0); // protect against race conditions in async init
@@ -145,6 +163,27 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     };
   }, [ticketId, accessToken]);
 
+  // Fetch room members for mentions
+  useEffect(() => {
+    if (!roomId || !accessToken) return;
+    const fetchMembers = async () => {
+      try {
+        const res = await getRoomMembers(accessToken, roomId);
+        // getRoomMembers returns raw events, we need to extract join membership
+        const members = (res.chunk || [])
+          .filter(e => e.type === 'm.room.member' && e.content?.membership === 'join')
+          .map(e => ({
+            userId: e.state_key,
+            displayName: e.content?.displayname || e.state_key.replace(/^@/, '').split(':')[0],
+          }));
+        setRoomMembers(members);
+      } catch (e) {
+        console.warn('[InteractionsTab] Failed to fetch members:', e.message);
+      }
+    };
+    fetchMembers();
+  }, [roomId, accessToken]);
+
   // Auto-scroll when new messages arrive
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -162,7 +201,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
       // Step 1: Check local cache first (fastest)
       rid = getCachedRoom(ticketId);
-      
+
       // Step 2: If no cache, resolve by alias from Synapse
       if (!rid) {
         try {
@@ -174,7 +213,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             const aliasData = await aliasRes.json();
             if (aliasData.room_id) rid = aliasData.room_id;
           }
-        } catch {}
+        } catch { }
       }
 
       // Step 3: Only create if NEITHER cache NOR alias found anything
@@ -213,7 +252,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       audioChunksRef.current = [];
-      
+
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
@@ -221,7 +260,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       recorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const file = new File([audioBlob], `voice-note-${Date.now()}.webm`, { type: 'audio/webm' });
-        
+
         setUploading(true);
         setUploadName('Voice message');
         try {
@@ -262,12 +301,29 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
   const fmtDuration = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
+  const filteredMembers = roomMembers.filter(m =>
+    m.displayName.toLowerCase().includes(mentionSearch.toLowerCase()) ||
+    m.userId.toLowerCase().includes(mentionSearch.toLowerCase())
+  );
+
+  const insertMention = (member) => {
+    if (!textareaRef.current) return;
+    const cursor = textareaRef.current.selectionStart;
+    const textBefore = inputText.substring(0, cursor);
+    const mentionIdx = textBefore.lastIndexOf('@');
+    const textAfter = inputText.substring(cursor);
+
+    setInputText(textBefore.substring(0, mentionIdx) + '@' + member.displayName + ' ' + textAfter);
+    setMentionOpen(false);
+    // Note: Re-focusing might be needed in a real app, but textarea is usually still focused.
+  };
+
   async function loadHistory(rid, gen) {
     try {
       // getRoomMessages — HTTP/2 preferred for potentially large payloads
       const res = await getRoomMessages(accessToken, rid, null, 50);
       if (gen !== initGenRef.current) return; // Guard against stale history load
-      
+
       const events = [...(res.chunk || [])].reverse(); // chunk is newest-first
       const msgs = parseEvents(events).filter(m => {
         if (seenIds.current.has(m.id)) return false;
@@ -284,7 +340,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   function startSync(rid, gen) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    
+
     let currentSince = null;
     const poll = async () => {
       while (!ctrl.signal.aborted) {
@@ -321,6 +377,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                 msgtype: e.content.msgtype,
                 body: e.content.body || '',
                 url: e.content.url || null,
+                geo_uri: e.content.geo_uri || null,
                 info: e.content.info || {},
               }));
               setMessages(prev => [...prev, ...newMsgs]);
@@ -342,16 +399,103 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     const txt = inputText.trim();
     if (!txt || !roomId) return;
 
+    // Clear input IMMEDIATELY to prevent double-sends during async operations
+    setInputText('');
+    const el = textareaRef.current;
+    if (el) el.style.height = '40px';
+
     const sess = JSON.parse(localStorage.getItem('dispatcher') || '{}');
     const senderId = sess.userId || sess.user_id;
+
+    // Direct Message Logic: Check for mentions
+    const mentions = [...txt.matchAll(/@(\S+)/g)];
+    let dmSent = false;
+
+    if (mentions.length > 0) {
+      for (const match of mentions) {
+        const mentionName = match[1];
+        // Improved target lookup: check both displayName and userId
+        const target = roomMembers.find(m => 
+          m.displayName.toLowerCase() === mentionName.toLowerCase() || 
+          m.userId.toLowerCase().includes(mentionName.toLowerCase())
+        );
+        
+        if (target && target.userId !== senderId) {
+          dmSent = true;
+          try {
+            console.log('[InteractionsTab] Sending DM to:', target.userId);
+            
+            // 1. Find existing DM room
+            let dmRoomId = null;
+            const joinedRes = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/joined_rooms`, {
+              headers: { 'Authorization': `Bearer ${accessToken}` },
+            });
+            if (joinedRes.ok) {
+              const { joined_rooms = [] } = await joinedRes.json();
+              // To speed up, we look at the last 20 rooms or specifically for 1:1 DMs
+              for (const rid of joined_rooms.slice(-20)) {
+                const stRes = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(rid)}/state`, {
+                  headers: { 'Authorization': `Bearer ${accessToken}` },
+                });
+                if (stRes.ok) {
+                  const state = await stRes.json();
+                  const members = state.filter(e => e.type === 'm.room.member' && e.content?.membership === 'join');
+                  if (members.length === 2 && members.some(m => m.state_key === target.userId)) {
+                    dmRoomId = rid;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // 2. Create DM if not found
+            if (!dmRoomId) {
+              const createRes = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/createRoom`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                  invite: [target.userId], 
+                  is_direct: true, 
+                  preset: "trusted_private_chat", 
+                  visibility: "private" 
+                }),
+              });
+              if (createRes.ok) {
+                const data = await createRes.json();
+                dmRoomId = data.room_id;
+              }
+            }
+
+            // 3. Send the DM
+            if (dmRoomId) {
+              await sendMessage(accessToken, dmRoomId, txt);
+              setMessages(prev => [...prev, {
+                id: 'dm-' + Date.now() + Math.random(),
+                sender: senderId,
+                ts: Date.now(),
+                msgtype: 'm.text',
+                body: `🔒 Sent DM to ${target.displayName}: ${txt}`,
+                url: null,
+                info: {},
+              }]);
+            }
+          } catch (err) {
+            console.error('[InteractionsTab] DM failed for:', target.userId, err);
+          }
+        }
+      }
+    }
+
+    // If we sent at least one DM, we don't send to the room
+    if (dmSent) {
+      setSending(false);
+      return;
+    }
+
+    // Standard room send
     const txnId = 'm' + Date.now() + Math.random().toString(36).slice(2, 7);
-
-    setInputText('');
-
-    // Register txnId so the sync loop can identify and skip the server echo
     pendingTxns.current.add(txnId);
 
-    // Optimistic update — show message immediately with the local txnId
     setMessages(prev => [...prev, {
       id: txnId,
       sender: senderId,
@@ -367,23 +511,73 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     }, 50);
 
     try {
-      console.log('[InteractionsTab] Sending to room:', roomId, 'msg:', txt);
-      const result = await sendMessage(accessToken, roomId, txt);
-      console.log('[InteractionsTab] Send success, event_id:', result?.event_id);
-      // Register the real server event_id so seenIds can deduplicate it if sync delivers it
-      if (result?.event_id) seenIds.current.add(result.event_id);
+      await sendMessage(accessToken, roomId, txt);
     } catch (err) {
-      console.error('[InteractionsTab] Send failed:', err);
+      console.error('[InteractionsTab] Room Send failed:', err);
     } finally {
-      // Always clean up — whether send succeeded or failed
       pendingTxns.current.delete(txnId);
     }
+  };
+
+  // ── Send Location ──────────────────────────────────────────────────────────
+  const handleSendLocation = (customBody) => {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude, longitude } = pos.coords;
+      const geoUri = `geo:${latitude},${longitude}`;
+      const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+      const body = customBody || `Shared a location: ${mapsUrl}`;
+
+      try {
+        const sess = JSON.parse(localStorage.getItem('dispatcher') || '{}');
+        const senderId = sess.userId || sess.user_id;
+        const txnId = 'loc-' + Date.now();
+        
+        setMessages(prev => [...prev, {
+          id: txnId,
+          sender: senderId,
+          ts: Date.now(),
+          msgtype: 'm.location',
+          body: body,
+          geo_uri: geoUri,
+          url: null,
+          info: {},
+        }]);
+
+        await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`, {
+          method: 'PUT',
+          headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            msgtype: 'm.location',
+            body: body,
+            geo_uri: geoUri
+          })
+        });
+      } catch (err) {
+        console.error('[InteractionsTab] Location send failed:', err);
+      }
+    }, (err) => {
+      alert("Unable to retrieve your location: " + err.message);
+    });
   };
 
   // ── File attachment ───────────────────────────────────────────────────────
   const handleFile = useCallback(async e => {
     const file = e.target.files?.[0];
     if (!file || !roomIdRef.current) return;
+
+    // ── Pre-upload size check ──
+    if (file.size > MATRIX_MAX_UPLOAD_SIZE) {
+      const limitMB = Math.round(MATRIX_MAX_UPLOAD_SIZE / (1024 * 1024));
+      alert(`File too large: ${fmtSize(file.size)}. Max allowed is ${limitMB}MB. To increase this, contact your server admin to update homeserver.yaml.`);
+      e.target.value = '';
+      return;
+    }
+
     e.target.value = '';
     setUploading(true);
     setUploadName(file.name);
@@ -397,7 +591,10 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       else if (mime.startsWith('video/')) await sendVideoMessage(accessToken, roomIdRef.current, mxc, info);
       else if (mime.startsWith('audio/')) await sendAudioMessage(accessToken, roomIdRef.current, mxc, info);
       else await sendFileMessage(accessToken, roomIdRef.current, mxc, file.name, info);
-    } catch (e) { console.error('[InteractionsTab] file send:', e); }
+    } catch (e) {
+      console.error('[InteractionsTab] file send:', e);
+      alert('Upload failed. This may be due to server-side size limits or connection issues.');
+    }
     setUploading(false);
     setUploadName('');
   }, [accessToken]);
@@ -454,11 +651,57 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       justifyContent: mine ? 'flex-end' : 'flex-start',
     };
 
-    let inner;
     const isImage = msg.msgtype === 'm.image' || msg.info?.mimetype?.startsWith('image/');
     const isMedia = ['m.video', 'm.audio', 'm.file'].includes(msg.msgtype) || isImage;
+    const isLocation = msg.msgtype === 'm.location';
+    let inner;
 
-    if (isMedia && msg.url) {
+    if (isLocation) {
+      const g = msg.geo_uri?.replace('geo:', '').split(',') || [12.9716, 80.2425]; // Default to Chennai coords if missing
+      const lat = g[0];
+      const lng = g[1];
+      const embedUrl = `https://maps.google.com/maps?q=${lat},${lng}&z=15&output=embed`;
+      const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+
+      inner = (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>
+          <div style={{
+            background: 'rgba(0,0,0,0.15)', borderRadius: 12, overflow: 'hidden',
+            border: '1px solid rgba(255,255,255,0.05)',
+          }}>
+            <div style={{ padding: '8px 10px', display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.03)' }}>
+              <EnvironmentOutlined style={{ fontSize: 16, color: '#1A73E8' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#E6EDF3' }}>Shared Location</div>
+                <div style={{ fontSize: 8, opacity: 0.6 }}>{lat}, {lng}</div>
+              </div>
+              <a 
+                href={mapsUrl} target="_blank" rel="noopener noreferrer"
+                style={{
+                  background: 'rgba(26,115,232,0.2)', border: '1px solid rgba(26,115,232,0.3)',
+                  borderRadius: 6, color: '#82B4FF', fontSize: 9, fontWeight: 800,
+                  padding: '3px 8px', cursor: 'pointer', textDecoration: 'none'
+                }}
+              >OPEN</a>
+            </div>
+            
+            {/* Embedded Map Widget */}
+            <div style={{ width: '100%', height: 120, background: '#161B22', position: 'relative' }}>
+              <iframe
+                title="Location Map"
+                src={embedUrl}
+                width="100%"
+                height="100%"
+                style={{ border: 0, opacity: 0.85, filter: 'grayscale(0.3) invert(0.9) hue-rotate(180deg)' }} // Dark mode map hack
+                loading="lazy"
+              ></iframe>
+              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', boxShadow: 'inset 0 0 40px rgba(0,0,0,0.3)' }} />
+            </div>
+          </div>
+          <div style={metaRow}><span>{sender}</span><span>{time}</span></div>
+        </div>
+      );
+    } else if (isMedia && msg.url) {
       const icon = msg.msgtype === 'm.video' ? <VideoCameraOutlined /> : msg.msgtype === 'm.audio' ? <SoundOutlined /> : <PaperClipOutlined />;
       const thumb = isImage ? buildThumbnailUrl(msg.url, 220, 160) : null;
       const full = buildMediaUrl(msg.url);
@@ -496,19 +739,19 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
           {/* Image preview (if applicable) */}
           {isImage && (
-            <SafeImage 
-              thumb={thumb} 
-              full={full} 
-              alt={msg.body} 
-              onOpen={setLightbox} 
+            <SafeImage
+              thumb={thumb}
+              full={full}
+              alt={msg.body}
+              onOpen={setLightbox}
             />
           )}
 
           {/* Video player */}
           {msg.msgtype === 'm.video' && (
-            <video 
-              src={full} 
-              controls 
+            <video
+              src={full}
+              controls
               style={{ width: '100%', borderRadius: 8, maxHeight: 180, background: '#000', marginTop: 2 }}
               onError={(e) => {
                 e.target.style.display = 'none';
@@ -522,9 +765,9 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
           {/* Audio player */}
           {msg.msgtype === 'm.audio' && (
-            <audio 
-              src={full} 
-              controls 
+            <audio
+              src={full}
+              controls
               style={{ width: '100%', height: 32, marginTop: 2 }}
               onError={(e) => {
                 e.target.style.display = 'none';
@@ -609,70 +852,264 @@ export default function InteractionsTab({ ticketId, alertObj }) {
         </div>
       )}
 
-      {/* Input bar — Bug 1 fix: plain div, no form, direct onClick wiring */}
-      <div style={{ padding: '6px 0', borderTop: '1px solid #30363D', display: 'flex', gap: 6, alignItems: 'center' }}>
+      {/* Input bar */}
+      <div style={{ padding: '8px 0', borderTop: '1px solid #30363D', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFile} />
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          style={{ width: 28, height: 28, borderRadius: 6, background: '#161B22', border: '1px solid #30363D', color: '#8B949E', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        ><PaperClipOutlined /></button>
+        {/* Textarea container with icons inside/below */}
+        <div style={{ position: 'relative', flex: 1, background: '#161B22', border: '1px solid #30363D', borderRadius: 8 }}>
+          <textarea
+            ref={textareaRef}
+            value={inputText}
+            onChange={e => {
+              const val = e.target.value;
+              setInputText(val);
+              
+              const cursor = e.target.selectionStart;
+              const textBefore = val.substring(0, cursor);
+              const mentionIdx = textBefore.lastIndexOf('@');
+              if (mentionIdx !== -1 && (mentionIdx === 0 || textBefore[mentionIdx - 1] === ' ')) {
+                const search = textBefore.substring(mentionIdx + 1);
+                if (!search.includes(' ')) {
+                  setMentionSearch(search);
+                  setMentionOpen(true);
+                  setMentionIndex(0);
+                } else { setMentionOpen(false); }
+              } else { setMentionOpen(false); }
 
-        <button
-          type="button"
-          onClick={isRecording ? stopRecording : startRecording}
-          style={{ 
-            width: 28, height: 28, borderRadius: 6, 
-            background: isRecording ? 'rgba(229,57,53,0.15)' : '#161B22', 
-            border: isRecording ? '1px solid #E53935' : '1px solid #30363D', 
-            color: isRecording ? '#E53935' : '#8B949E', 
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            position: 'relative'
-          }}
-        >
-          {isRecording ? <StopOutlined style={{ fontSize: '18px' }} /> : <AudioOutlined style={{ fontSize: '18px' }} />}
-          {isRecording && (
+              const el = e.target;
+              el.style.height = 'auto';
+              el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+            }}
+            onKeyDown={e => {
+              if (mentionOpen) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIndex(prev => (prev + 1) % filteredMembers.length); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIndex(prev => (prev - 1 + filteredMembers.length) % filteredMembers.length); }
+                else if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  if (filteredMembers[mentionIndex]) insertMention(filteredMembers[mentionIndex]);
+                } else if (e.key === 'Escape') setMentionOpen(false);
+              } else if (e.key === 'Enter' && !e.shiftKey && inputText.trim()) {
+                e.preventDefault();
+                handleSend();
+                e.target.style.height = '40px';
+              }
+            }}
+            placeholder="Type a message... (Use @ to tag)"
+            style={{
+              width: '100%', background: 'transparent', border: 'none', padding: '10px 14px',
+              color: '#E6EDF3', fontSize: 11, fontFamily: 'Sora, sans-serif', outline: 'none',
+              minHeight: 40, maxHeight: 200, height: 40, resize: 'none', overflowY: 'auto',
+              lineHeight: 1.5, boxSizing: 'border-box'
+            }}
+          />
+
+          {/* Bottom Tool Row inside textarea container */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 8px 6px 8px' }}>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button 
+                type="button" 
+                onClick={isRecording ? stopRecording : startRecording}
+                style={{ background: 'transparent', border: 'none', color: isRecording ? '#E53935' : '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
+              >
+                {isRecording ? <StopOutlined style={{ fontSize: 16 }} /> : <AudioOutlined style={{ fontSize: 16 }} />}
+              </button>
+              {isRecording && <span style={{ fontSize: 9, color: '#E53935', fontWeight: 700 }}>{fmtDuration(recordingTime)}</span>}
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <button 
+                type="button" 
+                onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowMoreMenu(false); }}
+                style={{ background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
+              ><SmileOutlined style={{ fontSize: 18 }} /></button>
+              
+              <button 
+                type="button" 
+                onClick={() => fileInputRef.current?.click()}
+                style={{ background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
+              ><PaperClipOutlined style={{ fontSize: 18 }} /></button>
+
+              <button 
+                type="button" 
+                onClick={() => { setShowMoreMenu(!showMoreMenu); setShowEmojiPicker(false); }}
+                style={{ background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
+              ><MoreOutlined style={{ fontSize: 18 }} /></button>
+            </div>
+          </div>
+
+          {/* Mention Popup */}
+          {mentionOpen && filteredMembers.length > 0 && (
             <div style={{
-              position: 'absolute', top: -20, left: '50%', transform: 'translateX(-50%)',
-              background: '#E53935', color: '#fff', fontSize: 8, fontWeight: 800,
-              padding: '2px 6px', borderRadius: 10, whiteSpace: 'nowrap',
-              display: 'flex', alignItems: 'center', gap: 3
-            }}><ExclamationCircleFilled style={{ animation: 'livePulse 1s infinite', color: '#fff', fontSize: '8px' }} /> REC {fmtDuration(recordingTime)}</div>
+              position: 'absolute', bottom: '100%', left: 0, width: '100%',
+              background: '#161B22', border: '1px solid #30363D', borderRadius: 8,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginBottom: 8,
+              zIndex: 110, maxHeight: 200, overflowY: 'auto'
+            }}>
+              {filteredMembers.map((m, i) => (
+                <div key={m.userId} onClick={() => insertMention(m)}
+                  style={{
+                    padding: '8px 12px', cursor: 'pointer', fontSize: 11,
+                    background: i === mentionIndex ? 'rgba(26,115,232,0.2)' : 'transparent',
+                    color: i === mentionIndex ? '#82B4FF' : '#E6EDF3',
+                    display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid rgba(255,255,255,0.05)'
+                  }}
+                  onMouseEnter={() => setMentionIndex(i)}
+                >
+                  <div style={{ width: 24, height: 24, borderRadius: 12, background: '#30363D', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 800 }}>
+                    {m.displayName.substring(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{m.displayName}</div>
+                    <div style={{ fontSize: 9, opacity: 0.6 }}>{m.userId}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
-        </button>
 
-        <input
-          type="text"
-          value={inputText}
-          onChange={e => setInputText(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey && inputText.trim()) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Type a message..."
-          style={{ flex: 1, background: '#161B22', border: '1px solid #30363D', borderRadius: 6, padding: '6px 10px', color: '#E6EDF3', fontSize: 11, fontFamily: 'Sora, sans-serif', outline: 'none' }}
-        />
+          {/* Emoji Picker */}
+          {showEmojiPicker && (
+            <div style={{
+              position: 'absolute', bottom: '100%', right: 0, 
+              background: '#161B22', border: '1px solid #30363D', borderRadius: 12,
+              padding: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginBottom: 8,
+              zIndex: 110, width: 240, display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8
+            }}>
+              {['😀','😃','😄','😁','😆','😅','😂','🤣','☺️','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬'].map(emoji => (
+                <div 
+                  key={emoji} 
+                  onClick={() => { setInputText(prev => prev + emoji); setShowEmojiPicker(false); }}
+                  style={{ fontSize: 18, cursor: 'pointer', textAlign: 'center', padding: 4 }}
+                >{emoji}</div>
+              ))}
+            </div>
+          )}
+
+          {/* More Menu */}
+          {showMoreMenu && (
+            <div style={{
+              position: 'absolute', bottom: '100%', right: 0, 
+              background: '#161B22', border: '1px solid #30363D', borderRadius: 12,
+              overflow: 'hidden', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginBottom: 8,
+              zIndex: 110, width: 180
+            }}>
+              <div 
+                onClick={() => { setShowLocModal(true); setShowMoreMenu(false); }}
+                style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 11, color: '#E6EDF3', display: 'flex', alignItems: 'center', gap: 10 }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <EnvironmentOutlined style={{ color: '#00897b', fontSize: 14 }} /> Location Sharing
+              </div>
+              <div 
+                style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 11, color: '#E6EDF3', display: 'flex', alignItems: 'center', gap: 10, opacity: 0.5 }}
+              >
+                <PushpinOutlined style={{ fontSize: 14 }} /> Other Options
+              </div>
+            </div>
+          )}
+        </div>
 
         <button
           type="button"
           onClick={handleSend}
           disabled={!inputText.trim() || !roomId}
-          style={{ padding: '0 10px', height: 28, borderRadius: 6, background: inputText.trim() ? '#1A73E8' : '#30363D', border: 'none', color: inputText.trim() ? '#fff' : '#8B949E', cursor: inputText.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'Sora, sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        ><SendOutlined /></button>
+          style={{ 
+            width: 32, height: 32, borderRadius: 16, 
+            background: inputText.trim() ? '#1A73E8' : '#30363D', border: 'none', 
+            color: inputText.trim() ? '#fff' : '#8B949E', cursor: inputText.trim() ? 'pointer' : 'not-allowed', 
+            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 6 
+          }}
+        ><SendOutlined style={{ fontSize: 14 }} /></button>
       </div>
 
+      {/* Location Modal */}
+      {showLocModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', 
+          zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#fff', width: 320, borderRadius: 16, padding: '24px 20px',
+            position: 'relative', color: '#111', fontFamily: 'Sora, sans-serif', textAlign: 'center'
+          }}>
+            <button 
+              onClick={() => { setShowLocModal(false); setShowLiveDurations(false); }}
+              style={{ position: 'absolute', top: 12, right: 12, background: '#eee', border: 'none', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', color: '#666' }}
+            >×</button>
+            
+            <div style={{ width: 64, height: 64, borderRadius: 32, background: '#00796b', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', color: '#fff' }}>
+              <EnvironmentOutlined style={{ fontSize: 32 }} />
+            </div>
+
+            <h3 style={{ margin: '0 0 24px', fontSize: 18, fontWeight: 700 }}>What location type do you want to share?</h3>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <button 
+                onClick={() => { handleSendLocation(null); setShowLocModal(false); }}
+                style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}
+              >
+                <div style={{ width: 36, height: 36, borderRadius: 18, border: '2px solid #00796b', color: '#00796b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 900 }}>M</div>
+                <span style={{ fontWeight: 600, color: '#333' }}>My current location</span>
+              </button>
+
+              <div style={{ position: 'relative' }}>
+                <button 
+                  onClick={() => setShowLiveDurations(!showLiveDurations)}
+                  style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}
+                >
+                  <div style={{ width: 36, height: 36, borderRadius: 18, background: '#673ab7', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <CompassOutlined style={{ fontSize: 20 }} />
+                  </div>
+                  <span style={{ fontWeight: 600, color: '#333' }}>My live location</span>
+                </button>
+                
+                {showLiveDurations && (
+                  <div style={{
+                    marginTop: 8, display: 'flex', justifyContent: 'center', gap: 8,
+                    padding: '8px', background: '#f5f5f5', borderRadius: 8
+                  }}>
+                    {['15m', '1h', '8h'].map(d => (
+                      <button 
+                        key={d} 
+                        onClick={() => {
+                          handleSendLocation(`Mock: Share Live Location for ${d}`);
+                          setShowLocModal(false);
+                          setShowLiveDurations(false);
+                        }}
+                        style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', fontSize: 10, cursor: 'pointer' }}
+                      >{d}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button 
+                onClick={() => {
+                   handleSendLocation("Dropped Pin");
+                   setShowLocModal(false);
+                }}
+                style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}
+              >
+                <div style={{ width: 36, height: 36, borderRadius: 18, background: '#00695c', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <PushpinOutlined style={{ fontSize: 20 }} />
+                </div>
+                <span style={{ fontWeight: 600, color: '#333' }}>Drop a Pin</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Lightbox */}
       {lightbox && (
         <div
           onClick={() => setLightbox(null)}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out' }}
         >
-          <img 
-            src={lightbox} 
-            alt="Full view" 
+          <img
+            src={lightbox}
+            alt="Full view"
             onError={(e) => {
               e.target.style.display = 'none';
               const wrap = e.target.parentElement;
@@ -683,7 +1120,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                 wrap.appendChild(err);
               }
             }}
-            style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,.7)', minWidth: 200, minHeight: 100 }} 
+            style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,.7)', minWidth: 200, minHeight: 100 }}
           />
         </div>
       )}

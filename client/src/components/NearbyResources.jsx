@@ -492,7 +492,7 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
             ) : (
               onlineUnits.map((u, i) => {
                 const color = UNIT_COLORS[u.type] || '#4CAF50';
-                const icon  = UNIT_ICONS[u.type]  || '🚑';
+                const icon  = UNIT_ICONS[u.type]  || <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />;
                 const sc    = u.status === 'available' ? { background: 'rgba(52,168,83,.15)', color: '#34A853' }
                             : u.status === 'busy'      ? { background: 'rgba(255,193,7,.15)', color: '#FFC107' }
                             : { background: 'rgba(158,158,158,.1)', color: '#9E9E9E' };

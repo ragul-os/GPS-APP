@@ -9,7 +9,9 @@ import {
   CloseOutlined, 
   SmileOutlined,
   DoubleLeftOutlined, 
-  DoubleRightOutlined
+  DoubleRightOutlined,
+  TeamOutlined,
+  LoadingOutlined
 } from '@ant-design/icons';
 import { 
   getAlertHistory, 
@@ -135,12 +137,22 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange, primary
 
   const abortRef = useRef(null);
   const sinceRef = useRef(null);
-  const selectedRef = useRef(null);   // mirror of selectedRoomId for closure
+  const [isMembersOpen, setIsMembersOpen] = useState(false);
+  const selectedRef = useRef(selectedRoomId);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartW = useRef(250);
   const roomsRef = useRef([]);     // stable ref for sync closure
   const prevPrimaryTicketIdRef = useRef(undefined);
+
+  useEffect(() => {
+    const handleOutside = () => setIsMembersOpen(false);
+    document.addEventListener('click', handleOutside);
+    return () => document.removeEventListener('click', handleOutside);
+  }, []);
+
+  const totalUnread = Object.values(unreadMap).reduce((a, b) => a + b, 0);
+  const selectedRoom = rooms.find(r => r.roomId === selectedRoomId);
 
   const session = getSession();
   const accessToken = session.accessToken || '';
@@ -200,11 +212,22 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange, primary
             );
 
             let roomName = '';
+            let members = [];
             if (stRes.ok) {
               const stateEvents = await stRes.json();
               const nameEv = stateEvents.find(e => e.type === 'm.room.name');
               const aliasEv = stateEvents.find(e => e.type === 'm.room.canonical_alias');
               roomName = nameEv?.content?.name || aliasEv?.content?.alias || '';
+
+              members = stateEvents
+                .filter(e => e.type === 'm.room.member' && e.content?.membership === 'join')
+                .map(e => ({
+                  userId: e.state_key,
+                  displayName: e.content?.displayname || e.state_key.replace(/^@/, '').split(':')[0],
+                  membership: e.content?.membership,
+                  isMe: e.state_key === session.userId || e.state_key === session.user_id,
+                  online: true // Mock as online for UI, presence not tracked in state
+                }));
             }
 
             console.log(`[GlobalChatPanel] DEBUG: Processing room ${roomId}. Found name: "${roomName}"`);
@@ -229,6 +252,7 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange, primary
               alertObj: resolvedAlert,
               ticketObj,
               virtual: false,
+              members
             });
             ticketIdsSeen.add(ticketId);
           } catch (e) {
@@ -459,9 +483,6 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange, primary
     return name.includes(q) || addr.includes(q) || tid.includes(q);
   });
 
-  const selectedRoom = rooms.find(r => r.roomId === selectedRoomId);
-  const totalUnread = Object.values(unreadMap).reduce((a, b) => a + b, 0);
-
   if (!open) return null;
 
   return (
@@ -535,19 +556,98 @@ export default function GlobalChatPanel({ open, onClose, onUnreadChange, primary
               </div>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'rgba(139,148,158,.1)', border: '1px solid #30363D',
-              borderRadius: 8, color: '#8B949E', fontSize: 13, cursor: 'pointer',
-              padding: '5px 10px', fontFamily: 'Sora, sans-serif', fontWeight: 700,
-              transition: 'all .15s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(229,57,53,.15)'; e.currentTarget.style.color = '#E53935'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(139,148,158,.1)'; e.currentTarget.style.color = '#8B949E'; }}
-          >
-            ✕
-          </button>
+          <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
+            <button
+              onClick={e => { e.stopPropagation(); setIsMembersOpen(!isMembersOpen); }}
+              style={{
+                width: 32, height: 32, borderRadius: 8,
+                background: isMembersOpen ? 'rgba(26,115,232,.15)' : 'rgba(139,148,158,.1)',
+                border: '1px solid #30363D', color: isMembersOpen ? '#1A73E8' : '#8B949E',
+                fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'all .15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,.2)'; e.currentTarget.style.color = '#1A73E8'; }}
+              onMouseLeave={e => { if (!isMembersOpen) { e.currentTarget.style.background = 'rgba(139,148,158,.1)'; e.currentTarget.style.color = '#8B949E'; } }}
+            >
+              <TeamOutlined />
+            </button>
+
+            {isMembersOpen && (
+              <div 
+                onClick={e => e.stopPropagation()}
+                style={{
+                  position: 'absolute', top: 40, right: 0, zIndex: 1000, width: 220,
+                  background: '#161B22', border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                  display: 'flex', flexDirection: 'column', overflow: 'hidden'
+                }}
+              >
+                <div style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#8B949E', letterSpacing: '0.04em' }}>
+                  MEMBERS
+                </div>
+                <div style={{ height: 1, background: 'rgba(255,255,255,0.08)' }} />
+                
+                <div style={{ maxHeight: 240, overflowY: 'auto', padding: '4px 0' }}>
+                  {!selectedRoom || loadingRooms ? (
+                    <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
+                      <LoadingOutlined spin style={{ color: '#1A73E8', fontSize: 20 }} />
+                    </div>
+                  ) : (selectedRoom.members || []).map((m, idx) => {
+                    const initials = (m.displayName || '').substring(0, 2).toUpperCase();
+                    return (
+                      <div key={idx} style={{ 
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                        cursor: 'default', transition: 'background .15s'
+                      }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        <div style={{ position: 'relative', flexShrink: 0 }}>
+                          <div style={{ 
+                            width: 32, height: 32, borderRadius: 16, background: '#30363D', 
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 10, fontWeight: 800, color: '#8B949E'
+                          }}>
+                            {initials}
+                          </div>
+                          <div style={{ 
+                            position: 'absolute', bottom: 0, right: 0, width: 8, height: 8,
+                            borderRadius: '50%', background: m.online ? '#34A853' : '#8B949E',
+                            border: '1.5px solid #161B22'
+                          }} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {m.displayName}
+                            </div>
+                            {m.isMe && (
+                              <span style={{
+                                fontSize: 8, padding: '1px 5px', background: 'rgba(52,168,83,.2)', color: '#34A853',
+                                borderRadius: 4, fontWeight: 800, letterSpacing: '0.04em'
+                              }}>PRIMARY</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#8B949E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.userId}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={onClose}
+              style={{
+                background: 'rgba(139,148,158,.1)', border: '1px solid #30363D',
+                borderRadius: 8, color: '#8B949E', fontSize: 13, cursor: 'pointer',
+                padding: '5px 10px', fontFamily: 'Sora, sans-serif', fontWeight: 700,
+                transition: 'all .15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(229,57,53,.15)'; e.currentTarget.style.color = '#E53935'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(139,148,158,.1)'; e.currentTarget.style.color = '#8B949E'; }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Body: sidebar + chat */}

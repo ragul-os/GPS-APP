@@ -56,3 +56,7 @@ export function matrixRoomAlias(localAlias) {
 
 /** Same as SYNAPSE_BASE_URL — kept for existing imports */
 export const SYNAPSE_BASE = SYNAPSE_BASE_URL;
+
+/** Matrix File Upload Limit (matches homeserver.yaml max_upload_size) */
+export const MATRIX_MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+

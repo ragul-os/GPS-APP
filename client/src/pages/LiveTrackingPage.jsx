@@ -1195,10 +1195,23 @@ export default function LiveTrackingPage() {
           <div style={s.lcStrip}>
             {LIFECYCLE_ORDER.map((st, i) => {
               const isDone = i < lcIdx, isActive = i === lcIdx;
+              const icon = UNIT_ST_ICON[st] || <CheckCircleOutlined />;
               return (
                 <React.Fragment key={st}>
-                  <div style={s.lcStep}><div style={{ ...s.lcDot, background: isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D' }} /><div style={s.lcLabel}>{st.replace('_', ' ')}</div></div>
-                  {i < LIFECYCLE_ORDER.length - 1 && <div style={{ ...s.lcConn, background: i < lcIdx ? '#34A853' : i === lcIdx ? '#1A73E8' : '#30363D' }} />}
+                  <div style={s.lcStep}>
+                    <div style={{ 
+                      ...s.lcDot, 
+                      background: isDone ? 'rgba(52,168,83,.12)' : isActive ? 'rgba(26,115,232,.12)' : '#0D1117',
+                      color: isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D',
+                      border: `1.5px solid ${isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                      fontSize: 14, width: 28, height: 28, borderRadius: 8, transition: 'all .4s'
+                    }}>
+                      {React.cloneElement(icon, { style: { fontSize: '14px', verticalAlign: 'middle' } })}
+                    </div>
+                    <div style={{ ...s.lcLabel, color: isDone || isActive ? '#E6EDF3' : '#8B949E', marginTop: 4 }}>{st.replace('_', ' ')}</div>
+                  </div>
+                  {i < LIFECYCLE_ORDER.length - 1 && <div style={{ ...s.lcConn, background: i < lcIdx ? '#34A853' : i === lcIdx ? '#1A73E8' : '#30363D', marginBottom: 16 }} />}
                 </React.Fragment>
               );
             })}
