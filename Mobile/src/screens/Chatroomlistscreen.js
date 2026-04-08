@@ -1,8 +1,19 @@
+/**
+ * ChatRoomListScreen.js
+ *
+ * CHANGES:
+ *  1. DM room appears instantly after creation — no refresh needed
+ *  2. Unread badge (WhatsApp-style) shown on right side of each room row
+ *  3. Current open room is highlighted in the list when navigating back
+ */
+
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
+  Modal,
   StyleSheet,
   Text,
   TextInput,
@@ -13,11 +24,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
 import {
   getJoinedRooms,
+  getOrCreateDMRoom,
+  getRoomMembers,
   getRoomMessages,
   syncMatrix,
 } from '../services/matrixService';
 import ChatScreen from './ChatScreen';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 function formatTime(ts) {
   if (!ts) return '';
   const now = new Date();
@@ -37,28 +53,243 @@ function previewText(event) {
   const content = event.content || {};
   const type = content.msgtype || '';
   if (type === 'm.text') return content.body || '';
-  if (type === 'm.image') return 'Photo';
-  if (type === 'm.video') return 'Video';
-  if (type === 'm.audio') return 'Voice message';
-  if (type === 'm.file') return content.body || 'File';
+  if (type === 'm.image') return '📷 Photo';
+  if (type === 'm.video') return '🎥 Video';
+  if (type === 'm.audio') return '🎵 Voice message';
+  if (type === 'm.file') return '📎 ' + (content.body || 'File');
+  if (type === 'm.location') return '📍 Location';
   return '';
 }
 
-function roomDisplayName(roomId) {
+function roomDisplayName(roomId, dmNames = {}) {
+  if (dmNames[roomId]) return dmNames[roomId];
   if (roomId === DISPATCH_ROOM_ID) return 'Dispatch Control';
   return `${roomId}`;
 }
 
-function roomInitials(roomId) {
+function roomInitials(roomId, dmNames = {}) {
+  const name = dmNames[roomId] || roomId;
   if (roomId === DISPATCH_ROOM_ID) return 'DC';
-  return 'AR';
+  const clean = name.replace(/[^a-zA-Z ]/g, '').trim();
+  if (clean.length === 0) return 'DM';
+  const parts = clean.split(' ');
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return clean.slice(0, 2).toUpperCase();
 }
 
 function avatarColor(roomId) {
   if (roomId === DISPATCH_ROOM_ID) return { bg: '#DBEAFE', text: '#1E40AF' };
-  return { bg: '#FEF3C7', text: '#92400E' };
+  const colours = [
+    { bg: '#FEF3C7', text: '#92400E' },
+    { bg: '#D1FAE5', text: '#065F46' },
+    { bg: '#EDE9FE', text: '#7C3AED' },
+    { bg: '#FCE7F3', text: '#BE185D' },
+    { bg: '#FFE4E6', text: '#BE123C' },
+    { bg: '#F0FDF4', text: '#166534' },
+  ];
+  let hash = 0;
+  for (let i = 0; i < roomId.length; i++) hash = (hash * 31 + roomId.charCodeAt(i)) & 0xffffffff;
+  return colours[Math.abs(hash) % colours.length];
 }
 
+function memberAvatarColor(userId) {
+  const colours = [
+    { bg: '#DBEAFE', text: '#1E40AF' },
+    { bg: '#FEF3C7', text: '#92400E' },
+    { bg: '#D1FAE5', text: '#065F46' },
+    { bg: '#EDE9FE', text: '#7C3AED' },
+    { bg: '#FCE7F3', text: '#BE185D' },
+    { bg: '#FFE4E6', text: '#BE123C' },
+  ];
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) hash = (hash * 31 + userId.charCodeAt(i)) & 0xffffffff;
+  return colours[Math.abs(hash) % colours.length];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MembersPanel
+// ─────────────────────────────────────────────────────────────────────────────
+function MembersPanel({ visible, roomId, myUserId, accessToken, onClose, onStartDM }) {
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [dmLoading, setDmLoading] = useState(null);
+
+  const slideAnim = useRef(new Animated.Value(320)).current;
+
+  useEffect(() => {
+    if (!visible || !roomId) return;
+    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 65, friction: 10 }).start();
+    loadMembers();
+  }, [visible, roomId]);
+
+  const closeAnim = (cb) => {
+    Animated.timing(slideAnim, { toValue: 320, duration: 220, useNativeDriver: true }).start(cb);
+  };
+
+  const handleClose = () => closeAnim(onClose);
+
+  const loadMembers = async () => {
+    setLoading(true);
+    try {
+      const list = await getRoomMembers(accessToken, roomId);
+      list.sort((a, b) => {
+        if (a.userId === myUserId) return 1;
+        if (b.userId === myUserId) return -1;
+        return a.displayName.localeCompare(b.displayName);
+      });
+      setMembers(list);
+    } catch (err) {
+      console.warn('[MembersPanel] loadMembers error:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMemberPress = async (member) => {
+    if (member.userId === myUserId) return;
+    setDmLoading(member.userId);
+    try {
+      const dmRoomId = await getOrCreateDMRoom(accessToken, myUserId, member.userId);
+      closeAnim(() => onStartDM(dmRoomId, member.displayName));
+    } catch (err) {
+      console.warn('[MembersPanel] DM error:', err.message);
+    } finally {
+      setDmLoading(null);
+    }
+  };
+
+  if (!visible) return null;
+
+  return (
+    <Modal
+      transparent
+      visible={visible}
+      animationType="none"
+      onRequestClose={handleClose}
+      statusBarTranslucent
+    >
+      <TouchableOpacity style={MP.backdrop} activeOpacity={1} onPress={handleClose} />
+      <Animated.View style={[MP.panel, { transform: [{ translateX: slideAnim }] }]}>
+        <View style={MP.header}>
+          <View style={MP.headerLeft}>
+            <Ionicons name="people" size={20} color="#fff" />
+            <Text style={MP.headerTitle}>Members</Text>
+            {!loading && (
+              <View style={MP.countBadge}>
+                <Text style={MP.countTxt}>{members.length}</Text>
+              </View>
+            )}
+          </View>
+          <TouchableOpacity onPress={handleClose} style={MP.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={MP.subheading}>Tap a member to start a private chat</Text>
+        <View style={MP.divider} />
+
+        {loading ? (
+          <View style={MP.loaderWrap}>
+            <ActivityIndicator color="#1E40AF" size="large" />
+            <Text style={MP.loaderTxt}>Loading members…</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={members}
+            keyExtractor={m => m.userId}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 32 }}
+            renderItem={({ item: member }) => {
+              const isMe = member.userId === myUserId;
+              const colors = memberAvatarColor(member.userId);
+              const initials = member.displayName.charAt(0).toUpperCase();
+              const isLoading = dmLoading === member.userId;
+
+              return (
+                <TouchableOpacity
+                  style={[MP.memberRow, isMe && MP.memberRowMe]}
+                  onPress={() => handleMemberPress(member)}
+                  disabled={isMe || !!dmLoading}
+                  activeOpacity={isMe ? 1 : 0.7}
+                >
+                  <View style={[MP.memberAvatar, { backgroundColor: colors.bg }]}>
+                    <Text style={[MP.memberInitial, { color: colors.text }]}>{initials}</Text>
+                    <View style={[MP.presenceDot, { backgroundColor: isMe ? '#22C55E' : '#94A3B8' }]} />
+                  </View>
+                  <View style={MP.memberInfo}>
+                    <Text style={[MP.memberName, isMe && MP.memberNameMe]}>
+                      {member.displayName}{isMe ? ' (You)' : ''}
+                    </Text>
+                    <Text style={MP.memberUserId} numberOfLines={1}>{member.userId}</Text>
+                  </View>
+                  {!isMe && (
+                    <View style={MP.dmBtn}>
+                      {isLoading
+                        ? <ActivityIndicator size="small" color="#1E40AF" />
+                        : <Ionicons name="chatbubble-outline" size={18} color="#1E40AF" />
+                      }
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={
+              <View style={MP.empty}>
+                <Text style={MP.emptyTxt}>No members found</Text>
+              </View>
+            }
+          />
+        )}
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const MP = StyleSheet.create({
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
+  panel: {
+    position: 'absolute', top: 0, right: 0, bottom: 0,
+    width: '78%', maxWidth: 320,
+    backgroundColor: '#F8FAFF',
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20,
+    shadowOffset: { width: -4, height: 0 }, elevation: 20,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#1E40AF',
+    paddingHorizontal: 16, paddingVertical: 14, paddingTop: 52,
+  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerTitle: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  countBadge: { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
+  countTxt: { fontSize: 12, fontWeight: '700', color: '#fff' },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  subheading: { fontSize: 11, color: '#94A3B8', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4, fontStyle: 'italic' },
+  divider: { height: 0.5, backgroundColor: '#E2E8F0', marginHorizontal: 16 },
+  loaderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingTop: 60 },
+  loaderTxt: { color: '#64748B', fontSize: 13 },
+  memberRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 0.5, borderBottomColor: '#E2E8F0',
+    backgroundColor: '#fff', gap: 12,
+  },
+  memberRowMe: { backgroundColor: '#F0FDF4' },
+  memberAvatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative' },
+  memberInitial: { fontSize: 17, fontWeight: '700' },
+  presenceDot: { position: 'absolute', bottom: 1, right: 1, width: 11, height: 11, borderRadius: 6, borderWidth: 2, borderColor: '#fff' },
+  memberInfo: { flex: 1, minWidth: 0 },
+  memberName: { fontSize: 14, fontWeight: '600', color: '#0F172A', marginBottom: 2 },
+  memberNameMe: { color: '#15803D' },
+  memberUserId: { fontSize: 11, color: '#94A3B8' },
+  dmBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
+  empty: { padding: 32, alignItems: 'center' },
+  emptyTxt: { color: '#94A3B8', fontSize: 14 },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
 export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const { session } = useAuth();
   const insets = useSafeAreaInsets();
@@ -68,13 +299,21 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const [search, setSearch] = useState('');
   const [openRoomId, setOpenRoomId] = useState(null);
   const [openLabel, setOpenLabel] = useState('');
+  const [membersVisible, setMembersVisible] = useState(false);
+  const [dmNames, setDmNames] = useState({});
 
   const syncActive = useRef(true);
+  // Track the currently open room in a ref for use inside the sync closure
+  const openRoomIdRef = useRef(null);
+
+  useEffect(() => {
+    openRoomIdRef.current = openRoomId;
+  }, [openRoomId]);
 
   useEffect(() => {
     if (autoOpenRoomId) {
       setOpenRoomId(autoOpenRoomId);
-      setOpenLabel(roomDisplayName(autoOpenRoomId));
+      setOpenLabel(roomDisplayName(autoOpenRoomId, dmNames));
     }
   }, [autoOpenRoomId]);
 
@@ -118,6 +357,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     }
   };
 
+  // ── FIX 1: Live sync — now properly tracks new DM rooms & clears unread ──
   useEffect(() => {
     let since = null;
     const run = async () => {
@@ -130,24 +370,44 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
           const data = await syncMatrix(session.accessToken, since, 10000);
           since = data.next_batch;
           const updatedRooms = data.rooms?.join || {};
+
+          // Auto-join any invited rooms
+          const invitedRooms = data.rooms?.invite || {};
+          for (const invitedRoomId in invitedRooms) {
+            try {
+              const { joinRoom } = await import('../services/matrixService');
+              await joinRoom(session.accessToken, invitedRoomId);
+            } catch { }
+          }
+
           if (Object.keys(updatedRooms).length > 0) {
             setRooms(prev => {
               const map = {};
               prev.forEach(r => { map[r.roomId] = { ...r }; });
+
               Object.entries(updatedRooms).forEach(([rId, rData]) => {
                 const events = (rData.timeline?.events || []).filter(e => e.type === 'm.room.message');
                 if (events.length > 0) {
                   const last = events[events.length - 1];
+                  // Count messages NOT from me and NOT in the currently open room
+                  const incomingUnread = events.filter(
+                    e => e.sender !== session.userId && rId !== openRoomIdRef.current
+                  ).length;
+
                   if (map[rId]) {
+                    // Room already in list — update it
                     map[rId].lastEvent = last;
-                    if (last.sender !== session.userId && rId !== openRoomId) {
-                      map[rId].unread = (map[rId].unread || 0) + events.filter(e => e.sender !== session.userId).length;
+                    if (incomingUnread > 0) {
+                      map[rId].unread = (map[rId].unread || 0) + incomingUnread;
                     }
                   } else {
-                    map[rId] = { roomId: rId, lastEvent: last, unread: events.filter(e => e.sender !== session.userId).length };
+                    // FIX 1: New room (e.g. someone messaged in a DM we just created)
+                    // — add it to the list immediately
+                    map[rId] = { roomId: rId, lastEvent: last, unread: incomingUnread };
                   }
                 }
               });
+
               return Object.values(map).sort((a, b) => {
                 const ta = a.lastEvent?.origin_server_ts || 0;
                 const tb = b.lastEvent?.origin_server_ts || 0;
@@ -162,21 +422,59 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     };
     run();
     return () => { syncActive.current = false; };
-  }, [session.accessToken, openRoomId]);
+  }, [session.accessToken]);
 
-  const openRoom = (room) => {
+  const openRoom = (room, label) => {
+    // Clear unread when opening room
     setRooms(prev => prev.map(r => r.roomId === room.roomId ? { ...r, unread: 0 } : r));
-    setOpenLabel(roomDisplayName(room.roomId));
+    const displayLabel = label || roomDisplayName(room.roomId, dmNames);
+    setOpenLabel(displayLabel);
     setOpenRoomId(room.roomId);
+    setMembersVisible(false);
   };
 
   const closeRoom = () => {
     setOpenRoomId(null);
     setOpenLabel('');
+    setMembersVisible(false);
   };
 
+  // ── FIX 1: DM handler — room appears instantly without needing refresh ──
+  const handleStartDM = (dmRoomId, memberDisplayName) => {
+    setMembersVisible(false);
+
+    // Register the display name for this DM room
+    setDmNames(prev => ({ ...prev, [dmRoomId]: memberDisplayName }));
+
+    // Add to rooms list immediately if not already there
+    setRooms(prev => {
+      if (prev.some(r => r.roomId === dmRoomId)) {
+        // Already exists — just bring it to top and clear unread
+        return prev
+          .map(r => r.roomId === dmRoomId ? { ...r, unread: 0 } : r)
+          .sort((a, b) => {
+            // Bring this room to top
+            if (a.roomId === dmRoomId) return -1;
+            if (b.roomId === dmRoomId) return 1;
+            const ta = a.lastEvent?.origin_server_ts || 0;
+            const tb = b.lastEvent?.origin_server_ts || 0;
+            return tb - ta;
+          });
+      }
+      // New room — prepend it
+      return [{ roomId: dmRoomId, lastEvent: null, unread: 0 }, ...prev];
+    });
+
+    // Open the DM room immediately
+    setOpenLabel(memberDisplayName);
+    setOpenRoomId(dmRoomId);
+  };
+
+  // ── Open room view ──────────────────────────────────────────────────────
   if (openRoomId) {
     const colors = avatarColor(openRoomId);
+    const isDM = !!dmNames[openRoomId];
+
     return (
       <View style={styles.flex}>
         <View style={[styles.chatHeader, { paddingTop: insets.top + 10 }]}>
@@ -185,33 +483,58 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
           </TouchableOpacity>
           <View style={[styles.chatHeaderAvatar, { backgroundColor: colors.bg }]}>
             <Text style={[styles.chatHeaderAvatarTxt, { color: colors.text }]}>
-              {roomInitials(openRoomId)}
+              {roomInitials(openRoomId, dmNames)}
             </Text>
           </View>
           <View style={styles.chatHeaderInfo}>
-            <Text style={styles.chatHeaderName}>{openLabel}</Text>
+            <Text style={styles.chatHeaderName} numberOfLines={1}>{openLabel}</Text>
             <Text style={styles.chatHeaderSub}>
-              {openRoomId === DISPATCH_ROOM_ID ? 'Emergency Control Channel' : 'Alert Communication'}
+              {isDM
+                ? '🔒 Private conversation'
+                : openRoomId === DISPATCH_ROOM_ID
+                  ? 'Emergency Control Channel'
+                  : 'Alert Communication'}
             </Text>
           </View>
+          <TouchableOpacity
+            style={[styles.membersToggleBtn, membersVisible && styles.membersToggleBtnActive]}
+            onPress={() => setMembersVisible(v => !v)}
+            activeOpacity={0.75}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="people" size={20} color="#fff" />
+          </TouchableOpacity>
         </View>
+
         <ChatScreen roomId={openRoomId} roomLabel={openLabel} hideHeader />
+
+        <MembersPanel
+          visible={membersVisible}
+          roomId={openRoomId}
+          myUserId={session.userId}
+          accessToken={session.accessToken}
+          onClose={() => setMembersVisible(false)}
+          onStartDM={handleStartDM}
+        />
       </View>
     );
   }
 
+  // ── Room list ────────────────────────────────────────────────────────────
   const filtered = rooms.filter(r =>
-    roomDisplayName(r.roomId).toLowerCase().includes(search.toLowerCase())
+    roomDisplayName(r.roomId, dmNames).toLowerCase().includes(search.toLowerCase())
   );
 
   const renderRoom = ({ item }) => {
-    const name = roomDisplayName(item.roomId);
+    const name = roomDisplayName(item.roomId, dmNames);
     const preview = previewText(item.lastEvent);
     const time = formatTime(item.lastEvent?.origin_server_ts);
     const isMe = item.lastEvent?.sender === session.userId;
     const hasUnread = (item.unread || 0) > 0;
+    const unreadCount = item.unread || 0;
     const colors = avatarColor(item.roomId);
     const isDispatch = item.roomId === DISPATCH_ROOM_ID;
+    const isDMRoom = !!dmNames[item.roomId];
 
     const getMsgTypeIcon = () => {
       const type = item.lastEvent?.content?.msgtype;
@@ -225,15 +548,22 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     return (
       <TouchableOpacity style={styles.roomRow} onPress={() => openRoom(item)} activeOpacity={0.75}>
         <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
-          <Text style={[styles.avatarTxt, { color: colors.text }]}>{roomInitials(item.roomId)}</Text>
+          <Text style={[styles.avatarTxt, { color: colors.text }]}>{roomInitials(item.roomId, dmNames)}</Text>
           {isDispatch && <View style={styles.onlineDot} />}
+          {isDMRoom && <View style={[styles.onlineDot, { backgroundColor: '#A78BFA' }]} />}
         </View>
 
         <View style={styles.roomInfo}>
           <View style={styles.roomNameRow}>
-            <Text style={styles.roomName} numberOfLines={1}>{name}</Text>
+            <View style={styles.roomNameWrap}>
+              {isDMRoom && <View style={styles.dmTag}><Text style={styles.dmTagTxt}>DM</Text></View>}
+              {/* FIX 2 & 3: Bold room name when unread */}
+              <Text style={[styles.roomName, hasUnread && styles.roomNameUnread]} numberOfLines={1}>{name}</Text>
+            </View>
+            {/* FIX 2: Time in blue when unread */}
             <Text style={[styles.roomTime, hasUnread && styles.roomTimeUnread]}>{time}</Text>
           </View>
+
           <View style={styles.roomPreviewRow}>
             <View style={styles.previewLeft}>
               {getMsgTypeIcon()}
@@ -244,9 +574,11 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
                 {isMe ? `You: ${preview}` : preview}
               </Text>
             </View>
-            {hasUnread > 0 && (
+
+            {/* FIX 2: WhatsApp-style unread badge on the right */}
+            {hasUnread && (
               <View style={styles.unreadBadge}>
-                <Text style={styles.unreadTxt}>{item.unread > 99 ? '99+' : item.unread}</Text>
+                <Text style={styles.unreadTxt}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
               </View>
             )}
           </View>
@@ -351,20 +683,35 @@ const styles = StyleSheet.create({
 
   roomInfo: { flex: 1, minWidth: 0 },
   roomNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 },
-  roomName: { fontSize: 15, fontWeight: '600', color: '#0F172A', flex: 1, marginRight: 8 },
+  roomNameWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, marginRight: 8 },
+
+  dmTag: { backgroundColor: '#EDE9FE', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
+  dmTagTxt: { fontSize: 9, fontWeight: '800', color: '#7C3AED', letterSpacing: 0.5 },
+
+  roomName: { fontSize: 15, fontWeight: '500', color: '#0F172A', flex: 1 },
+  // FIX 3: Bold when has unread messages
+  roomNameUnread: { fontWeight: '700', color: '#0F172A' },
+
   roomTime: { fontSize: 12, color: '#94A3B8' },
+  // FIX 2: Blue time when unread
   roomTimeUnread: { color: '#1E40AF', fontWeight: '600' },
 
   roomPreviewRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   previewLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
-  roomPreview: { fontSize: 13, color: '#64748B', flex: 1 },
-  roomPreviewUnread: { color: '#1E40AF', fontWeight: '500' },
+  roomPreview: { fontSize: 13, color: '#94A3B8', flex: 1 },
+  // FIX 2: Darker preview text when unread
+  roomPreviewUnread: { color: '#475569', fontWeight: '500' },
 
+  // FIX 2: WhatsApp-style green unread badge
   unreadBadge: {
-    backgroundColor: '#1E40AF', borderRadius: 12,
-    minWidth: 22, height: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6,
+    backgroundColor: '#22C55E',
+    borderRadius: 12,
+    minWidth: 22, height: 22,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 6,
+    flexShrink: 0,
   },
-  unreadTxt: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  unreadTxt: { color: '#fff', fontSize: 11, fontWeight: '800' },
 
   separator: { height: 0.5, backgroundColor: '#E2E8F0', marginLeft: 82 },
 
@@ -376,7 +723,18 @@ const styles = StyleSheet.create({
   backBtn: { padding: 4 },
   chatHeaderAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   chatHeaderAvatarTxt: { fontSize: 14, fontWeight: '700' },
-  chatHeaderInfo: { flex: 1 },
+  chatHeaderInfo: { flex: 1, minWidth: 0 },
   chatHeaderName: { fontSize: 16, fontWeight: '700', color: '#fff' },
   chatHeaderSub: { fontSize: 11, color: 'rgba(255,255,255,0.65)' },
+
+  membersToggleBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
+  },
+  membersToggleBtnActive: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderColor: '#fff',
+  },
 });

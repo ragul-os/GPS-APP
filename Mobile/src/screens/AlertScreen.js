@@ -1,3 +1,15 @@
+/**
+ * AlertScreen.js
+ *
+ * Original icons & colors preserved (Feather, Ionicons, MaterialCommunityIcons,
+ * useSafeAreaInsets, blue/green theme).
+ *
+ * NEW additions from new code:
+ *  - Duplicate-poll guard (clearInterval before starting new poll)
+ *  - Improved console logging in startPolling
+ *  - acceptingRef guard already present in old code — kept as-is
+ */
+
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
@@ -22,46 +34,46 @@ const LOC_POLL_MS = 5000;
 const HEARTBEAT_MS = 10000;
 
 const TRIP_STATUS_CONFIG = {
-  idle: { color: '#64748B', bg: '#F1F5F9', icon: 'pause-circle', label: 'Idle', iconLib: 'Feather' },
+  idle:       { color: '#64748B', bg: '#F1F5F9', icon: 'pause-circle', label: 'Idle',       iconLib: 'Feather' },
   dispatched: { color: '#D97706', bg: '#FEF3C7', icon: 'alert-circle', label: 'Dispatched', iconLib: 'Feather' },
-  en_route: { color: '#1D4ED8', bg: '#DBEAFE', icon: 'navigation', label: 'En Route', iconLib: 'Feather' },
-  arrived: { color: '#15803D', bg: '#DCFCE7', icon: 'map-pin', label: 'Arrived', iconLib: 'Feather' },
-  completed: { color: '#64748B', bg: '#F1F5F9', icon: 'check-circle', label: 'Completed', iconLib: 'Feather' },
-  abandoned: { color: '#DC2626', bg: '#FEE2E2', icon: 'x-circle', label: 'Abandoned', iconLib: 'Feather' },
+  en_route:   { color: '#1D4ED8', bg: '#DBEAFE', icon: 'navigation',   label: 'En Route',   iconLib: 'Feather' },
+  arrived:    { color: '#15803D', bg: '#DCFCE7', icon: 'map-pin',      label: 'Arrived',    iconLib: 'Feather' },
+  completed:  { color: '#64748B', bg: '#F1F5F9', icon: 'check-circle', label: 'Completed',  iconLib: 'Feather' },
+  abandoned:  { color: '#DC2626', bg: '#FEE2E2', icon: 'x-circle',     label: 'Abandoned',  iconLib: 'Feather' },
 };
 
 const TAB_STANDBY = 'standby';
 const TAB_CHAT = 'chat';
 
 export default function AlertScreen() {
-  const [activeTab, setActiveTab] = useState(TAB_STANDBY);
-  const [status, setStatus] = useState('waiting');
-  const [alertData, setAlertData] = useState(null);
-  const [roomId, setRoomId] = useState(null);
-  const [countdown, setCountdown] = useState(30);
+  const [activeTab,    setActiveTab]    = useState(TAB_STANDBY);
+  const [status,       setStatus]       = useState('waiting');
+  const [alertData,    setAlertData]    = useState(null);
+  const [roomId,       setRoomId]       = useState(null);
+  const [countdown,    setCountdown]    = useState(30);
   const [serverOnline, setServerOnline] = useState(false);
-  const [isActive, setIsActive] = useState(true);
-  const [tripStatus, setTripStatus] = useState('idle');
+  const [isActive,     setIsActive]     = useState(true);
+  const [tripStatus,   setTripStatus]   = useState('idle');
   const [isRegistered, setIsRegistered] = useState(false);
   const insets = useSafeAreaInsets();
 
   const { session, logout, setActiveRoomId } = useAuth();
 
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(300)).current;
+  const pulseAnim    = useRef(new Animated.Value(1)).current;
+  const slideAnim    = useRef(new Animated.Value(300)).current;
   const countdownRef = useRef(null);
-  const pollRef = useRef(null);
-  const locPollRef = useRef(null);
+  const pollRef      = useRef(null);
+  const locPollRef   = useRef(null);
   const heartbeatRef = useRef(null);
-  const lastAlertId = useRef(null);
-  const statusRef = useRef('waiting');
-  const isActiveRef = useRef(true);
-  const roomIdRef = useRef(null);
+  const lastAlertId  = useRef(null);
+  const statusRef    = useRef('waiting');
+  const isActiveRef  = useRef(true);
+  const roomIdRef    = useRef(null);
   const acceptingRef = useRef(false);
 
-  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { statusRef.current  = status;   }, [status]);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
-  useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
+  useEffect(() => { roomIdRef.current   = roomId;   }, [roomId]);
 
   useEffect(() => {
     if (!session?.username || isRegistered) return;
@@ -85,12 +97,12 @@ export default function AlertScreen() {
     try {
       await Location.requestForegroundPermissionsAsync();
       const res = await fetch(`${SERVER_URL}/register-ambulance`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ambulanceId: session.username,
-          name: session.displayname || session.username,
-          type: AMBULANCE_TYPE || 'ambulance',
+          name:        session.displayname || session.username,
+          type:        AMBULANCE_TYPE || 'ambulance',
         }),
       });
       const json = await res.json();
@@ -110,13 +122,13 @@ export default function AlertScreen() {
         let lat = null, lng = null, heading = 0, speed = 0;
         try {
           const loc = await Location.getCurrentPositionAsync({ accuracy: 3, maximumAge: 8000, timeout: 6000 });
-          lat = loc.coords.latitude;
-          lng = loc.coords.longitude;
+          lat     = loc.coords.latitude;
+          lng     = loc.coords.longitude;
           heading = loc.coords.heading >= 0 ? loc.coords.heading : 0;
-          speed = loc.coords.speed >= 0 ? Math.round(loc.coords.speed * 3.6 * 10) / 10 : 0;
+          speed   = loc.coords.speed   >= 0 ? Math.round(loc.coords.speed * 3.6 * 10) / 10 : 0;
         } catch { }
         await fetch(`${SERVER_URL}/heartbeat`, {
-          method: 'POST',
+          method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ambulanceId: session.username, unitId: session.username, latitude: lat, longitude: lng, heading, speed }),
         });
@@ -124,13 +136,19 @@ export default function AlertScreen() {
     }, HEARTBEAT_MS);
   };
 
+  // NEW: duplicate-poll guard + logging
   const startPolling = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+    }
+    console.log('[Polling] Started for:', session.username);
+
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`${SERVER_URL}/my-alert?ambulanceId=${session.username}`);
+        const res  = await fetch(`${SERVER_URL}/my-alert?ambulanceId=${session.username}`);
         const json = await res.json();
         const data = json.alert;
+        console.log('[Polling] Response JSON:', data);
         setServerOnline(true);
         if (
           data && data.status === 'pending' &&
@@ -142,6 +160,7 @@ export default function AlertScreen() {
           receiveAlert(data);
         }
       } catch (err) {
+        console.log('[Polling] ❌ Error:', err.message);
         setServerOnline(false);
       }
     }, POLL_INTERVAL_MS);
@@ -154,7 +173,7 @@ export default function AlertScreen() {
 
   const fetchTripStatus = async () => {
     try {
-      const res = await fetch(`${SERVER_URL}/ambulance-location`);
+      const res  = await fetch(`${SERVER_URL}/ambulance-location`);
       const data = await res.json();
       if (statusRef.current !== 'waiting') return;
       setTripStatus(data.tripStatus || 'idle');
@@ -215,36 +234,57 @@ export default function AlertScreen() {
   };
 
   const handleAccept = async () => {
-    if (acceptingRef.current) return;
+    if (acceptingRef.current) {
+      console.log('[Alert] handleAccept already in progress, ignoring duplicate call');
+      return;
+    }
     acceptingRef.current = true;
+    console.log('👉 Accept clicked');
+
     if (!alertData) { acceptingRef.current = false; return; }
     stopCountdown();
-    const captured = alertData;
+
+    const captured       = alertData;
     const capturedRoomId = roomIdRef.current;
+
+    console.log('[Alert] Room ID:', capturedRoomId);
     setActiveRoomId(capturedRoomId);
+
     try {
       if (capturedRoomId && session?.accessToken) {
+        console.log('[Alert] Joining room...');
         await joinRoom(session.accessToken, capturedRoomId);
+        console.log('[Alert] Joined room ✅');
       }
-    } catch (err) { console.warn('[Alert] joinRoom failed:', err.message); }
+    } catch (err) {
+      console.warn('[Alert] joinRoom failed:', err.message);
+    }
+
     try {
       await fetch(`${SERVER_URL}/accept-assignment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ambulanceId: session.username }),
       });
-    } catch (err) { console.warn('[Alert] Accept API failed:', err.message); }
+      console.log('[Alert] Accepted in backend ✅');
+    } catch (err) {
+      console.warn('[Alert] Accept API failed:', err.message);
+    }
+
     setStatus('accepted');
     setAlertData(null);
+
+    console.log('[Alert] Navigating to map...');
     router.replace({
       pathname: '/(app)/(dispatch)/map',
       params: {
-        destination: JSON.stringify(captured.destination),
-        roomId: capturedRoomId || '',
-        ambulanceId: session.username,
+        destination:       JSON.stringify(captured.destination),
+        roomId:            capturedRoomId || '',
+        ambulanceId:       session.username,
         initialTripStatus: 'accepted',
       },
     });
+
     setTimeout(() => { acceptingRef.current = false; }, 3000);
   };
 
@@ -272,6 +312,7 @@ export default function AlertScreen() {
     setTimeout(() => { setStatus('waiting'); setTripStatus('idle'); slideAnim.setValue(300); }, 2500);
   };
 
+  // Original StatusPill using Feather icons
   const StatusPill = ({ ts }) => {
     const cfg = TRIP_STATUS_CONFIG[ts] || TRIP_STATUS_CONFIG.idle;
     return (
@@ -282,6 +323,7 @@ export default function AlertScreen() {
     );
   };
 
+  // Original TabBar using MaterialCommunityIcons + Ionicons
   const TabBar = () => (
     <View style={[styles.tabBar, { paddingBottom: insets.bottom || 16 }]}>
       <TouchableOpacity
@@ -370,9 +412,9 @@ export default function AlertScreen() {
 
         {alertData && (
           <View style={styles.infoBox}>
-            <InfoRow icon="user" label="Patient" value={alertData.patientName || 'Unknown'} />
+            <InfoRow icon="user"      label="Patient"  value={alertData.patientName || 'Unknown'} />
             {alertData.patientPhone ? <InfoRow icon="phone" label="Phone" value={alertData.patientPhone} /> : null}
-            <InfoRow icon="map-pin" label="Location" value={alertData.address || 'See map'} />
+            <InfoRow icon="map-pin"   label="Location" value={alertData.address || 'See map'} />
             {alertData.destination && (
               <InfoRow
                 icon="crosshair"
@@ -492,10 +534,10 @@ const styles = StyleSheet.create({
   tabBtn: {
     flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 12, gap: 3, position: 'relative',
   },
-  tabBtnActive: { backgroundColor: '#EFF6FF' },
-  tabLabel: { fontSize: 11, fontWeight: '700', color: '#94A3B8', letterSpacing: 0.3 },
+  tabBtnActive:   { backgroundColor: '#EFF6FF' },
+  tabLabel:       { fontSize: 11, fontWeight: '700', color: '#94A3B8', letterSpacing: 0.3 },
   tabLabelActive: { color: '#1E40AF' },
-  tabUnderline: { width: 20, height: 3, borderRadius: 2, backgroundColor: '#1E40AF', marginTop: 2 },
+  tabUnderline:   { width: 20, height: 3, borderRadius: 2, backgroundColor: '#1E40AF', marginTop: 2 },
 
   topBarAbsolute: {
     position: 'absolute', left: 0, right: 0, zIndex: 10,
@@ -535,7 +577,7 @@ const styles = StyleSheet.create({
     elevation: 8,
     borderWidth: 2, borderColor: '#DBEAFE',
   },
-  waitingTitle: { fontSize: 26, fontWeight: '800', color: '#0F172A', marginBottom: 8, textAlign: 'center' },
+  waitingTitle:    { fontSize: 26, fontWeight: '800', color: '#0F172A', marginBottom: 8, textAlign: 'center' },
   waitingSubtitle: { fontSize: 15, color: '#94A3B8', marginBottom: 24, textAlign: 'center' },
 
   toggleBtn: {
@@ -543,19 +585,19 @@ const styles = StyleSheet.create({
     borderRadius: 18, paddingVertical: 20, paddingHorizontal: 20,
     marginBottom: 20, borderWidth: 2, gap: 14,
   },
-  toggleBtnActive: { backgroundColor: '#F0FDF4', borderColor: '#15803D' },
+  toggleBtnActive:   { backgroundColor: '#F0FDF4', borderColor: '#15803D' },
   toggleBtnInactive: { backgroundColor: '#FFF5F5', borderColor: '#DC2626' },
-  toggleDot: { width: 16, height: 16, borderRadius: 8, flexShrink: 0 },
-  toggleTextWrap: { flex: 1 },
-  toggleLabel: { fontSize: 18, fontWeight: '800', color: '#0F172A', marginBottom: 3 },
-  toggleSub: { fontSize: 13, color: '#94A3B8' },
+  toggleDot:         { width: 16, height: 16, borderRadius: 8, flexShrink: 0 },
+  toggleTextWrap:    { flex: 1 },
+  toggleLabel:       { fontSize: 18, fontWeight: '800', color: '#0F172A', marginBottom: 3 },
+  toggleSub:         { fontSize: 13, color: '#94A3B8' },
 
   serverRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   serverDot: { width: 7, height: 7, borderRadius: 4 },
   serverText: { fontSize: 12, color: '#CBD5E1' },
 
-  incomingContainer: { ...require('react-native').StyleSheet.absoluteFillObject, justifyContent: 'flex-end', zIndex: 50 },
-  overlay: { ...require('react-native').StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
+  incomingContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', zIndex: 50 },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
   alertCard: {
     backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28,
     paddingHorizontal: 20, paddingBottom: 40, paddingTop: 24, elevation: 24,
@@ -567,23 +609,23 @@ const styles = StyleSheet.create({
   },
   alertHeaderTitle: { fontSize: 20, fontWeight: '900', color: '#991B1B', letterSpacing: 1.5 },
 
-  countdownRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18, gap: 16 },
+  countdownRow:    { flexDirection: 'row', alignItems: 'center', marginBottom: 18, gap: 16 },
   countdownCircle: {
     width: 72, height: 72, borderRadius: 36,
     backgroundColor: '#FEF3C7', borderWidth: 3, borderColor: '#D97706',
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  countdownNum: { fontSize: 26, fontWeight: '900', color: '#92400E' },
+  countdownNum:   { fontSize: 26, fontWeight: '900', color: '#92400E' },
   countdownLabel: { fontSize: 10, color: '#92400E', marginTop: -2 },
-  countdownNote: { fontSize: 12, color: '#94A3B8', marginBottom: 8 },
-  progressTrack: { height: 6, backgroundColor: '#E2E8F0', borderRadius: 3, overflow: 'hidden' },
-  progressFill: { height: 6, borderRadius: 3 },
+  countdownNote:  { fontSize: 12, color: '#94A3B8', marginBottom: 8 },
+  progressTrack:  { height: 6, backgroundColor: '#E2E8F0', borderRadius: 3, overflow: 'hidden' },
+  progressFill:   { height: 6, borderRadius: 3 },
 
-  infoBox: { backgroundColor: '#F8FAFF', borderRadius: 14, padding: 14, marginBottom: 20, borderWidth: 0.5, borderColor: '#E2E8F0' },
-  infoRow: { flexDirection: 'row', marginBottom: 10, alignItems: 'flex-start' },
-  infoIconWrap: { width: 22, alignItems: 'center', marginRight: 6, marginTop: 1 },
-  infoLabel: { width: 72, fontSize: 12, color: '#64748B', fontWeight: '700' },
-  infoValue: { flex: 1, fontSize: 13, color: '#0F172A', fontWeight: '500' },
+  infoBox:     { backgroundColor: '#F8FAFF', borderRadius: 14, padding: 14, marginBottom: 20, borderWidth: 0.5, borderColor: '#E2E8F0' },
+  infoRow:     { flexDirection: 'row', marginBottom: 10, alignItems: 'flex-start' },
+  infoIconWrap:{ width: 22, alignItems: 'center', marginRight: 6, marginTop: 1 },
+  infoLabel:   { width: 72, fontSize: 12, color: '#64748B', fontWeight: '700' },
+  infoValue:   { flex: 1, fontSize: 13, color: '#0F172A', fontWeight: '500' },
 
   actionRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
   rejectBtn: {

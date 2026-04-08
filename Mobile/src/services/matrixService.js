@@ -1,6 +1,10 @@
 /**
  * matrixService.js — Mobile Matrix API Service
- * Added: sendFileMessage for document/file uploads
+ * Original code preserved.
+ * NEW additions:
+ *  - getRoomMembers
+ *  - getUserDisplayName
+ *  - getOrCreateDMRoom (with admin force-join)
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -220,7 +224,6 @@ export async function sendAudioMessage(accessToken, roomId, mxcUri, filename, du
 }
 
 // ── 15. Send file / document ──────────────────────────────────────────────
-// NEW — supports any file type (PDF, Word, Excel, zip, etc.)
 export async function sendFileMessage(accessToken, roomId, mxcUri, filename, mimeType, fileSize = 0) {
   const txnId = `fil_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const res = await fetch(
@@ -304,7 +307,6 @@ export async function syncMatrix(accessToken, since = null, timeout = 10000) {
 }
 
 // ── 19. mxc → HTTP ───────────────────────────────────────────────────────
-// NEW — matches web MatrixService.js exactly
 export function mxcToHttp(mxcUri, accessToken) {
   if (!mxcUri?.startsWith('mxc://')) return mxcUri;
   const stripped = mxcUri.slice(6);
@@ -329,4 +331,239 @@ export async function loadSession() {
 
 export async function clearSession() {
   await AsyncStorage.removeItem(KEY_SESSION);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 21. NEW: Get room members ─────────────────────────────────────────────
+// Returns array of { userId, displayName, avatarUrl, membership }
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getRoomMembers(accessToken, roomId) {
+  const res = await fetch(
+    `${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/members`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to get room members');
+
+  return (data.chunk || [])
+    .filter(e => e.content?.membership === 'join')
+    .map(e => ({
+      userId: e.state_key,
+      displayName: e.content?.displayname || e.state_key.split(':')[0].replace('@', ''),
+      avatarUrl: e.content?.avatar_url || null,
+      membership: e.content?.membership,
+    }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 22. NEW: Get user display name ────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+/* export async function getUserDisplayName(accessToken, userId) {
+  try {
+    const res = await fetch(
+      `${SYNAPSE_BASE}/_matrix/client/r0/profile/${encodeURIComponent(userId)}/displayname`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const data = await res.json();
+    return data.displayname || userId.split(':')[0].replace('@', '');
+  } catch {
+    return userId.split(':')[0].replace('@', '');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 23. NEW: Get or create a DM room with a specific user ─────────────────
+// Uses admin force-join so both users are in the room without invite/accept flow.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getOrCreateDMRoom(accessToken, myUserId, targetUserId) {
+  console.log('[DM] START', { myUserId, targetUserId });
+
+  let resolvedRoomId = null;
+
+  // Step 1: Check account data for an existing DM room
+  try {
+    const adRes = await fetch(
+      `${SYNAPSE_BASE}/_matrix/client/r0/user/${encodeURIComponent(myUserId)}/account_data/m.direct`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (adRes.ok) {
+      const adData = await adRes.json();
+      const dmRooms = adData[targetUserId] || [];
+      if (dmRooms.length > 0) {
+        const joinedRooms = await getJoinedRooms(accessToken);
+        for (const candidateRoomId of dmRooms) {
+          if (joinedRooms.includes(candidateRoomId)) {
+            console.log('[DM] ✅ Found existing DM room:', candidateRoomId);
+            resolvedRoomId = candidateRoomId;
+            break;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[DM] account_data check failed:', err.message);
+  }
+
+  // Step 2: Create new DM room if none found
+  if (!resolvedRoomId) {
+    console.log('[DM] Creating new DM room...');
+    const targetName = targetUserId.split(':')[0].replace('@', '');
+
+    const createRes = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/createRoom`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        preset: 'trusted_private_chat',
+        visibility: 'private',
+        is_direct: true,
+        name: targetName,
+        power_level_content_override: {
+          users_default: 50,
+          events_default: 0,
+        },
+      }),
+    });
+    const createData = await createRes.json();
+    if (!createRes.ok) throw new Error(createData.error || 'Failed to create DM room');
+    resolvedRoomId = createData.room_id;
+    console.log('[DM] ✅ Room created:', resolvedRoomId);
+
+    // Save to account_data
+    try {
+      let existingDMs = {};
+      try {
+        const adRes = await fetch(
+          `${SYNAPSE_BASE}/_matrix/client/r0/user/${encodeURIComponent(myUserId)}/account_data/m.direct`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (adRes.ok) existingDMs = await adRes.json();
+      } catch {}
+      await fetch(
+        `${SYNAPSE_BASE}/_matrix/client/r0/user/${encodeURIComponent(myUserId)}/account_data/m.direct`,
+        {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...existingDMs,
+            [targetUserId]: [...(existingDMs[targetUserId] || []), resolvedRoomId],
+          }),
+        }
+      );
+      console.log('[DM] ✅ account_data saved');
+    } catch (err) {
+      console.warn('[DM] account_data save failed (non-fatal):', err.message);
+    }
+  }
+
+  // Step 3: Force-join BOTH users via Synapse admin API
+  for (const userId of [myUserId, targetUserId]) {
+    try {
+      console.log('[DM] Force-joining via admin API:', userId);
+      const res = await fetch(
+        `${SYNAPSE_BASE}/_synapse/admin/v1/join/${encodeURIComponent(resolvedRoomId)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${ADMIN_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ user_id: userId }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error?.toLowerCase().includes('already')) {
+          console.log('[DM] Already in room (ok):', userId);
+        } else {
+          console.warn('[DM] Force-join failed for', userId, ':', data.error);
+          // Fallback: invite
+          if (userId === targetUserId) {
+            try {
+              await fetch(
+                `${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(resolvedRoomId)}/invite`,
+                {
+                  method: 'POST',
+                  headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ user_id: targetUserId }),
+                }
+              );
+              console.log('[DM] ✅ Fallback invite sent to:', targetUserId);
+            } catch (inviteErr) {
+              console.warn('[DM] Fallback invite also failed:', inviteErr.message);
+            }
+          }
+        }
+      } else {
+        console.log('[DM] ✅ Force-joined:', userId);
+      }
+    } catch (err) {
+      console.warn('[DM] Force-join error for', userId, ':', err.message);
+    }
+  }
+
+  console.log('[DM] ✅ DM room ready:', resolvedRoomId);
+  return resolvedRoomId;
+} */
+
+export async function getOrCreateDMRoom(accessToken, myUserId, targetUserId) {
+  console.log("[DM] Checking existing DM...");
+
+  // 1. Get all joined rooms
+  const rooms = await getJoinedRooms(accessToken);
+
+  // 2. Check each room members
+  for (const roomId of rooms) {
+    try {
+      const members = await getRoomMembers(accessToken, roomId);
+      const userIds = members.map(m => m.userId);
+
+      // Check if ONLY these 2 users exist
+      if (
+        userIds.includes(myUserId) &&
+        userIds.includes(targetUserId) &&
+        userIds.length === 2
+      ) {
+        console.log("[DM] ✅ Existing DM found:", roomId);
+        return roomId;
+      }
+    } catch (err) {
+      console.warn("[DM] Error checking room:", roomId);
+    }
+  }
+
+  // 3. If not found → create new room
+  console.log("[DM] ❌ No DM found, creating new one...");
+
+  const room = await createRoom(accessToken, "DM Room");
+  const roomId = room.room_id;
+
+  console.log("[DM] ✅ Room created:", roomId);
+
+  // 4. Invite user
+  await inviteUser(accessToken, roomId, targetUserId);
+  console.log("[DM] ✅ Invite sent");
+
+  // 5. Wait for join
+  let joined = false;
+
+  for (let i = 0; i < 6; i++) {
+    const members = await getRoomMembers(accessToken, roomId);
+    const userIds = members.map(m => m.userId);
+
+    console.log("[DM] Members:", userIds);
+
+    if (userIds.includes(targetUserId)) {
+      console.log("[DM] ✅ User joined");
+      joined = true;
+      break;
+    }
+
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  if (!joined) {
+    console.warn("[DM] ⚠️ User not joined yet");
+  }
+
+  return roomId;
 }

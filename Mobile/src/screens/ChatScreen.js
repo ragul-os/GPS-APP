@@ -1,3 +1,17 @@
+/**
+ * ChatScreen.js
+ *
+ * Original icons & colors preserved (Feather, Ionicons, Slider, expo-video,
+ * expo-audio, MapView — all original imports kept).
+ *
+ * NEW features added from new code:
+ *  1. WhatsApp-style keyboard: typing → keyboard slides up, input bar stays
+ *     pinned above keyboard.
+ *  2. Tapping 📎 → keyboard dismissed, attach grid slides in below input bar.
+ *  3. Tapping the message list → keyboard + attach both dismiss.
+ *  4. Auto-join invited rooms during sync.
+ */
+
 import Slider from '@react-native-community/slider';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -12,6 +26,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -24,6 +39,7 @@ import {
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
 import {
   getRoomMessages,
+  joinRoom,
   mxcToHttp,
   sendAudioMessage,
   sendFileMessage,
@@ -50,21 +66,39 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [playingId, setPlayingId] = useState(null);
-  const [showAttach, setShowAttach] = useState(false);
   const [fullImage, setFullImage] = useState(null);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [showLiveDurationModal, setShowLiveDurationModal] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [mapRegion, setMapRegion] = useState({ latitude: 12.9716, longitude: 77.5946, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+
+  // NEW: WhatsApp panel state: 'none' | 'keyboard' | 'attach'
+  const [panel, setPanel] = useState('none');
 
   const flatRef = useRef(null);
   const syncActive = useRef(true);
   const soundRef = useRef(null);
   const roomIdRef = useRef(roomId);
+  const inputRef = useRef(null);
 
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
+
+  // NEW: Keyboard listeners for WhatsApp-style behavior
+  useEffect(() => {
+    const showEv = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEv = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = () => {
+      setPanel('keyboard');
+      setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 150);
+    };
+    const onHide = () => {
+      setPanel(prev => (prev === 'keyboard' ? 'none' : prev));
+    };
+    const s1 = Keyboard.addListener(showEv, onShow);
+    const s2 = Keyboard.addListener(hideEv, onHide);
+    return () => { s1.remove(); s2.remove(); };
+  }, []);
 
   useEffect(() => {
     syncActive.current = true;
@@ -95,40 +129,117 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
   };
 
-  const startSync = useCallback(async () => {
-    let since = null;
-    try {
-      const initial = await syncMatrix(session.accessToken, null, 0);
-      since = initial.next_batch;
-    } catch { }
+ const startSync = useCallback(async () => {
+  let since = null;
 
-    while (syncActive.current) {
-      try {
-        const data = await syncMatrix(session.accessToken, since, 10000);
-        since = data.next_batch;
-        const cur = roomIdRef.current;
-        const roomData = data.rooms?.join?.[cur];
-        if (roomData?.timeline?.events) {
-          const newMsgs = roomData.timeline.events.filter(e => e.type === 'm.room.message').map(parseEvent);
-          if (newMsgs.length > 0) {
-            setMessages(prev => {
-              const ids = new Set(prev.map(m => m.id));
-              const incoming = newMsgs.filter(m => !ids.has(m.id));
-              if (!incoming.length) return prev;
-              const filtered = prev.filter(p => {
-                if (!p.id.startsWith('opt_')) return true;
-                return !incoming.some(i => i.body === p.body && i.sender === p.sender);
-              });
-              return [...filtered, ...incoming];
-            });
-            setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 100);
-          }
+  try {
+    console.log("🚀 [SYNC] Initial sync start...");
+    const initial = await syncMatrix(session.accessToken, null, 0);
+    since = initial.next_batch;
+    console.log("✅ [SYNC] Initial sync done");
+  } catch (err) {
+    console.warn("❌ [SYNC] Initial sync failed:", err.message);
+  }
+
+  while (syncActive.current) {
+    try {
+      console.log("🔄 [SYNC] Polling...");
+
+      const data = await syncMatrix(session.accessToken, since, 10000);
+      since = data.next_batch;
+
+      // ─────────────────────────────────────────
+      // 🔥 1. AUTO JOIN LOGS
+      // ─────────────────────────────────────────
+      const invitedRooms = data.rooms?.invite || {};
+
+      for (const invitedRoomId in invitedRooms) {
+        console.log("🔔 [INVITE RECEIVED]:", invitedRoomId);
+
+        try {
+          await joinRoom(session.accessToken, invitedRoomId);
+          console.log("✅ [AUTO JOIN SUCCESS]:", invitedRoomId);
+        } catch (err) {
+          console.warn("❌ [AUTO JOIN FAILED]:", err.message);
         }
-      } catch {
-        if (syncActive.current) await new Promise(r => setTimeout(r, 3000));
+      }
+
+      // ─────────────────────────────────────────
+      // 🔥 2. CURRENT ROOM EVENTS
+      // ─────────────────────────────────────────
+      const cur = roomIdRef.current;
+      const roomData = data.rooms?.join?.[cur];
+
+      if (roomData?.timeline?.events) {
+
+        // ─────────────────────────────────────
+        // 👥 MEMBER (JOIN / LEAVE) EVENTS
+        // ─────────────────────────────────────
+        roomData.timeline.events.forEach(event => {
+          if (event.type === "m.room.member") {
+            const userId = event.state_key;
+            const membership = event.content?.membership;
+
+            console.log("👥 [MEMBER EVENT]");
+            console.log("➡️ User:", userId);
+            console.log("➡️ Membership:", membership);
+            console.log("➡️ Room:", cur);
+
+            if (membership === "join") {
+              console.log("✅ USER JOINED:", userId);
+            }
+
+            if (membership === "leave") {
+              console.log("❌ USER LEFT:", userId);
+            }
+          }
+        });
+
+        // ─────────────────────────────────────
+        // 💬 MESSAGE EVENTS
+        // ─────────────────────────────────────
+        const newMsgs = roomData.timeline.events
+          .filter(e => e.type === 'm.room.message')
+          .map(parseEvent);
+
+        if (newMsgs.length > 0) {
+          console.log("💬 [NEW MESSAGES]:", newMsgs.length);
+
+          setMessages(prev => {
+            const ids = new Set(prev.map(m => m.id));
+            const incoming = newMsgs.filter(m => !ids.has(m.id));
+
+            if (!incoming.length) return prev;
+
+            console.log("📥 [INCOMING MESSAGES]:", incoming.map(m => m.body));
+
+            const filtered = prev.filter(p => {
+              if (!p.id.startsWith('opt_')) return true;
+              return !incoming.some(i => i.body === p.body && i.sender === p.sender);
+            });
+
+            return [...filtered, ...incoming];
+          });
+
+          setTimeout(() => {
+            console.log("⬇️ Scrolling to latest message");
+            flatRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+      }
+
+    } catch (err) {
+      console.warn("❌ [SYNC ERROR]:", err?.message || err);
+
+      if (syncActive.current) {
+        console.log("⏳ [SYNC] Retrying in 3 seconds...");
+        await new Promise(r => setTimeout(r, 3000));
       }
     }
-  }, [session.accessToken, roomId]);
+  }
+
+  console.log("🛑 [SYNC] Stopped");
+}, [session.accessToken, roomId]);
 
   function parseEvent(event) {
     const content = event.content || {};
@@ -155,6 +266,25 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     };
   }
 
+  // NEW: Panel helpers (WhatsApp-style)
+  const openAttach = () => {
+    Keyboard.dismiss();
+    setTimeout(() => setPanel('attach'), Platform.OS === 'ios' ? 50 : 10);
+  };
+
+  const closePanel = () => {
+    Keyboard.dismiss();
+    setPanel('none');
+  };
+
+  const toggleAttach = () => {
+    if (panel === 'attach') {
+      closePanel();
+    } else {
+      openAttach();
+    }
+  };
+
   async function handleSend() {
     const text = inputText.trim();
     if (!text || sending) return;
@@ -180,13 +310,13 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   }
 
   async function handlePickImage() {
-    setShowAttach(false);
+    closePanel();
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow photo access.'); return; }
-      const result = await ImagePicker.launchImageLibraryAsync({ 
-        mediaTypes: ImagePicker.MediaType.Images, 
-        quality: 0.8 
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaType.Images,
+        quality: 0.8
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
@@ -198,7 +328,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   }
 
   async function handleCamera() {
-    setShowAttach(false);
+    closePanel();
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow camera access.'); return; }
@@ -214,13 +344,13 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   }
 
   async function handlePickVideo() {
-    setShowAttach(false);
+    closePanel();
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow photo access.'); return; }
-      const result = await ImagePicker.launchImageLibraryAsync({ 
-        mediaTypes: ImagePicker.MediaType.Videos, 
-        videoMaxDuration: 60 
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaType.Videos,
+        videoMaxDuration: 60
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
@@ -233,7 +363,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   }
 
   async function handlePickFile() {
-    setShowAttach(false);
+    closePanel();
     try {
       const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
       if (result.canceled || !result.assets?.[0]) return;
@@ -252,7 +382,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow microphone access.'); return; }
-      
+
       const audioRecorder = new AudioModule.Recording();
       await audioRecorder.prepare({
         android: {
@@ -357,6 +487,25 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     if (mimeType.includes('zip') || mimeType.includes('rar')) return 'archive';
     return 'file';
   }
+
+  // Original attach items using Feather icons
+  const ATTACH_ITEMS = [
+    { key: 'camera',   icon: 'camera',    label: 'Camera',   color: '#1E40AF', bg: '#DBEAFE' },
+    { key: 'gallery',  icon: 'image',     label: 'Gallery',  color: '#3B82F6', bg: '#EFF6FF' },
+    { key: 'video',    icon: 'video',     label: 'Video',    color: '#8B5CF6', bg: '#EDE9FE' },
+    { key: 'document', icon: 'paperclip', label: 'Document', color: '#6366F1', bg: '#E0E7FF' },
+    { key: 'location', icon: 'map-pin',   label: 'Location', color: '#10B981', bg: '#D1FAE5' },
+    { key: 'emoji',    icon: 'smile',     label: 'Emoji',    color: '#F59E0B', bg: '#FEF3C7' },
+  ];
+
+  const attachHandlers = {
+    camera: handleCamera,
+    gallery: handlePickImage,
+    video: handlePickVideo,
+    document: handlePickFile,
+    location: () => { closePanel(); setShowLocationModal(true); },
+    emoji: () => { closePanel(); setShowEmojiPicker(true); },
+  };
 
   const renderMessage = ({ item: msg, index }) => {
     const time = new Date(msg.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -485,38 +634,14 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     );
   }
 
-  const AttachMenu = () => (
-    <View style={styles.attachMenu}>
-      {[
-        { icon: 'camera', label: 'Camera', onPress: handleCamera, lib: 'Feather', color: '#1E40AF' },
-        { icon: 'image', label: 'Gallery', onPress: handlePickImage, lib: 'Feather', color: '#3B82F6' },
-        { icon: 'video', label: 'Video', onPress: handlePickVideo, lib: 'Feather', color: '#8B5CF6' },
-        { icon: 'paperclip', label: 'Document', onPress: handlePickFile, lib: 'Feather', color: '#6366F1' },
-        { icon: 'map-pin', label: 'Location', onPress: () => { setShowAttach(false); setShowLocationModal(true); }, lib: 'Feather', color: '#10B981' },
-        { icon: 'smile', label: 'Emoji', onPress: () => { setShowAttach(false); setShowEmojiPicker(true); }, lib: 'Feather', color: '#F59E0B' },
-      ].map(item => (
-        <TouchableOpacity
-          key={item.label}
-          style={styles.attachItem}
-          onPress={item.onPress}
-          activeOpacity={0.75}
-        >
-          <View style={[styles.attachItemIcon, { borderColor: item.color + '33' }]}>
-            <Feather name={item.icon} size={22} color={item.color} />
-          </View>
-          <Text style={styles.attachItemLabel}>{item.label}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-
   const headerTitle = roomLabel || (isDispatchRoom ? 'Dispatch Chat' : 'Alert Chat');
+  const showAttach = panel === 'attach';
 
   return (
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
       {!hideHeader && (
         <View style={styles.header}>
@@ -531,6 +656,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </View>
       )}
 
+      {/* NEW: onScrollBeginDrag closes keyboard+attach */}
       <FlatList
         ref={flatRef}
         data={messages}
@@ -539,6 +665,8 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         contentContainerStyle={styles.list}
         onContentSizeChange={() => flatRef.current?.scrollToEnd({ animated: false })}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={closePanel}
         ListEmptyComponent={
           <View style={styles.emptyWrap}>
             <Ionicons name="chatbubbles-outline" size={52} color="#BFDBFE" />
@@ -561,12 +689,12 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
           </TouchableOpacity>
         </View>
       )}
-      {showAttach && !isRecording && <AttachMenu />}
 
+      {/* Input bar */}
       <View style={styles.inputBar}>
         <TouchableOpacity
           style={[styles.iconActionBtn, showAttach && styles.iconActionBtnActive]}
-          onPress={() => setShowAttach(v => !v)}
+          onPress={toggleAttach}
           disabled={isRecording || uploading}
           activeOpacity={0.7}
         >
@@ -575,11 +703,13 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
 
         {!isRecording && (
           <TextInput
+            ref={inputRef}
             style={styles.textInput}
             placeholder="Type a message…"
             placeholderTextColor="#94A3B8"
             value={inputText}
             onChangeText={setInputText}
+            onFocus={() => setPanel('keyboard')}
             multiline
             maxLength={2000}
           />
@@ -610,26 +740,29 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         )}
       </View>
 
-      <Modal visible={false} transparent animationType="slide" onRequestClose={() => setShowMoreMenu(false)}>
-        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setShowMoreMenu(false)}>
-          <View style={styles.menuContent}>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMoreMenu(false); setShowLocationModal(true); }}>
-              <View style={[styles.menuIconBox, { backgroundColor: '#10B981' }]}>
-                <Ionicons name="location" size={24} color="#fff" />
-              </View>
-              <Text style={styles.menuLabel}>Share Location</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setShowMoreMenu(false); setShowEmojiPicker(true); }}>
-              <View style={[styles.menuIconBox, { backgroundColor: '#F59E0B' }]}>
-                <Ionicons name="happy" size={24} color="#fff" />
-              </View>
-              <Text style={styles.menuLabel}>Emojis</Text>
-            </TouchableOpacity>
+      {/* NEW: Attach grid — slides in below input bar (WhatsApp style) */}
+      {showAttach && !isRecording && (
+        <View style={styles.attachMenu}>
+          <View style={styles.attachHandle} />
+          <View style={styles.attachGrid}>
+            {ATTACH_ITEMS.map(item => (
+              <TouchableOpacity
+                key={item.key}
+                style={styles.attachCell}
+                onPress={attachHandlers[item.key]}
+                activeOpacity={0.75}
+              >
+                <View style={[styles.attachItemIcon, { backgroundColor: item.bg, borderColor: item.color + '33' }]}>
+                  <Feather name={item.icon} size={22} color={item.color} />
+                </View>
+                <Text style={styles.attachItemLabel}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        </TouchableOpacity>
-      </Modal>
+        </View>
+      )}
 
+      {/* Location modal */}
       <Modal visible={showLocationModal} transparent animationType="fade" onRequestClose={() => setShowLocationModal(false)}>
         <View style={styles.locModalBg}>
           <View style={styles.locModalCard}>
@@ -642,7 +775,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
               </View>
             </View>
             <Text style={styles.locModalTitle}>What location type do you want to share?</Text>
-            
+
             <TouchableOpacity style={styles.locOptionBtn} onPress={handleShareCurrentLocation}>
               <View style={[styles.locOptionIcon, { borderColor: '#10B981' }]}>
                 <Text style={{ color: '#10B981', fontWeight: 'bold' }}>M</Text>
@@ -731,11 +864,11 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
             <TouchableOpacity style={styles.fullImageClose} onPress={() => setFullImage(null)}>
               <Ionicons name="close" size={28} color="#fff" />
             </TouchableOpacity>
-            <AuthImage 
-              uri={fullImage} 
-              accessToken={session.accessToken} 
-              style={styles.fullImage} 
-              resizeMode="contain" 
+            <AuthImage
+              uri={fullImage}
+              accessToken={session.accessToken}
+              style={styles.fullImage}
+              resizeMode="contain"
             />
           </View>
         </Modal>
@@ -821,13 +954,11 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
       onFinish();
       setPos(0);
     });
-
     const interval = setInterval(() => {
       if (!isSeeking && isPlaying) {
         setPos(player.currentTime);
       }
     }, 500);
-
     return () => {
       unsubFinish.remove();
       clearInterval(interval);
@@ -856,7 +987,7 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
             color={isPlaying ? '#fff' : '#1E40AF'}
           />
         </TouchableOpacity>
-        
+
         <View style={styles.audioSeekWrap}>
           <Slider
             style={styles.audioSlider}
@@ -875,7 +1006,7 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
           />
         </View>
       </View>
-      
+
       <View style={styles.audioMetaRow}>
         <Text style={[styles.audioTimeTxt, isMe && styles.audioTimeTxtMe]}>
           {fmtDuration(pos)} / {fmtDuration(duration)}
@@ -940,7 +1071,6 @@ const styles = StyleSheet.create({
   audioMetaRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: -4, marginRight: 4 },
   audioTimeTxt: { fontSize: 10, color: '#64748B' },
   audioTimeTxtMe: { color: 'rgba(219,234,254,0.75)' },
-
   audioPlayBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   audioPlayBtnActive: { backgroundColor: '#1E40AF' },
   audioPlayBtnActiveMe: { backgroundColor: 'rgba(255,255,255,0.3)' },
@@ -965,16 +1095,30 @@ const styles = StyleSheet.create({
   recordingTxt: { flex: 1, fontSize: 13, color: '#92400E', fontWeight: '600' },
   cancelRecBtn: { padding: 4 },
 
+  // NEW: Attach grid (WhatsApp style, replaces old attachMenu)
   attachMenu: {
-    flexDirection: 'row',
-    backgroundColor: '#fff', borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
-    paddingVertical: 16, paddingHorizontal: 8, justifyContent: 'space-around',
+    backgroundColor: '#fff',
+    borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+    paddingHorizontal: 4,
   },
-  attachItem: { alignItems: 'center', gap: 6 },
+  attachHandle: {
+    alignSelf: 'center', width: 36, height: 4,
+    borderRadius: 2, backgroundColor: '#CBD5E1', marginBottom: 12,
+  },
+  attachGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+  },
+  attachCell: {
+    width: '33.33%', alignItems: 'center', paddingVertical: 12, gap: 6,
+  },
   attachItemIcon: {
-    width: 54, height: 54, borderRadius: 27,
-    backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center',
-    borderWidth: 0.5, borderColor: '#BFDBFE',
+    width: 56, height: 56, borderRadius: 28,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 0.5,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   attachItemLabel: { fontSize: 11, color: '#64748B', fontWeight: '600' },
 
@@ -1016,10 +1160,6 @@ const styles = StyleSheet.create({
   locSub: { fontSize: 11, color: '#64748B' },
 
   menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  menuContent: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 40 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, gap: 15 },
-  menuIconBox: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  menuLabel: { fontSize: 16, color: '#1E293B', fontWeight: '600' },
 
   locModalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   locModalCard: { backgroundColor: '#fff', width: '85%', borderRadius: 20, padding: 25, alignItems: 'center' },
