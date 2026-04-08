@@ -162,8 +162,8 @@ export async function joinRoom(accessToken, roomId) {
 }
 
 // ── 8. Send a plain-text message ─────────────────────────────────────────────
-export async function sendMessage(accessToken, roomId, body) {
-  const txnId = `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
+export async function sendMessage(accessToken, roomId, body, customTxnId = null) {
+  const txnId = customTxnId || `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
   const res = await fetch(
     `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
     {
@@ -221,8 +221,8 @@ export async function uploadMedia(accessToken, file) {
 }
 
 // ── 12–15. Send typed media messages ─────────────────────────────────────────
-export async function sendImageMessage(accessToken, roomId, url, info = {}) {
-  const txnId = `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
+export async function sendImageMessage(accessToken, roomId, url, info = {}, customTxnId = null) {
+  const txnId = customTxnId || `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
   const res = await fetch(
     `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
     {
@@ -235,8 +235,8 @@ export async function sendImageMessage(accessToken, roomId, url, info = {}) {
   return data;
 }
 
-export async function sendVideoMessage(accessToken, roomId, url, info = {}) {
-  const txnId = `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
+export async function sendVideoMessage(accessToken, roomId, url, info = {}, customTxnId = null) {
+  const txnId = customTxnId || `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
   const res = await fetch(
     `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
     {
@@ -249,8 +249,8 @@ export async function sendVideoMessage(accessToken, roomId, url, info = {}) {
   return data;
 }
 
-export async function sendAudioMessage(accessToken, roomId, url, info = {}) {
-  const txnId = `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
+export async function sendAudioMessage(accessToken, roomId, url, info = {}, customTxnId = null) {
+  const txnId = customTxnId || `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
   const res = await fetch(
     `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
     {
@@ -263,8 +263,8 @@ export async function sendAudioMessage(accessToken, roomId, url, info = {}) {
   return data;
 }
 
-export async function sendFileMessage(accessToken, roomId, url, filename = 'file', info = {}) {
-  const txnId = `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
+export async function sendFileMessage(accessToken, roomId, url, filename = 'file', info = {}, customTxnId = null) {
+  const txnId = customTxnId || `m.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
   const res = await fetch(
     `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
     {

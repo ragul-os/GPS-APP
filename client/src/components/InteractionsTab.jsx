@@ -263,16 +263,19 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
         setUploading(true);
         setUploadName('Voice message');
+        const txnId = 'v' + Date.now() + Math.random().toString(36).slice(2, 5);
+        pendingTxns.current.add(txnId);
         try {
           const up = await uploadMedia(accessToken, file);
           await sendAudioMessage(accessToken, roomId, up.content_uri, {
             name: file.name,
             size: file.size,
             mimetype: file.type,
-          });
+          }, txnId);
         } catch (err) {
           console.error('[Voice] Upload failed:', err);
         } finally {
+          pendingTxns.current.delete(txnId);
           setUploading(false);
           stream.getTracks().forEach(t => t.stop());
         }
@@ -511,7 +514,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     }, 50);
 
     try {
-      await sendMessage(accessToken, roomId, txt);
+      await sendMessage(accessToken, roomId, txt, txnId);
     } catch (err) {
       console.error('[InteractionsTab] Room Send failed:', err);
     } finally {
@@ -535,8 +538,9 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       try {
         const sess = JSON.parse(localStorage.getItem('dispatcher') || '{}');
         const senderId = sess.userId || sess.user_id;
-        const txnId = 'loc-' + Date.now();
+        const txnId = 'loc-' + Date.now() + Math.random().toString(36).slice(2, 5);
         
+        pendingTxns.current.add(txnId);
         setMessages(prev => [...prev, {
           id: txnId,
           sender: senderId,
@@ -559,6 +563,8 @@ export default function InteractionsTab({ ticketId, alertObj }) {
         });
       } catch (err) {
         console.error('[InteractionsTab] Location send failed:', err);
+      } finally {
+        pendingTxns.current.delete(txnId);
       }
     }, (err) => {
       alert("Unable to retrieve your location: " + err.message);
@@ -581,22 +587,26 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     e.target.value = '';
     setUploading(true);
     setUploadName(file.name);
+    const txnId = 'f' + Date.now() + Math.random().toString(36).slice(2, 5);
+    pendingTxns.current.add(txnId);
     try {
       // uploadMedia — HTTP/2 preferred for file uploads
       const up = await uploadMedia(accessToken, file);
       const mxc = up.content_uri;
       const mime = file.type || 'application/octet-stream';
       const info = { name: file.name, mimetype: mime, size: file.size };
-      if (mime.startsWith('image/')) await sendImageMessage(accessToken, roomIdRef.current, mxc, info);
-      else if (mime.startsWith('video/')) await sendVideoMessage(accessToken, roomIdRef.current, mxc, info);
-      else if (mime.startsWith('audio/')) await sendAudioMessage(accessToken, roomIdRef.current, mxc, info);
-      else await sendFileMessage(accessToken, roomIdRef.current, mxc, file.name, info);
+      if (mime.startsWith('image/')) await sendImageMessage(accessToken, roomIdRef.current, mxc, info, txnId);
+      else if (mime.startsWith('video/')) await sendVideoMessage(accessToken, roomIdRef.current, mxc, info, txnId);
+      else if (mime.startsWith('audio/')) await sendAudioMessage(accessToken, roomIdRef.current, mxc, info, txnId);
+      else await sendFileMessage(accessToken, roomIdRef.current, mxc, file.name, info, txnId);
     } catch (e) {
       console.error('[InteractionsTab] file send:', e);
       alert('Upload failed. This may be due to server-side size limits or connection issues.');
+    } finally {
+      pendingTxns.current.delete(txnId);
+      setUploading(false);
+      setUploadName('');
     }
-    setUploading(false);
-    setUploadName('');
   }, [accessToken]);
 
   // ── Download attachment ───────────────────────────────────────────────────
