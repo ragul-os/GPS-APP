@@ -519,7 +519,7 @@ export default function DispatchPage() {
   };
   const { dispatcher } = useAuth();
 
-  const handleDispatch = async () => {
+ /*  const handleDispatch = async () => {
     setDispatching(true);
     addLog(`🚨 Dispatching ${selectedUnitIds.length > 0 ? selectedUnitIds.length + ' unit(s)' : 'broadcast'}…`, 'warn');
     const ids = [];
@@ -592,7 +592,102 @@ export default function DispatchPage() {
       addLog('Failed: ' + (e.response?.data?.error || e.message), 'error');
     }
     setDispatching(false);
-  };
+  }; */
+
+  const handleDispatch = async () => {
+  setDispatching(true);
+  addLog(`🚨 Dispatching ${selectedUnitIds.length > 0 ? selectedUnitIds.length + ' unit(s)' : 'broadcast'}…`, 'warn');
+  const ids = [];
+
+  try {
+    const vehicleType = agentTicket?.vehicleType || 'ambulance';
+
+    // ── STEP 1: Build dynamic invite list from selected unit IDs ──
+    const inviteUserIds = selectedUnitIds.map(id => `@${id}:localhost`);
+
+    // ── STEP 2: Create room with all units pre-invited ──
+    let roomId = null;
+    if (dispatcher?.accessToken && agentTicket?.id) {
+      try {
+        const room = await createRoom(
+          dispatcher.accessToken,
+          `Ticket-${agentTicket.id}`,
+          inviteUserIds          // ← dynamic, not hardcoded
+        );
+        roomId = room.room_id;
+        addLog(`✅ Matrix room created: ${roomId}`, 'ok');
+
+        // ── STEP 3: Invite any units not already invited via createRoom ──
+        // (safety net — in case createRoom invite list missed some)
+        for (const matrixUserId of inviteUserIds) {
+          try {
+            await inviteUser(dispatcher.accessToken, roomId, matrixUserId);
+            addLog(`📨 Invited: ${matrixUserId}`, 'ok');
+          } catch (err) {
+            // Already invited via createRoom — ignore "already in room" errors
+            addLog(`⚠️ Invite skipped for ${matrixUserId}: ${err.message}`, 'warn');
+          }
+        }
+      } catch (matrixErr) {
+        addLog(`⚠️ Matrix room creation skipped: ${matrixErr.message}`, 'warn');
+      }
+    }
+
+    // ── STEP 4: Build base payload with roomId ──
+    const base = {
+      patientName:  answers.f1 || 'Unknown',
+      patientPhone: answers.f2 || '',
+      address:      answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
+      notes:        answers.f7 || '',
+      destination:  { latitude: pickedLat, longitude: pickedLng },
+      vehicleType, severity, answers,
+      roomId:      roomId || '',
+      matrixRoomId: roomId || '',
+    };
+
+    // ── STEP 5: Dispatch ──
+    if (selectedUnitIds.length === 0) {
+      const res = await sendAlert(base);
+      ids.push(res.data.id);
+      addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
+      addLog('📡 Broadcast to all units', 'warn');
+    } else {
+      for (const unitId of selectedUnitIds) {
+        const res = await assignUnit({ ...base, unitId });
+        ids.push(res.data.id);
+        const unit = unitList.find(u => u.id === unitId);
+        addToHistory({
+          ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
+          status: 'pending',
+        });
+        addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
+      }
+    }
+
+    // ── STEP 6: Update local ticket ──
+    if (agentTicket?.id) {
+      updateAgentTicket(agentTicket.id, {
+        status:        'dispatched',
+        assignedUnits: [...(agentTicket.assignedUnits || []), ...selectedUnitIds],
+        alertIds:      [...(agentTicket.alertIds || []), ...ids],
+        roomId,
+      });
+      const fresh = getAgentTickets().find(t => t.id === agentTicket.id);
+      if (fresh) { setAgentTicket(fresh); setSelectedTicket(fresh); }
+    }
+
+    setLastAlertIds(ids);
+    setStatusBox({ type: 'pending', icon: '📡', text: `${ids.length} alert(s) sent — waiting for units…` });
+    addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
+    setShowModal(false);
+    setSelectedUnitIds([]);
+
+  } catch (e) {
+    addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
+  }
+
+  setDispatching(false);
+};
 
   function buildEntry(id, unitId, vehicleType) {
     return {

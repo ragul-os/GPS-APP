@@ -5,7 +5,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const SYNAPSE_BASE = 'http://192.168.24.19:8008';
+const SYNAPSE_BASE = 'http://192.168.2.52:8008';
 const ADMIN_TOKEN = 'syt_YWRtaW4x_ORxyHHzfMxvFIQxGouDM_0bUXx3';
 const KEY_SESSION = 'MATRIX_SESSION';
 

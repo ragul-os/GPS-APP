@@ -84,7 +84,7 @@ export async function createSynapseUser(username, password) {
 }
 
 // ── 4. Create a Matrix room ───────────────────────────────────────────────────
-export async function createRoom(accessToken, roomName) {
+export async function createRoom(accessToken, roomName,inviteUserIds = []) {
   console.log("[Matrix] createRoom:", roomName);
 
   const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/v3/createRoom`, {
@@ -95,9 +95,10 @@ export async function createRoom(accessToken, roomName) {
     },
     body: JSON.stringify({
       name: roomName,
-      room_alias_name: roomName.replace(/[^a-zA-Z0-9_\-]/g, '_'), // safe alias
+     // room_alias_name: roomName.replace(/[^a-zA-Z0-9_\-]/g, '_'), // safe alias
       preset: "public_chat",
       visibility: "public",
+      invite: inviteUserIds,
     }),
   });
 

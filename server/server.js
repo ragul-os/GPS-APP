@@ -645,6 +645,8 @@ app.post('/assign', async (req, res) => {
     severity: severity || (answers?.f5 ?? answers?.f7 ?? 'high'),
     assignedAt: Date.now(),
     submissionId,
+    roomId:       req.body.roomId       || '',   // ← ADD THIS
+    matrixRoomId: req.body.matrixRoomId || '',   // ← ADD THIS
     reason: '',
   };
 
@@ -675,6 +677,8 @@ app.post('/send-alert', async (req, res) => {
     notes: req.body.notes || '',
     vehicleType: req.body.vehicleType || 'ambulance',
     severity: req.body.severity || 'high',
+    roomId:       req.body.roomId       || '',   // ← ADD THIS
+    matrixRoomId: req.body.matrixRoomId || '',   // ← ADD THIS
     reason: '',
   };
   resetLegacyLocation();
