@@ -534,9 +534,15 @@ export default function MapScreen({ route: navRoute, navigation }) {
     setDropdownOpen(false); tripStatusRef.current = 'arrived'; setTripStatus('arrived'); notifyStatus(ambulanceId, 'arrived');
   };
   const handleCompleted = () => {
-    setDropdownOpen(false); tripStatusRef.current = 'completed'; setTripStatus('completed'); isCompletedRef.current = true; notifyStatus(ambulanceId, 'completed');
-    if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
-  };
+  setDropdownOpen(false);
+  tripStatusRef.current = 'completed';
+  setTripStatus('completed');
+  isCompletedRef.current = true;
+  notifyStatus(ambulanceId, 'completed');
+  if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+  stopAll();
+  navigation.navigate('Alert');
+};
   const handleAbandon = () => {
     setDropdownOpen(false);
     Alert.alert('Abandon Trip?', 'Are you sure? The dispatch console will be notified immediately.', [
@@ -593,15 +599,18 @@ export default function MapScreen({ route: navRoute, navigation }) {
 
   const dropdownOptions = [];
   if (tripStatus === 'en_route') {
+     dropdownOptions.push({ label: 'Arrived', color: '#15803D', onPress: handleMarkArrived });
     dropdownOptions.push({ label: 'On Action', color: '#CE93D8', onPress: handleOnAction });
-    dropdownOptions.push({ label: 'Arrived', color: '#15803D', onPress: handleMarkArrived });
+   
     dropdownOptions.push({ label: 'Completed', color: '#2E7D32', onPress: handleCompleted });
   }
   if (tripStatus === 'on_action') {
-    dropdownOptions.push({ label: 'Arrived', color: '#15803D', onPress: handleMarkArrived });
+    
     dropdownOptions.push({ label: 'Completed', color: '#2E7D32', onPress: handleCompleted });
   }
   if (tripStatus === 'arrived') {
+    dropdownOptions.push({ label: 'On Action', color: '#CE93D8', onPress: handleOnAction });
+
     dropdownOptions.push({ label: 'Completed', color: '#2E7D32', onPress: handleCompleted });
   }
   if (tripStatus !== 'abandoned') {
