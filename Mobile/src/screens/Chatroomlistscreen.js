@@ -9,6 +9,7 @@
 
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   Animated,
@@ -22,6 +23,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { SERVER_URL } from '../config';
 import {
   getJoinedRooms,
   getOrCreateDMRoom,
@@ -67,14 +69,18 @@ function roomDisplayName(roomId, roomNames = {}, dmNames = {}) {
   return 'Loading...';
 }
 
-function roomInitials(roomId, roomNames = {}, dmNames = {}) {
-  const name = roomNames[roomId] || dmNames[roomId];
-  if (!name) return 'DM';
+function getInitials(name = '') {
+  if (!name) return '?';
   const clean = name.replace(/[^a-zA-Z ]/g, '').trim();
-  if (clean.length === 0) return 'DM';
-  const parts = clean.split(' ');
+  if (clean.length === 0) return name.slice(0, 2).toUpperCase();
+  const parts = clean.split(' ').filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return clean.slice(0, 2).toUpperCase();
+}
+
+function roomInitials(roomId, roomNames = {}, dmNames = {}) {
+  const name = roomNames[roomId] || dmNames[roomId];
+  return getInitials(name);
 }
 
 function avatarColor(roomId) {
@@ -260,6 +266,18 @@ const MP = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14, paddingTop: 52,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  avatarSmall: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   headerTitle: { fontSize: 16, fontWeight: '700', color: '#fff' },
   countBadge: { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
   countTxt: { fontSize: 12, fontWeight: '700', color: '#fff' },
@@ -302,6 +320,46 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const [membersVisible, setMembersVisible] = useState(false);
   const [roomNames, setRoomNames] = useState({});
   const [dmNames, setDmNames] = useState({});
+  const [ticketNames, setTicketNames] = useState({});
+
+  const fetchIncidents = async () => {
+    try {
+      const res = await fetch(`${SERVER_URL}/incidents`);
+      const json = await res.json();
+      if (json.success && json.data) {
+        const cache = { ...ticketNames };
+        let changed = false;
+        json.data.forEach(inc => {
+          const rid = inc.matrixRoomId || inc.roomId;
+          if (rid && (!cache[rid] || cache[rid].name !== inc.patientName)) {
+            cache[rid] = {
+              name: inc.patientName || 'Unknown',
+              address: inc.address || ''
+            };
+            changed = true;
+          }
+        });
+        if (changed) {
+          setTicketNames(cache);
+          await AsyncStorage.setItem('TICKET_NAMES', JSON.stringify(cache));
+        }
+      }
+    } catch (err) {
+      console.warn('[RoomList] fetchIncidents error:', err.message);
+    }
+  };
+
+  useEffect(() => {
+    AsyncStorage.getItem('TICKET_NAMES').then(raw => {
+      if (raw) {
+        try { 
+          const cache = JSON.parse(raw);
+          setTicketNames(cache); 
+        } catch (e) {}
+      }
+    });
+    fetchIncidents(); // Initial fetch
+  }, []);
 
   const syncActive = useRef(true);
   // Track the currently open room in a ref for use inside the sync closure
@@ -327,6 +385,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const loadRooms = async () => {
     try {
       setLoading(true);
+      await fetchIncidents(); // Ensure we have latest patient names
       const joined = await getJoinedRooms(session.accessToken);
       const allIds = Array.from(new Set([
         ...(extraRoomId ? [extraRoomId] : []),
@@ -578,13 +637,22 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     roomDisplayName(r.roomId, roomNames, dmNames).toLowerCase().includes(search.toLowerCase())
   );
 
-  const renderRoom = ({ item }) => {
-    const name = roomDisplayName(item.roomId, roomNames, dmNames);
-    const preview = previewText(item.lastEvent);
-    const time = formatTime(item.lastEvent?.origin_server_ts);
-    const isMe = item.lastEvent?.sender === session.userId;
-    const hasUnread = (item.unread || 0) > 0;
-    const unreadCount = item.unread || 0;
+    const renderRoom = ({ item }) => {
+      const name = roomDisplayName(item.roomId, roomNames, dmNames);
+      const isTicketRoom = name?.trim()?.toLowerCase()?.includes('ticket-');
+      
+      const ticketInfo = ticketNames[item.roomId];
+      const patientName = ticketInfo?.name;
+      const patientAddress = ticketInfo?.address;
+      
+      const displayName = patientName || (isTicketRoom ? 'Incident Chat' : name);
+      const cleanTicketId = isTicketRoom ? name.replace(/ticket-/gi, '') : name;
+
+      const preview = previewText(item.lastEvent);
+      const time = formatTime(item.lastEvent?.origin_server_ts);
+      const isMe = item.lastEvent?.sender === session.userId;
+      const hasUnread = (item.unread || 0) > 0;
+      const unreadCount = item.unread || 0;
     const colors = avatarColor(item.roomId);
     const isDMRoom = !!dmNames[item.roomId];
 
@@ -598,9 +666,9 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     };
 
     return (
-      <TouchableOpacity style={styles.roomRow} onPress={() => openRoom(item)} activeOpacity={0.75}>
+      <TouchableOpacity style={styles.roomRow} onPress={() => openRoom(item, displayName)} activeOpacity={0.75}>
         <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
-          <Text style={[styles.avatarTxt, { color: colors.text }]}>{roomInitials(item.roomId, roomNames, dmNames)}</Text>
+            <Text style={[styles.avatarTxt, { color: colors.text }]}>{getInitials(displayName)}</Text>
           {isDMRoom && <View style={[styles.onlineDot, { backgroundColor: '#A78BFA' }]} />}
         </View>
 
@@ -608,12 +676,24 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
           <View style={styles.roomNameRow}>
             <View style={styles.roomNameWrap}>
               {isDMRoom && <View style={styles.dmTag}><Text style={styles.dmTagTxt}>DM</Text></View>}
-              {/* FIX 2 & 3: Bold room name when unread */}
-              <Text style={[styles.roomName, hasUnread && styles.roomNameUnread]} numberOfLines={1}>{name}</Text>
+              <Text style={[styles.roomName, hasUnread && styles.roomNameUnread]} numberOfLines={1}>
+                {displayName}
+              </Text>
             </View>
-            {/* FIX 2: Time in blue when unread */}
             <Text style={[styles.roomTime, hasUnread && styles.roomTimeUnread]}>{time}</Text>
           </View>
+
+          {isTicketRoom && (
+            <View style={{ marginBottom: 2 }}>
+              <Text style={{ fontSize: 10, color: '#10B981', fontWeight: 'bold' }}>{cleanTicketId}</Text>
+            </View>
+          )}
+
+          {isTicketRoom && patientAddress && (
+            <View style={{ marginBottom: 4 }}>
+              <Text style={{ fontSize: 11, color: '#475569' }} numberOfLines={1}>{patientAddress}</Text>
+            </View>
+          )}
 
           <View style={styles.roomPreviewRow}>
             <View style={styles.previewLeft}>

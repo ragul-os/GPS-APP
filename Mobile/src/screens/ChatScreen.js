@@ -38,7 +38,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { SERVER_URL } from '../config';
 import {
   getRoomMessages,
   joinRoom,
@@ -55,6 +57,8 @@ import {
   sendReaction,
   pinMessage,
   forwardMessage,
+  getRoomMembers,
+  getRoomState,
 } from '../services/matrixService';
 
 export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader = false }) {
@@ -703,6 +707,45 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     );
   };
 
+  const [patientData, setPatientData] = useState(null);
+
+  const fetchIncidents = async () => {
+    try {
+      const res = await fetch(`${SERVER_URL}/incidents`);
+      const json = await res.json();
+      if (json.success && json.data) {
+        const match = json.data.find(inc => (inc.matrixRoomId || inc.roomId) === roomId);
+        if (match) {
+          const data = {
+            name: match.patientName || 'Unknown',
+            address: match.address || ''
+          };
+          setPatientData(data);
+          
+          // Also update AsyncStorage for list screen
+          const rawCache = await AsyncStorage.getItem('TICKET_NAMES') || '{}';
+          const cache = JSON.parse(rawCache);
+          cache[roomId] = data;
+          await AsyncStorage.setItem('TICKET_NAMES', JSON.stringify(cache));
+        }
+      }
+    } catch (err) {
+      console.warn('[ChatScreen] fetchIncidents error:', err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (roomId) {
+      AsyncStorage.getItem('TICKET_NAMES').then(raw => {
+        if (raw) {
+          const cache = JSON.parse(raw);
+          if (cache[roomId]) setPatientData(cache[roomId]);
+        }
+      });
+      fetchIncidents();
+    }
+  }, [roomId]);
+
   if (loadingInit) {
     return (
       <View style={styles.loader}>
@@ -712,7 +755,9 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     );
   }
 
-  const headerTitle = currentRoomName || (isDispatchRoom ? 'Dispatch Chat' : 'Alert Chat');
+  const displayTitle = patientData?.name || (currentRoomName?.trim()?.toLowerCase()?.includes('ticket-') ? 'Incident Chat' : (currentRoomName || (isDispatchRoom ? 'Dispatch Chat' : 'Alert Chat')));
+  const subTitle = currentRoomName?.trim()?.toLowerCase()?.includes('ticket-') ? currentRoomName : (isDispatchRoom ? 'Emergency Control Channel' : 'Incident Communication');
+
   const showAttach = panel === 'attach';
 
   return (
@@ -723,12 +768,14 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     >
       {!hideHeader && (
         <View style={styles.header}>
-          <View style={[styles.headerStatusDot, !isDispatchRoom && { backgroundColor: '#F59E0B' }]} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>{headerTitle}</Text>
-            <Text style={styles.headerSub}>
-              {isDispatchRoom ? 'Emergency Control Channel' : 'Incident Communication'}
-            </Text>
+          <View style={styles.headerTitleWrap}>
+            <View style={[styles.avatarSmall, { backgroundColor: '#fff', marginRight: 10 }]}>
+              <Text style={{ color: '#1E40AF', fontWeight: 'bold', fontSize: 13 }}>{getInitials(displayTitle)}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.headerTitle}>{displayTitle}</Text>
+              <Text style={styles.headerSub}>{subTitle}</Text>
+            </View>
           </View>
           {uploading && <ActivityIndicator size="small" color="#fff" />}
         </View>
@@ -809,9 +856,11 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
               style={styles.mentionItem}
               onPress={() => {
                 const parts = inputText.split('@');
-                parts.pop();
-                setInputText(parts.join('@') + '@' + m.displayName + ' ');
+                const last = parts.pop();
+                const newText = parts.join('@') + '@' + m.displayName + ' ';
+                setInputText(newText);
                 setMentionOpen(false);
+                inputRef.current?.focus();
               }}
             >
               <View style={styles.mentionAvatar}>
@@ -1191,11 +1240,6 @@ function AuthVideo({ uri, accessToken, filename, isMe }) {
         isLooping={false}
         style={videoStyles.video}
       />
-      <View style={videoStyles.info}>
-        <Text style={[videoStyles.name, isMe && { color: '#DBEAFE' }]} numberOfLines={1}>
-          {filename || 'Video'}
-        </Text>
-      </View>
     </View>
   );
 }
@@ -1259,7 +1303,7 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
         >
           <Ionicons
             name={isPlaying ? 'pause' : 'play'}
-            size={18}
+            size={22}
             color={isPlaying ? '#fff' : '#1E40AF'}
           />
         </TouchableOpacity>
@@ -1293,9 +1337,9 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
 }
 
 const videoStyles = StyleSheet.create({
-  container: { width: 220, overflow: 'hidden', borderRadius: 12, backgroundColor: '#DBEAFE', marginBottom: 2 },
+  container: { width: 260, overflow: 'hidden', borderRadius: 12, backgroundColor: '#DBEAFE', marginBottom: 2 },
   containerMe: { backgroundColor: 'rgba(255,255,255,0.1)' },
-  video: { width: 220, height: 165 },
+  video: { width: 260, height: 195 },
   info: { padding: 8, paddingBottom: 6 },
   name: { fontSize: 12, color: '#1E3A8A', fontWeight: '600' },
 });
@@ -1311,6 +1355,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14, gap: 10,
   },
   headerStatusDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#22C55E' },
+  headerTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  avatarSmall: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   headerTitle: { fontSize: 15, fontWeight: '700', color: '#fff' },
   headerSub: { fontSize: 11, color: 'rgba(255,255,255,0.65)' },
 
@@ -1338,21 +1394,21 @@ const styles = StyleSheet.create({
   senderName: { fontSize: 11, color: '#1E40AF', fontWeight: '700', marginBottom: 4 },
   msgText: { fontSize: 15, color: '#0F172A', lineHeight: 21 },
   msgTextMe: { color: '#EFF6FF' },
-  msgImage: { width: 210, height: 158, borderRadius: 12, marginBottom: 4 },
+  msgImage: { width: 260, height: 195, borderRadius: 12, marginBottom: 4 },
   msgFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 4 },
   msgTime: { fontSize: 10, color: '#94A3B8' },
   msgTimeMe: { color: 'rgba(219,234,254,0.7)' },
 
-  audioBubble: { width: 220, padding: 8 },
+  audioBubble: { width: 260, padding: 10 },
   audioBubbleMe: {},
   audioBubbleThem: {},
   audioTopRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  audioSeekWrap: { flex: 1, height: 40, justifyContent: 'center' },
-  audioSlider: { width: '100%', height: 40 },
+  audioSeekWrap: { flex: 1, height: 48, justifyContent: 'center' },
+  audioSlider: { width: '100%', height: 48 },
   audioMetaRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: -4, marginRight: 4 },
   audioTimeTxt: { fontSize: 10, color: '#64748B' },
   audioTimeTxtMe: { color: 'rgba(219,234,254,0.75)' },
-  audioPlayBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
+  audioPlayBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   audioPlayBtnActive: { backgroundColor: '#1E40AF' },
   audioPlayBtnActiveMe: { backgroundColor: 'rgba(255,255,255,0.3)' },
 
@@ -1434,8 +1490,8 @@ const styles = StyleSheet.create({
   fullImageClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, padding: 4 },
   fullImage: { width: '100%', height: '80%' },
 
-  locBubble: { width: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: '#DBEAFE', marginBottom: 2 },
-  locMap: { width: 220, height: 140 },
+  locBubble: { width: 260, borderRadius: 12, overflow: 'hidden', backgroundColor: '#DBEAFE', marginBottom: 2 },
+  locMap: { width: 260, height: 140 },
   locInfo: { padding: 8 },
   locName: { fontSize: 13, fontWeight: '700', color: '#1E3A8A' },
   locSub: { fontSize: 11, color: '#64748B' },

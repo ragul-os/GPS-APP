@@ -11,6 +11,7 @@
  */
 
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -220,6 +221,22 @@ export default function AlertScreen() {
     setStatus('incoming');
     setCountdown(30);
     slideIn();
+
+    // NEW: Cache patient name and address for room naming (using Room ID as key)
+    const storeRoomId = data.roomId || data.matrixRoomId;
+    if (storeRoomId) {
+      try {
+        const rawCache = await AsyncStorage.getItem('TICKET_NAMES') || '{}';
+        const cache = JSON.parse(rawCache);
+        cache[storeRoomId] = {
+          name: data.patientName || 'Unknown',
+          address: data.address || ''
+        };
+        await AsyncStorage.setItem('TICKET_NAMES', JSON.stringify(cache));
+      } catch (e) {
+        console.warn('[Cache] failed to save metadata:', e.message);
+      }
+    }
 
     const extractedRoomId = data.roomId || data.matrixRoomId || null;
     if (extractedRoomId) {

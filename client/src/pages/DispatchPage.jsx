@@ -40,7 +40,8 @@ import {
   SettingOutlined,
   UpOutlined,
   WarningOutlined,
-  WifiOutlined
+  UnorderedListOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 /* ── Unit config ── */
 const UCFG = {
@@ -250,14 +251,28 @@ function TicketSwitcherStrip({ tickets, activeTicketId, onSelect }) {
 function TicketListScreen({ onSelectTicket }) {
   const [agentTickets, setAgentTickets] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState('card'); // 'card' or 'list'
+
   useEffect(() => {
     const load = () => setAgentTickets(getAgentTickets());
     load();
     window.addEventListener('agentTicketsChange', load);
     return () => window.removeEventListener('agentTicketsChange', load);
   }, []);
+
   const pendingCount = agentTickets.filter(t => t.status === 'pending').length;
-  const filteredTickets = statusFilter === 'all' ? agentTickets : agentTickets.filter(t => t.status === statusFilter);
+  
+  const filteredTickets = agentTickets.filter(t => {
+    const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
+    const q = searchQuery.toLowerCase();
+    const matchesSearch = !searchQuery || 
+      t.name.toLowerCase().includes(q) || 
+      t.address.toLowerCase().includes(q) || 
+      t.id.toLowerCase().includes(q);
+    return matchesStatus && matchesSearch;
+  });
+
   return (
     <div style={s.page}>
       <div style={s.mainBody}>
@@ -267,24 +282,77 @@ function TicketListScreen({ onSelectTicket }) {
           {pendingCount > 0 && <span style={{ background: 'rgba(249,168,37,.15)', color: '#F9A825', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 6 }}>{pendingCount} pending</span>}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 7, marginBottom: 18, flexWrap: 'wrap' }}>
-        <span onClick={() => setStatusFilter('all')} style={{ cursor: 'pointer', padding: '3px 11px', borderRadius: 8, background: statusFilter === 'all' ? '#1A73E8' : '#30363D', color: '#fff', fontSize: 10, fontWeight: 700 }}>All</span>
-        {Object.entries(STATUS_CFG).map(([key, cfg]) => (
-          <span key={key} onClick={() => setStatusFilter(key)} style={{ cursor: 'pointer', fontSize: 10, fontWeight: 700, padding: '3px 11px', borderRadius: 8, background: statusFilter === key ? cfg.color : cfg.bg, color: statusFilter === key ? '#fff' : cfg.color }}>{cfg.label}</span>
-        ))}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+          <span onClick={() => setStatusFilter('all')} style={{ cursor: 'pointer', padding: '3px 11px', borderRadius: 8, background: statusFilter === 'all' ? '#1A73E8' : '#30363D', color: '#fff', fontSize: 10, fontWeight: 700 }}>All</span>
+          {Object.entries(STATUS_CFG).map(([key, cfg]) => (
+            <span key={key} onClick={() => setStatusFilter(key)} style={{ cursor: 'pointer', fontSize: 10, fontWeight: 700, padding: '3px 11px', borderRadius: 8, background: statusFilter === key ? cfg.color : cfg.bg, color: statusFilter === key ? '#fff' : cfg.color }}>{cfg.label}</span>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ position: 'relative' }}>
+            <SearchOutlined style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#8B949E', fontSize: 14 }} />
+            <input 
+              type="text" 
+              placeholder="Search tickets..." 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 8, color: '#E6EDF3', padding: '6px 12px 6px 32px', fontSize: 12, width: 220, outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', background: '#0D1117', borderRadius: 8, padding: 2, border: '1px solid #30363D' }}>
+            <button onClick={() => setViewMode('card')} style={{ ...s.viewBtn, ...(viewMode === 'card' ? s.viewBtnActive : {}) }}><AppstoreOutlined /></button>
+            <button onClick={() => setViewMode('list')} style={{ ...s.viewBtn, ...(viewMode === 'list' ? s.viewBtnActive : {}) }}><UnorderedListOutlined /></button>
+          </div>
+        </div>
       </div>
+
       {filteredTickets.length === 0 ? (
         <div style={s.empty}><div style={s.emptyIcon}><FileTextOutlined style={{ fontSize: '48px', opacity: .2 }} /></div><div style={s.emptyMsg}>No agent tickets yet</div><div style={s.emptySub}>Tickets submitted by field agents appear here</div></div>
       ) : (
-        <div style={s.grid}>
+        <div style={viewMode === 'card' ? s.grid : s.listStack}>
           {filteredTickets.map(ticket => {
             const cfg = UCFG[ticket.vehicleType] || UCFG.ambulance;
             const t = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const stCfg = STATUS_CFG[ticket.status] || STATUS_CFG.pending;
             const isPending = ticket.status === 'pending';
-            const answers = ticket.answers || {};
             const unitCount = (ticket.assignedUnits || []).length;
             const sev = { color: SEV_COLORS[ticket.severity] || '#8B949E' };
+
+            if (viewMode === 'list') {
+              return (
+                <div key={ticket.id} style={s.listItem} onClick={() => onSelectTicket(ticket)}>
+                  <div style={{ ...s.listBar, background: cfg.barColor }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: `${cfg.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{cfg.icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.name}</div>
+                      <div style={{ fontSize: 10, color: '#8B949E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.address}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: stCfg.bg, color: stCfg.color }}>{stCfg.label}</span>
+                      <span style={{ fontSize: 9, color: '#8B949E', fontFamily: 'JetBrains Mono, monospace' }}>{t}</span>
+                    </div>
+                    <div style={{ width: 80, textAlign: 'right' }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, color: sev.color }}>{ticket.severity?.toUpperCase()}</span>
+                    </div>
+                    <div style={{ width: 100, textAlign: 'right' }}>
+                      {unitCount > 0 ? (
+                        <span style={{ fontSize: 9, fontWeight: 700, color: '#82B4FF' }}>{unitCount} Unit{unitCount > 1 ? 's' : ''}</span>
+                      ) : (
+                        <span style={{ fontSize: 9, color: '#30363D' }}>No units</span>
+                      )}
+                    </div>
+                    <button style={s.listOpenBtn}>{isPending ? 'Dispatch' : 'Open'}</button>
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div key={ticket.id} style={{ ...s.ticket, ...(isPending ? { border: '1px solid rgba(249,168,37,.4)', boxShadow: '0 0 0 2px rgba(249,168,37,.08)' } : {}) }} onClick={() => onSelectTicket(ticket)}>
                 <div style={{ ...s.ticketBar, background: cfg.barColor }} />
@@ -983,4 +1051,13 @@ const s = {
   mFoot: { padding: '16px 24px 20px', borderTop: '1px solid #30363D', display: 'flex', gap: 10, alignItems: 'center' },
   cancelBtn: { flex: 1, height: 46, borderRadius: 12, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 700, cursor: 'pointer', transition: 'all .2s' },
   confirmBtn: { flex: 1, height: 46, borderRadius: 12, border: 'none', color: '#fff', fontFamily: 'Sora, sans-serif', fontSize: 13, fontWeight: 800, cursor: 'pointer', transition: 'all .2s' },
+
+  /* List View Styles */
+  listStack: { display: 'flex', flexDirection: 'column', gap: 8 },
+  listItem: { background: '#161B22', border: '1px solid #30363D', borderRadius: 10, padding: '10px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', position: 'relative', overflow: 'hidden', transition: 'all .15s' },
+  listBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
+  listOpenBtn: { background: 'rgba(26,115,232,.1)', border: '1px solid rgba(26,115,232,.2)', color: '#1A73E8', borderRadius: 6, padding: '4px 12px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
+  
+  viewBtn: { background: 'transparent', border: 'none', color: '#8B949E', width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 14, transition: 'all .15s' },
+  viewBtnActive: { background: '#30363D', color: '#fff' },
 };

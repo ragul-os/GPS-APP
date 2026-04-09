@@ -29,37 +29,36 @@ import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getAmbulanceLocation, getDirections } from '../api/api';
 import axios from 'axios';
 import InteractionsTab from '../components/InteractionsTab'; // kept for TicketDetailsOverlay fallback
-import GlobalChatPanel, { ChatTriggerButton } from '../components/GlobalChatPanel';
-import { 
-  MedicineBoxOutlined, 
-  FireOutlined, 
-  SafetyOutlined, 
-  AlertOutlined, 
-  WarningOutlined, 
-  ClockCircleOutlined, 
-  NodeIndexOutlined, 
-  CheckCircleOutlined, 
-  CloseCircleOutlined, 
-  SearchOutlined, 
-  CloseOutlined, 
-  SendOutlined, 
-  ApartmentOutlined, 
-  SettingOutlined, 
-  AimOutlined, 
-  EnvironmentOutlined, 
-  FileTextOutlined, 
-  ReloadOutlined, 
-  UpOutlined, 
-  DownOutlined, 
-  ArrowLeftOutlined, 
-  CompassOutlined, 
-  LockOutlined, 
-  EditOutlined, 
-  PlusOutlined, 
-  CheckCircleFilled, 
-  ExclamationCircleFilled, 
+import {
+  MedicineBoxOutlined,
+  FireOutlined,
+  SafetyOutlined,
+  AlertOutlined,
+  WarningOutlined,
+  ClockCircleOutlined,
+  NodeIndexOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  SearchOutlined,
+  CloseOutlined,
+  SendOutlined,
+  ApartmentOutlined,
+  SettingOutlined,
+  AimOutlined,
+  EnvironmentOutlined,
+  FileTextOutlined,
+  ReloadOutlined,
+  UpOutlined,
+  DownOutlined,
+  ArrowLeftOutlined,
+  CompassOutlined,
+  LockOutlined,
+  EditOutlined,
+  PlusOutlined,
+  CheckCircleFilled,
+  ExclamationCircleFilled,
   ExclamationCircleOutlined,
-  ClockCircleFilled, 
+  ClockCircleFilled,
   PushpinOutlined,
   PhoneOutlined,
   LoadingOutlined,
@@ -111,13 +110,13 @@ const TRIP_STATUS_CFG = {
   idle: { bg: 'rgba(139,148,158,.12)', brd: 'rgba(139,148,158,.2)', c: '#8B949E', i: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, t: 'Idle', s: 'No active trip' },
   dispatched: { bg: 'rgba(249,168,37,.15)', brd: 'rgba(249,168,37,.3)', c: '#F9A825', i: <NodeIndexOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, t: 'Alert Dispatched', s: 'Unit notified — preparing' },
   en_route: { bg: 'rgba(26,115,232,.15)', brd: 'rgba(26,115,232,.3)', c: '#1A73E8', i: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, t: 'En Route', s: 'Unit driving to location' },
-  on_action: { bg: 'rgba(156,39,176,.15)', brd: 'rgba(206,147,216,.3)', c: '#CE93D8', i: <ClockCircleFilled style={{ fontSize: '16px', verticalAlign: 'middle', color: '#faad14' }} />, t: 'On Action', s: 'Unit on scene' },
   arrived: { bg: 'rgba(52,168,83,.18)', brd: 'rgba(52,168,83,.4)', c: '#34A853', i: <EnvironmentOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, t: 'ARRIVED', s: 'Unit reached destination!' },
+  on_action: { bg: 'rgba(156,39,176,.15)', brd: 'rgba(206,147,216,.3)', c: '#CE93D8', i: <ClockCircleFilled style={{ fontSize: '16px', verticalAlign: 'middle', color: '#faad14' }} />, t: 'On Action', s: 'Unit on scene' },
   completed: { bg: 'rgba(52,168,83,.10)', brd: 'rgba(52,168,83,.25)', c: '#A5D6A7', i: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, t: 'Trip Completed', s: 'Successfully completed' },
   abandoned: { bg: 'rgba(183,28,28,.15)', brd: 'rgba(229,57,53,.35)', c: '#EF5350', i: <CloseCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, t: 'Trip Abandoned', s: 'Driver abandoned trip' },
 };
 
-const LIFECYCLE_ORDER = ['accepted', 'en_route', 'on_action', 'arrived', 'completed'];
+const LIFECYCLE_ORDER = ['accepted', 'en_route', 'arrived', 'on_action', 'completed'];
 
 const NEARBY_TYPES = {
   hospital: { label: 'Hospital', icon: <PushpinOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#E53935', placeType: 'hospital', radius: 5000 },
@@ -666,9 +665,6 @@ export default function LiveTrackingPage() {
   const agentTicketRef = useRef(null);
   const ticketCompletedRef = useRef(false);
 
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatUnread, setChatUnread] = useState(0);
-
   const [tripStatus, setTripStatus] = useState('idle');
   const [live, setLive] = useState(false);
   const [stats, setStats] = useState({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
@@ -1199,12 +1195,12 @@ export default function LiveTrackingPage() {
               return (
                 <React.Fragment key={st}>
                   <div style={s.lcStep}>
-                    <div style={{ 
-                      ...s.lcDot, 
+                    <div style={{
+                      ...s.lcDot,
                       background: isDone ? 'rgba(52,168,83,.12)' : isActive ? 'rgba(26,115,232,.12)' : '#0D1117',
                       color: isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D',
                       border: `1.5px solid ${isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D'}`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
                       fontSize: 14, width: 28, height: 28, borderRadius: 8, transition: 'all .4s'
                     }}>
                       {React.cloneElement(icon, { style: { fontSize: '14px', verticalAlign: 'middle' } })}
@@ -1280,19 +1276,6 @@ export default function LiveTrackingPage() {
 
         <TrackingLogPanel tLogs={tLogs} dispatchedUnits={dispatchedUnits} activeUnitId={activeUnitId} unitTypes={unitTypes} />
       </div>
-
-      {/* ── Chat Bubble (Bottom Left) ── */}
-      <div style={s.chatBubble}>
-        <ChatTriggerButton open={chatOpen} onClick={() => setChatOpen(true)} unread={chatUnread} />
-      </div>
-
-      <GlobalChatPanel 
-        open={chatOpen} 
-        onClose={() => setChatOpen(false)} 
-        onUnreadChange={setChatUnread} 
-        primaryTicketId={agentTicket?.id || alertObj?.agentTicketId || ''}
-        onTicketClick={(alertId) => navigate(`/live/${alertId}`)}
-      />
 
       <style>{`@keyframes livePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.6)}}`}</style>
     </div>
