@@ -583,9 +583,12 @@ export default function MapScreen({ route: navRoute, navigation }) {
   const remDist = remaining.distM > 0 ? fmtDist(remaining.distM) : activeR?.distance ?? '';
   const pillCfg = STATUS_PILL[tripStatus] || STATUS_PILL.dispatched;
 
+  // ── Layout constants ──────────────────────────────────────────────────────
   const STATUS_BAR_H = insets.top + (Platform.OS === 'ios' ? 44 : 28);
-  const TURN_BANNER_H = 94;
+  // Height of the compact turn banner (no inset padding inside it anymore)
+  const TURN_BANNER_H = 76;
   const turnBannerVisible = navMode === MODE.NAVIGATE && !!curStep && !reRouting && !wrongDir && distToTurnLabel !== '';
+  // "Then" next-step bar sits right below whichever top element is showing
   const belowBannerTop = STATUS_BAR_H + (turnBannerVisible ? TURN_BANNER_H : 0) + 8;
 
   const dropdownOptions = [];
@@ -672,6 +675,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </Marker>
       </MapView>
 
+      {/* ── Travel-mode selector (overview only) ── */}
       {navMode === MODE.OVERVIEW && (
         <View style={[s.modeBar, { top: insets.top + 10 }]}>
           {TRAVEL_MODES.map(tm => (
@@ -698,8 +702,9 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
+      {/* ── Wrong-direction warning ── */}
       {navMode === MODE.NAVIGATE && wrongDir && !reRouting && (
-        <View style={s.wrongDirBanner}>
+        <View style={[s.wrongDirBanner, { paddingTop: insets.top + 12 }]}>
           <View style={s.wrongDirIconBox}>
             <Ionicons name="warning" size={26} color="#fff" />
           </View>
@@ -713,10 +718,15 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
+      {/* ── Turn-by-turn banner — sits BELOW the status bar ── */}
       {navMode === MODE.NAVIGATE && curStep && !reRouting && !wrongDir && distToTurnLabel !== '' && (
-        <View style={[s.navBanner, { backgroundColor: turnColor, paddingTop: insets.top + 14 }]}>
+        <View style={[s.navBanner, { backgroundColor: turnColor, top: STATUS_BAR_H }]}>
           <View style={[s.bnrManeuverBox, turnUrgency === 2 && s.bnrManeuverBoxNow]}>
-            <MaterialIcons name={getManeuverIcon(curStep.maneuver, curStep.htmlInstruction || '')} size={turnUrgency === 2 ? 32 : 26} color="#fff" />
+            <MaterialIcons
+              name={getManeuverIcon(curStep.maneuver, curStep.htmlInstruction || '')}
+              size={turnUrgency === 2 ? 28 : 22}
+              color="#fff"
+            />
           </View>
           <View style={s.bnrContent}>
             <Text style={s.bnrCountdown}>{distToTurnLabel}</Text>
@@ -726,6 +736,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
+      {/* ── "Then" next-step bar ── */}
       {navMode === MODE.NAVIGATE && nxtStep && !reRouting && !wrongDir && (
         <View style={[s.nextBar, { top: belowBannerTop }]}>
           <Text style={s.nextLabel}>Then</Text>
@@ -750,6 +761,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
+      {/* ── Status bar (Arrived / En Route / etc.) — always on top ── */}
       {navMode === MODE.NAVIGATE && (
         <View style={[s.statusBar, { paddingTop: insets.top + 8 }]}>
           <View style={[s.statusPill, { backgroundColor: pillCfg.bg, borderColor: pillCfg.border }]}>
@@ -780,6 +792,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </Modal>
       )}
 
+      {/* ── Overview bottom panel ── */}
       {navMode === MODE.OVERVIEW && (
         <Animated.View style={[s.panel, { height: panelH }]}>
           <TouchableOpacity
@@ -859,6 +872,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </Animated.View>
       )}
 
+      {/* ── Navigate ETA bar ── */}
       {navMode === MODE.NAVIGATE && activeR && (
         <View style={s.etaBar}>
           <View style={s.etaLeft}>
@@ -922,25 +936,42 @@ const s = StyleSheet.create({
   wrongDirBanner: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#D32F2F', paddingTop: 50, paddingBottom: 18, paddingHorizontal: 20, elevation: 14,
+    backgroundColor: '#D32F2F', paddingBottom: 18, paddingHorizontal: 20, elevation: 14,
   },
   wrongDirIconBox: { width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', marginRight: 14 },
   wrongDirTitle: { fontSize: 20, fontWeight: '900', color: '#fff' },
   wrongDirSub: { fontSize: 13, color: 'rgba(255,255,255,0.80)', marginTop: 3 },
   wrongDirClose: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.22)', alignItems: 'center', justifyContent: 'center', marginLeft: 10 },
 
+  // ── Turn banner — top is set dynamically to STATUS_BAR_H so it never overlaps the status pill ──
   navBanner: {
-    position: 'absolute', top: 0, left: 0, right: 0,
-    flexDirection: 'row', alignItems: 'center',
-    paddingBottom: 20, paddingHorizontal: 18,
-    elevation: 12, zIndex: 12,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 15,
+    paddingBottom: 8,
+    paddingHorizontal: 16,
+    elevation: 12,
+    zIndex: 12,
   },
-  bnrManeuverBox: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 14, borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)' },
-  bnrManeuverBoxNow: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(255,255,255,0.35)', borderWidth: 3, borderColor: '#fff' },
+  bnrManeuverBox: {
+    width: 50, height: 50, borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 12,
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)',
+  },
+  bnrManeuverBoxNow: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    borderWidth: 3, borderColor: '#fff',
+  },
   bnrContent: { flex: 1 },
-  bnrCountdown: { fontSize: 22, fontWeight: '900', color: '#fff', letterSpacing: -0.3, marginBottom: 4 },
-  bnrInstr: { fontSize: 15, fontWeight: '700', color: 'rgba(255,255,255,0.92)', lineHeight: 21 },
-  bnrStepCount: { fontSize: 11, color: 'rgba(255,255,255,0.65)', marginTop: 4, fontWeight: '600' },
+  bnrCountdown: { fontSize: 18, fontWeight: '900', color: '#fff', letterSpacing: -0.3, marginBottom: 2 },
+  bnrInstr: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.92)', lineHeight: 18 },
+  bnrStepCount: { fontSize: 10, color: 'rgba(255,255,255,0.65)', marginTop: 2, fontWeight: '600' },
 
   nextBar: {
     position: 'absolute', left: 14, right: 14,
@@ -959,11 +990,14 @@ const s = StyleSheet.create({
   hint: { position: 'absolute', right: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.60)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, elevation: 5 },
   hintTxt: { color: '#fff', fontSize: 11, fontWeight: '500' },
 
+  // ── Status bar — highest zIndex so it's always on top of the turn banner ──
   statusBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingBottom: 8, paddingHorizontal: 16,
     backgroundColor: 'rgba(0,0,0,0.72)',
+    zIndex: 20,
+    elevation: 20,
   },
   statusPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, gap: 7 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
