@@ -13,7 +13,10 @@ import {
   SendOutlined,
   EnvironmentOutlined,
   AimOutlined,
-  ApartmentOutlined
+  ApartmentOutlined,
+  UnorderedListOutlined,
+  AppstoreOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { API_BASE_URL } from '../config/apiConfig';
 
@@ -47,23 +50,25 @@ const STATUS_CFG = {
     color: '#1A73E8',
     bg: 'rgba(26,115,232,.12)'
   },
-  on_action: {
-    label: 'On Action',
-    icon: <SendOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
-    color: '#FF6D00',
-    bg: 'rgba(255,109,0,.12)'
-  },
   arrived: {
     label: 'Arrived',
     icon: <EnvironmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
     color: '#34A853',
     bg: 'rgba(52,168,83,.12)'
   },
+  on_action: {
+    label: 'On Action',
+    icon: <SendOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
+    color: '#FF6D00',
+    bg: 'rgba(255,109,0,.12)'
+  },
 };
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState([]);
   const [filter, setFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState('card'); // 'card' or 'list'
   const [liveStatusMap, setLiveStatusMap] = useState({});
   const navigate = useNavigate();
   const alertsRef = React.useRef([]); // stable ref to avoid restarting interval on every render
@@ -125,9 +130,15 @@ export default function AlertsPage() {
     return Object.values(groups);
   }, [alerts]);
 
-  const visibleAlerts = filter === 'all'
-    ? groupedAlerts
-    : groupedAlerts.filter(a => a.vehicleType === filter);
+  const visibleAlerts = groupedAlerts.filter(a => {
+    const matchesFilter = filter === 'all' || a.vehicleType === filter;
+    const q = searchQuery.toLowerCase();
+    const matchesSearch = !searchQuery ||
+      (a.name || '').toLowerCase().includes(q) ||
+      (a.address || '').toLowerCase().includes(q) ||
+      (a.id || '').toLowerCase().includes(q);
+    return matchesFilter && matchesSearch;
+  });
 
   const counts = {};
   FILTERS.forEach(f => {
@@ -147,36 +158,55 @@ export default function AlertsPage() {
       </div>
 
       {/* Filter row */}
-      <div style={s.filterRow}>
-        {FILTERS.map(f => {
-          const isActive = filter === f.key;
-          const cfg = UCFG[f.key];
-          return (
-            <button
-              key={f.key}
-              style={{
-                ...s.fltBtn,
-                ...(isActive ? { ...s.fltActive, ...(cfg ? { borderColor: cfg.barColor, color: cfg.barColor } : {}) } : {}),
-              }}
-              onClick={() => setFilter(f.key)}
-            >
-              {f.label}
-              {counts[f.key] > 0 && (
-                <span style={{
-                  marginLeft: 5, fontSize: 9, fontWeight: 800,
-                  padding: '1px 6px', borderRadius: 9,
-                  background: isActive ? `${cfg?.barColor || '#8B949E'}25` : 'rgba(139,148,158,.12)',
-                  color: isActive ? (cfg?.barColor || '#E6EDF3') : '#8B949E',
-                }}>
-                  {counts[f.key]}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={s.filterRow}>
+          {FILTERS.map(f => {
+            const isActive = filter === f.key;
+            const cfg = UCFG[f.key];
+            return (
+              <button
+                key={f.key}
+                style={{
+                  ...s.fltBtn,
+                  ...(isActive ? { ...s.fltActive, ...(cfg ? { borderColor: cfg.barColor, color: cfg.barColor } : {}) } : {}),
+                }}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.label}
+                {counts[f.key] > 0 && (
+                  <span style={{
+                    marginLeft: 5, fontSize: 9, fontWeight: 800,
+                    padding: '1px 6px', borderRadius: 9,
+                    background: isActive ? `${cfg?.barColor || '#8B949E'}25` : 'rgba(139,148,158,.12)',
+                    color: isActive ? (cfg?.barColor || '#E6EDF3') : '#8B949E',
+                  }}>
+                    {counts[f.key]}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ position: 'relative' }}>
+            <SearchOutlined style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#8B949E', fontSize: 14 }} />
+            <input
+              type="text"
+              placeholder="Search incidents..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 8, color: '#E6EDF3', padding: '6px 12px 6px 32px', fontSize: 12, width: 220, outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', background: '#0D1117', borderRadius: 8, padding: 2, border: '1px solid #30363D' }}>
+            <button onClick={() => setViewMode('card')} style={{ ...s.viewBtn, ...(viewMode === 'card' ? s.viewBtnActive : {}) }}><AppstoreOutlined /></button>
+            <button onClick={() => setViewMode('list')} style={{ ...s.viewBtn, ...(viewMode === 'list' ? s.viewBtnActive : {}) }}><UnorderedListOutlined /></button>
+          </div>
+        </div>
       </div>
 
-      {/* Cards */}
+      {/* Cards / List */}
       {visibleAlerts.length === 0 ? (
         <div style={s.empty}>
           <div style={s.emptyIcon}>{filter === 'all' ? <ApartmentOutlined /> : (UCFG[filter]?.icon || <ApartmentOutlined />)}</div>
@@ -186,17 +216,45 @@ export default function AlertsPage() {
           <div style={s.emptySub}>Dispatch from the Dispatch tab</div>
         </div>
       ) : (
-        <div style={s.grid}>
+        <div style={viewMode === 'card' ? s.grid : s.listStack}>
           {visibleAlerts.map(a => {
             const cfg = UCFG[a.vehicleType] || UCFG.ambulance;
             const t = new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const isMonitoringPage = true; // this file is monitoring only
-
-            const statusToUse = isMonitoringPage
-              ? (liveStatusMap[a.id] || a.status) // ✅ live status
-              : a.status; // (not used here but safe)
-
+            const statusToUse = liveStatusMap[a.id] || a.status;
             const stCfg = STATUS_CFG[statusToUse] || STATUS_CFG.pending;
+            const sevColor = SEV_COLORS[a.severity] || '#8B949E';
+
+            if (viewMode === 'list') {
+              return (
+                <div key={a.id} style={s.listItem} onClick={() => navigate(`/live/${a.id}`, { state: { alert: a } })}>
+                  <div style={{ ...s.listBar, background: cfg.barColor }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: `${cfg.barColor}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{cfg.icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name || 'Unknown'}</div>
+                      <div style={{ fontSize: 10, color: '#8B949E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.address || '—'}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: stCfg.bg, color: stCfg.color }}>{stCfg.label}</span>
+                      <span style={{ fontSize: 9, color: '#8B949E', fontFamily: 'JetBrains Mono, monospace' }}>{t}</span>
+                    </div>
+                    <div style={{ width: 80, textAlign: 'right' }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, color: sevColor }}>{a.severity?.toUpperCase()}</span>
+                    </div>
+                    <div style={{ width: 120, textAlign: 'right' }}>
+                      {a.assignedUnits && a.assignedUnits.length > 0 ? (
+                        <span style={{ fontSize: 9, fontWeight: 700, color: '#82B4FF' }}>{a.assignedUnits.length} Unit{a.assignedUnits.length > 1 ? 's' : ''}</span>
+                      ) : (
+                        <span style={{ fontSize: 9, color: '#30363D' }}>No units</span>
+                      )}
+                    </div>
+                    <button style={s.listOpenBtn}>Live Tracking →</button>
+                  </div>
+                </div>
+              );
+            }
 
             return (
               <div
@@ -247,11 +305,9 @@ export default function AlertsPage() {
                       <span style={{
                         fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 7,
                         textTransform: 'uppercase',
-                        background: `${SEV_COLORS[a.severity] || '#8B949E'}18`,
-                        color: SEV_COLORS[a.severity] || '#8B949E',
-                      }}>
-                        {a.severity}
-                      </span>
+                        background: `${sevColor}18`,
+                        color: sevColor
+                      }}>{a.severity}</span>
 
                       {/* Status chip */}
                       <span style={{
@@ -314,4 +370,13 @@ const s = {
     borderRadius: 7, padding: '4px 10px', cursor: 'pointer',
     fontFamily: 'Sora, sans-serif', flexShrink: 0,
   },
+
+  /* List View Styles */
+  listStack: { display: 'flex', flexDirection: 'column', gap: 8 },
+  listItem: { background: '#161B22', border: '1px solid #30363D', borderRadius: 10, padding: '10px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', position: 'relative', overflow: 'hidden', transition: 'all .15s' },
+  listBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
+  listOpenBtn: { background: 'rgba(26,115,232,.1)', border: '1px solid rgba(26,115,232,.2)', color: '#1A73E8', borderRadius: 6, padding: '4px 12px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
+
+  viewBtn: { background: 'transparent', border: 'none', color: '#8B949E', width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 14, transition: 'all .15s' },
+  viewBtnActive: { background: '#30363D', color: '#fff' },
 };

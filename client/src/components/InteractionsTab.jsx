@@ -662,7 +662,7 @@ export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
           if (src === thumb) setSrc(full);
           else setFailed(true);
         }}
-        style={{ maxWidth: '100%', maxHeight: 130, minHeight: 40, minWidth: 60, borderRadius: 7, cursor: 'pointer', display: 'block', objectFit: 'cover' }}
+        style={{ maxWidth: '100%', maxHeight: 400, minHeight: 40, minWidth: 60, borderRadius: 7, cursor: 'pointer', display: 'block', objectFit: 'cover' }}
       />
     );
   };
@@ -675,6 +675,10 @@ export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
     const isHovered = hoveredMsgId === msg.id;
     const isPinned = pinnedEvents.includes(msg.id);
 
+    const isImage = msg.msgtype === 'm.image' || msg.info?.mimetype?.startsWith('image/');
+    const isMedia = ['m.video', 'm.audio', 'm.file'].includes(msg.msgtype) || isImage;
+    const isLocation = msg.msgtype === 'm.location';
+
     const bubble = {
       maxWidth: '80%', padding: '7px 10px',
       borderRadius: mine ? '12px 12px 3px 12px' : '12px 12px 12px 3px',
@@ -683,15 +687,12 @@ export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
       fontSize: 11, color: '#E6EDF3', fontFamily: 'Sora, sans-serif',
       lineHeight: 1.55, wordBreak: 'break-word',
       position: 'relative',
+      minWidth: isMedia ? 300 : 'auto'
     };
     const metaRow = {
       fontSize: 8, color: '#8B949E', marginTop: 3, display: 'flex', gap: 5,
       justifyContent: mine ? 'flex-end' : 'flex-start',
     };
-
-    const isImage = msg.msgtype === 'm.image' || msg.info?.mimetype?.startsWith('image/');
-    const isMedia = ['m.video', 'm.audio', 'm.file'].includes(msg.msgtype) || isImage;
-    const isLocation = msg.msgtype === 'm.location';
     let inner;
 
     // Actions Menu (Element style)
@@ -846,22 +847,24 @@ export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
         <div id={`msg-${msg.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {renderActions()}
           {renderReplyTag()}
-          {/* File block (Element-style) */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            background: 'rgba(0,0,0,0.15)', padding: '8px 10px', borderRadius: 8,
-            border: '1px solid rgba(255,255,255,0.05)',
-          }}>
-            <span style={{ fontSize: 16, display: 'flex' }}>{icon}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#E6EDF3' }}>
-                {msg.body || 'attachment'}
+          {/* File block (show ONLY for documents) */}
+          {msg.msgtype === 'm.file' && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'rgba(0,0,0,0.15)', padding: '8px 10px', borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.05)',
+            }}>
+              <span style={{ fontSize: 16, display: 'flex' }}>{icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#E6EDF3' }}>
+                  {msg.body || 'attachment'}
+                </div>
+                {msg.info?.size && (
+                  <div style={{ fontSize: 8, color: '#8B949E', marginTop: 1 }}>{fmtSize(msg.info.size)}</div>
+                )}
               </div>
-              {msg.info?.size && (
-                <div style={{ fontSize: 8, color: '#8B949E', marginTop: 1 }}>{fmtSize(msg.info.size)}</div>
-              )}
             </div>
-          </div>
+          )}
 
           {/* Image preview (if applicable) */}
           {isImage && (
@@ -878,7 +881,7 @@ export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
             <video
               src={full}
               controls
-              style={{ width: '100%', borderRadius: 8, maxHeight: 180, background: '#000', marginTop: 2 }}
+              style={{ width: '100%', borderRadius: 8, maxHeight: 350, background: '#000', marginTop: 2 }}
               onError={(e) => {
                 e.target.style.display = 'none';
                 const err = document.createElement('div');
@@ -894,7 +897,7 @@ export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
             <audio
               src={full}
               controls
-              style={{ width: '100%', height: 32, marginTop: 2 }}
+              style={{ width: '100%', height: 44, marginTop: 2, minWidth: 250 }}
               onError={(e) => {
                 e.target.style.display = 'none';
                 const err = document.createElement('div');
