@@ -8,8 +8,8 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SYNAPSE_BASE } from '../config';
 
-const SYNAPSE_BASE = 'http://192.168.2.52:8008';
 const ADMIN_TOKEN = 'syt_YWRtaW4x_ORxyHHzfMxvFIQxGouDM_0bUXx3';
 const KEY_SESSION = 'MATRIX_SESSION';
 
@@ -115,14 +115,6 @@ export async function inviteUser(accessToken, roomId, userId) {
   return data;
 }
 
-// ── 8. Get joined rooms ────────────────────────────────────────────────────
-export async function getJoinedRooms(accessToken) {
-  const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/joined_rooms`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const data = await res.json();
-  return data.joined_rooms || [];
-}
 
 // ── 9. Get room messages ───────────────────────────────────────────────────
 export async function getRoomMessages(accessToken, roomId, from = null, limit = 50) {
@@ -137,19 +129,22 @@ export async function getRoomMessages(accessToken, roomId, from = null, limit = 
 }
 
 // ── 10. Send text ─────────────────────────────────────────────────────────
-export async function sendTextMessage(accessToken, roomId, body) {
-  const txnId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+export async function sendTextMessage(accessToken, roomId, body, extraContent = {}) {
+  const txnId = extraContent.txnId || `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const cleanExtra = { ...extraContent };
+  delete cleanExtra.txnId;
+
   const res = await fetch(
     `${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${txnId}`,
     {
       method: 'PUT',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ msgtype: 'm.text', body }),
+      body: JSON.stringify({ msgtype: 'm.text', body, ...cleanExtra }),
     }
   );
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Failed to send message');
-  return data;
+  return { ...data, txnId };
 }
 
 // ── 11. Upload media ──────────────────────────────────────────────────────
@@ -221,6 +216,44 @@ export async function sendAudioMessage(accessToken, roomId, mxcUri, filename, du
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Failed to send audio');
   return data;
+}
+
+// ── 15.1 Get Room Name ────────────────────────────────────────────────────
+export async function getRoomName(accessToken, roomId, myUserId) {
+  try {
+    // 1. Try to get explicit room name
+    const nameRes = await fetch(
+      `${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (nameRes.ok) {
+      const data = await nameRes.json();
+      if (data.name) return data.name;
+    }
+
+    // 2. Fallback for DMs: find the other member's name
+    const membersRes = await fetch(
+      `${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/members`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (membersRes.ok) {
+      const { chunk = [] } = await membersRes.json();
+      // Look at both joined and invited members for robust naming
+      const relevantMembers = chunk.filter(e => e.content?.membership === 'join' || e.content?.membership === 'invite');
+
+      // If it's a 1:1 room, show the OTHER person's name
+      if (relevantMembers.length === 2) {
+        const other = relevantMembers.find(m => m.state_key !== myUserId);
+        if (other) {
+          return other.content?.displayname || other.state_key.replace(/^@/, '').split(':')[0];
+        }
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // ── 15. Send file / document ──────────────────────────────────────────────
@@ -310,6 +343,7 @@ export async function syncMatrix(accessToken, since = null, timeout = 10000) {
 export function mxcToHttp(mxcUri, accessToken) {
   if (!mxcUri?.startsWith('mxc://')) return mxcUri;
   const stripped = mxcUri.slice(6);
+  // Using v1 media endpoint with allow_redirect (matches web version)
   return `${SYNAPSE_BASE}/_matrix/client/v1/media/download/${stripped}?allow_redirect=true`;
 }
 
@@ -319,7 +353,102 @@ export function getThumbnailUrl(mxcUri, width = 200, height = 150) {
   return `${SYNAPSE_BASE}/_matrix/client/v1/media/thumbnail/${stripped}?width=${width}&height=${height}&method=scale&allow_redirect=true`;
 }
 
-// ── 20. Session helpers ────────────────────────────────────────────────────
+// ── 20. Message Actions (Reactions, Pins, etc.) ───────────────────────
+export async function sendReaction(accessToken, roomId, eventId, key) {
+  const txnId = `react_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/send/m.reaction/${txnId}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      'm.relates_to': {
+        rel_type: 'm.annotation',
+        event_id: eventId,
+        key: key
+      }
+    }),
+  });
+  if (!res.ok) throw new Error('Reaction failed');
+  return await res.json();
+}
+
+export async function pinMessage(accessToken, roomId, eventId) {
+  // 1. Get current pinned events
+  const stRes = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/state/m.room.pinned_events`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  let pinned = [];
+  if (stRes.ok) {
+    const data = await stRes.json();
+    pinned = data.pinned || [];
+  }
+
+  let nextPinned;
+  if (pinned.includes(eventId)) {
+    // Unpin logic: remove from list
+    nextPinned = pinned.filter(id => id !== eventId);
+  } else {
+    // Pin logic: add to list
+    nextPinned = [...pinned, eventId];
+  }
+
+  const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/state/m.room.pinned_events`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned: nextPinned }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to update pinned messages');
+  }
+
+  return nextPinned;
+}
+
+export async function forwardMessage(accessToken, targetRoomId, originalMsg) {
+  const txnId = `fwd_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const { msgtype, body, mediaUrl, info, geo, id, url } = originalMsg;
+
+  // Use original mxc url if available, otherwise mediaUrl (HTTP)
+  const contentUrl = url || mediaUrl;
+
+  return await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(targetRoomId)}/send/m.room.message/${txnId}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      msgtype,
+      body,
+      url: contentUrl,
+      info,
+      geo_uri: geo,
+      'm.relates_to': {
+        rel_type: 'm.forward',
+        event_id: id
+      }
+    }),
+  });
+}
+
+
+// ── 21. Fetch Joined Rooms ────────────────────────────────────────────────
+export async function getJoinedRooms(accessToken) {
+  const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/joined_rooms`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch rooms');
+  return data.joined_rooms;
+}
+
+export async function getRoomState(accessToken, roomId, eventType) {
+  const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/r0/rooms/${encodeURIComponent(roomId)}/state/${eventType}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (res.ok) return await res.json();
+  return null;
+}
+
+// ── 22. Session helpers ────────────────────────────────────────────────────
 export async function saveSession(session) {
   await AsyncStorage.setItem(KEY_SESSION, JSON.stringify(session));
 }
@@ -346,13 +475,44 @@ export async function getRoomMembers(accessToken, roomId) {
   if (!res.ok) throw new Error(data.error || 'Failed to get room members');
 
   return (data.chunk || [])
-    .filter(e => e.content?.membership === 'join')
     .map(e => ({
       userId: e.state_key,
       displayName: e.content?.displayname || e.state_key.split(':')[0].replace('@', ''),
       avatarUrl: e.content?.avatar_url || null,
       membership: e.content?.membership,
     }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── 22. NEW: Save Direct Message (m.direct) ───────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+export async function saveDirectMessage(accessToken, myUserId, targetUserId, roomId) {
+  try {
+    let existingDMs = {};
+    const adRes = await fetch(
+      `${SYNAPSE_BASE}/_matrix/client/r0/user/${encodeURIComponent(myUserId)}/account_data/m.direct`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (adRes.ok) existingDMs = await adRes.json();
+
+    const targetDMs = existingDMs[targetUserId] || [];
+    if (!targetDMs.includes(roomId)) {
+      await fetch(
+        `${SYNAPSE_BASE}/_matrix/client/r0/user/${encodeURIComponent(myUserId)}/account_data/m.direct`,
+        {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...existingDMs,
+            [targetUserId]: [...targetDMs, roomId],
+          }),
+        }
+      );
+      console.log('[DM] ✅ account_data updated for:', targetUserId);
+    }
+  } catch (err) {
+    console.warn('[DM] saveDirectMessage failed:', err.message);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { Platform, Text } from 'react-native';
+import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function DispatchTabsLayout() {
@@ -18,7 +19,7 @@ export default function DispatchTabsLayout() {
           paddingTop:      8,
         },
         tabBarActiveTintColor:   '#ef4444',
-        tabBarInactiveTintColor: '#475569',
+        tabBarInactiveTintColor: '#94a3b8',
         tabBarLabelStyle: {
           fontSize: 11, fontWeight: '700', letterSpacing: 0.5,
         },
@@ -28,8 +29,8 @@ export default function DispatchTabsLayout() {
         name="map"
         options={{
           title: 'Navigation',
-          tabBarIcon: ({ focused }) => (
-            <Text style={{ fontSize: focused ? 24 : 20 }}>🗺</Text>
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? "map" : "map-outline"} size={22} color={color} />
           ),
         }}
       />
@@ -37,8 +38,8 @@ export default function DispatchTabsLayout() {
         name="chat"
         options={{
           title: 'Dispatch Chat',
-          tabBarIcon: ({ focused }) => (
-            <Text style={{ fontSize: focused ? 24 : 20 }}>💬</Text>
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? "chatbubbles" : "chatbubbles-outline"} size={22} color={color} />
           ),
         }}
       />

@@ -8,9 +8,11 @@ import {
   createRoom, joinRoom, sendMessage, getRoomMessages,
   sync, uploadMedia, getRoomMembers,
   sendImageMessage, sendVideoMessage, sendAudioMessage, sendFileMessage,
-  downloadMedia,
+  downloadMedia, getOrCreateDMRoom,
+  sendReaction, pinMessage, forwardMessage
 } from '../services/MatrixService';
-import { SYNAPSE_BASE_URL, matrixRoomAlias, MATRIX_MAX_UPLOAD_SIZE } from '../config/apiConfig';
+import EmojiPicker from 'emoji-picker-react';
+import { SYNAPSE_BASE_URL, matrixRoomAlias, MATRIX_MAX_UPLOAD_SIZE, SYNAPSE_ADMIN_TOKEN } from '../config/apiConfig';
 import {
   PaperClipOutlined,
   AudioOutlined,
@@ -33,7 +35,12 @@ import {
   SmileOutlined,
   CompassOutlined,
   PushpinOutlined,
-  FieldTimeOutlined
+  FieldTimeOutlined,
+  TeamOutlined,
+  DownloadOutlined,
+  RollbackOutlined,
+  ExportOutlined,
+  PushpinFilled
 } from '@ant-design/icons';
 
 // ── Module-level room cache: ticketId → roomId ────────────────────────────────
@@ -52,8 +59,8 @@ function setCachedRoom(ticketId, roomId) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function parseEvents(events = []) {
-  return events
+function parseEvents(events = [], myUserId) {
+  const msgs = events
     .filter(e => e.type === 'm.room.message' && e.content?.msgtype)
     .map(e => ({
       id: e.event_id || `local-${e.origin_server_ts}`,
@@ -62,9 +69,27 @@ function parseEvents(events = []) {
       msgtype: e.content.msgtype,
       body: e.content.body || e.content.info?.name || '',
       url: e.content.url || null,
+      mxc: e.content.url || null, // Keep original mxc for forwarding/downloading
       geo_uri: e.content.geo_uri || null,
       info: e.content.info || {},
+      replyToId: e.content?.['m.relates_to']?.['m.in_reply_to']?.event_id,
+      txnId: e.unsigned?.transaction_id || null,
     }));
+
+  // Group reactions
+  const reactionMap = {};
+  events.filter(e => e.type === 'm.reaction').forEach(e => {
+    const relate = e.content?.['m.relates_to'];
+    if (relate?.rel_type === 'm.annotation' && relate.event_id) {
+      const eid = relate.event_id;
+      const key = relate.key;
+      if (!reactionMap[eid]) reactionMap[eid] = {};
+      if (!reactionMap[eid][key]) reactionMap[eid][key] = [];
+      if (!reactionMap[eid][key].includes(e.sender)) reactionMap[eid][key].push(e.sender);
+    }
+  });
+
+  return { msgs, reactionMap };
 }
 const fmtTime = ts => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const fmtSize = b => !b ? '' : b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
@@ -74,9 +99,9 @@ const shortSender = uid => (uid || '').replace(/^@/, '').split(':')[0] || uid;
 const QUICK_REPLIES = ['Unit en route', 'On scene', 'Need backup', 'Patient stabilised', 'Returning to base'];
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default function InteractionsTab({ ticketId, alertObj }) {
+export default function InteractionsTab({ ticketId, alertObj, initialRoomId }) {
   const [messages, setMessages] = useState([]);
-  const [roomId, setRoomId] = useState(null);
+  const [roomId, setRoomId] = useState(initialRoomId || null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [inputText, setInputText] = useState('');
@@ -97,6 +122,16 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showLocModal, setShowLocModal] = useState(false);
   const [showLiveDurations, setShowLiveDurations] = useState(false);
+  const [showMembersList, setShowMembersList] = useState(false);
+  const [dmLoading, setDmLoading] = useState(false);
+  const [replyTo, setReplyTo] = useState(null);
+  const [forwardMsg, setForwardMsg] = useState(null);
+  const [showForwardModal, setShowForwardModal] = useState(false);
+  const [reactionTarget, setReactionTarget] = useState(null); // { eventId, rect }
+  const [hoveredMsgId, setHoveredMsgId] = useState(null);
+  const [reactions, setReactions] = useState({}); // eventId -> { emoji: [users] }
+  const [pinnedEvents, setPinnedEvents] = useState([]);
+  const [joinedRooms, setJoinedRooms] = useState([]); // for forwarding
 
   const timerRef = useRef(null);
 
@@ -194,37 +229,41 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     setLoading(true);
     setError(null);
     try {
-      const canonicalRoomName = `Ticket-${ticketId}`;
-      const safeAlias = canonicalRoomName.replace(/[^a-zA-Z0-9_\-]/g, '_');
-      const fullAlias = matrixRoomAlias(safeAlias);
-      let rid = null;
+      let rid = initialRoomId;
 
-      // Step 1: Check local cache first (fastest)
-      rid = getCachedRoom(ticketId);
-
-      // Step 2: If no cache, resolve by alias from Synapse
       if (!rid) {
-        try {
-          const aliasRes = await fetch(
-            `${SYNAPSE_BASE_URL}/_matrix/client/v3/directory/room/${encodeURIComponent(fullAlias)}`,
-            { headers: { 'Authorization': `Bearer ${accessToken}` } }
-          );
-          if (aliasRes.ok) {
-            const aliasData = await aliasRes.json();
-            if (aliasData.room_id) rid = aliasData.room_id;
-          }
-        } catch { }
-      }
+        const patientName = alertObj?.name || alertObj?.patientName || '';
+        const canonicalRoomName = patientName ? patientName : `Ticket-${ticketId}`;
+        const safeAlias = canonicalRoomName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+        const fullAlias = matrixRoomAlias(safeAlias);
 
-      // Step 3: Only create if NEITHER cache NOR alias found anything
-      if (!rid) {
-        const result = await createRoom(accessToken, canonicalRoomName);
-        rid = result.room_id;
+        // Step 1: Check local cache first (fastest)
+        rid = getCachedRoom(ticketId);
+
+        // Step 2: If no cache, resolve by alias from Synapse
+        if (!rid) {
+          try {
+            const aliasRes = await fetch(
+              `${SYNAPSE_BASE_URL}/_matrix/client/v3/directory/room/${encodeURIComponent(fullAlias)}`,
+              { headers: { 'Authorization': `Bearer ${accessToken}` } }
+            );
+            if (aliasRes.ok) {
+              const aliasData = await aliasRes.json();
+              if (aliasData.room_id) rid = aliasData.room_id;
+            }
+          } catch { }
+        }
+
+        // Step 3: Only create if NEITHER cache NOR alias found anything
+        if (!rid) {
+          const result = await createRoom(accessToken, canonicalRoomName);
+          rid = result.room_id;
+        }
       }
 
       if (gen !== initGenRef.current) return; // Stale request, ignore
 
-      setCachedRoom(ticketId, rid);
+      if (ticketId) setCachedRoom(ticketId, rid);
       roomIdRef.current = rid;
       setRoomId(rid);
 
@@ -304,6 +343,24 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
   const fmtDuration = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
+  const handleMemberClick = async (member) => {
+    if (member.userId === myUserId || dmLoading) return;
+    setDmLoading(true);
+    setShowMembersList(false);
+    try {
+      const dmRoomId = await getOrCreateDMRoom(accessToken, myUserId, member.userId);
+      if (dmRoomId) {
+        // Dispatch event so GlobalChatPanel can switch to this room
+        window.dispatchEvent(new CustomEvent('matrixSwitchRoom', { detail: { roomId: dmRoomId } }));
+      }
+    } catch (err) {
+      console.error('[DM] Failed to open DM:', err);
+      alert('Failed to open direct message: ' + err.message);
+    } finally {
+      setDmLoading(false);
+    }
+  };
+
   const filteredMembers = roomMembers.filter(m =>
     m.displayName.toLowerCase().includes(mentionSearch.toLowerCase()) ||
     m.userId.toLowerCase().includes(mentionSearch.toLowerCase())
@@ -323,21 +380,59 @@ export default function InteractionsTab({ ticketId, alertObj }) {
 
   async function loadHistory(rid, gen) {
     try {
-      // getRoomMessages — HTTP/2 preferred for potentially large payloads
       const res = await getRoomMessages(accessToken, rid, null, 50);
-      if (gen !== initGenRef.current) return; // Guard against stale history load
+      if (gen !== initGenRef.current) return;
 
-      const events = [...(res.chunk || [])].reverse(); // chunk is newest-first
-      const msgs = parseEvents(events).filter(m => {
+      const events = [...(res.chunk || [])].reverse();
+      const { msgs, reactionMap } = parseEvents(events, myUserId);
+
+      const filteredMsgs = msgs.filter(m => {
         if (seenIds.current.has(m.id)) return false;
         seenIds.current.add(m.id);
         return true;
       });
-      setMessages(msgs);
+
+      setMessages(filteredMsgs);
+      setReactions(prev => ({ ...prev, ...reactionMap }));
     } catch (e) {
       if (gen === initGenRef.current) console.warn('[InteractionsTab] loadHistory:', e.message);
     }
   }
+
+  const handlePin = async (eventId) => {
+    if (!roomId || !accessToken) return;
+    try {
+      const nextPinned = await pinMessage(accessToken, roomId, eventId);
+      setPinnedEvents(nextPinned);
+    } catch (err) {
+      console.error('[Pin] failed:', err);
+    }
+  };
+
+  const handleReaction = async (eventId, emoji) => {
+    if (!roomId || !accessToken) return;
+    try {
+      await sendReaction(accessToken, roomId, eventId, emoji);
+    } catch (err) {
+      console.error('[Reaction] failed:', err);
+    }
+  };
+
+  const handleForward = async (msg) => {
+    setForwardMsg(msg);
+    setShowForwardModal(true);
+    // Fetch rooms for forwarding
+    try {
+      const roomIds = await getJoinedRooms(accessToken);
+      const roomDetails = await Promise.all(roomIds.map(async (rid) => {
+        const name = await getRoomName(accessToken, rid);
+        return { id: rid, name };
+      }));
+      setJoinedRooms(roomDetails);
+    } catch (e) {
+      console.warn('[Forward] Failed to fetch rooms:', e);
+    }
+  };
 
   // ── Sync loop — HTTP/2 long-polling via native fetch ─────────────────────
   function startSync(rid, gen) {
@@ -356,34 +451,38 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           if (data.next_batch) currentSince = data.next_batch;
 
           // CRITICAL: Filter events by the current room ID to prevent "room bleeding"
-          const timelineEvents = data.rooms?.join?.[rid]?.timeline?.events || [];
+          const roomData = data.rooms?.join?.[rid];
+          const timelineEvents = roomData?.timeline?.events || [];
+
+          // Sync pinned events
+          const stateEvents = roomData?.state?.events || [];
+          const pinEvent = stateEvents.find(e => e.type === 'm.room.pinned_events');
+          if (pinEvent) setPinnedEvents(pinEvent.content?.pinned || []);
 
           if (timelineEvents.length) {
-            const filtered = timelineEvents.filter(e => {
-              // 1. Skip our own confirm messages (optimistic UI)
-              if (e.unsigned?.transaction_id && pendingTxns.current.has(e.unsigned.transaction_id)) {
-                if (e.event_id) seenIds.current.add(e.event_id);
-                return false;
-              }
-              // 2. Skip duplicates
-              if (seenIds.current.has(e.event_id)) return false;
-              if (e.event_id) seenIds.current.add(e.event_id);
-              // 3. Only message types
-              return e.type === 'm.room.message' && e.content?.msgtype;
+            const { msgs: newMsgs, reactionMap } = parseEvents(timelineEvents, myUserId);
+            const msgsToRender = newMsgs.filter(m => {
+              if (seenIds.current.has(m.id)) return false;
+              if (m.id) seenIds.current.add(m.id);
+              return true;
             });
 
-            if (filtered.length) {
-              const newMsgs = filtered.map(e => ({
-                id: e.event_id || `local-${e.origin_server_ts}`,
-                sender: e.sender || '',
-                ts: e.origin_server_ts || Date.now(),
-                msgtype: e.content.msgtype,
-                body: e.content.body || '',
-                url: e.content.url || null,
-                geo_uri: e.content.geo_uri || null,
-                info: e.content.info || {},
-              }));
-              setMessages(prev => [...prev, ...newMsgs]);
+            if (msgsToRender.length || Object.keys(reactionMap).length) {
+              setReactions(prev => {
+                const next = { ...prev };
+                Object.keys(reactionMap).forEach(eid => {
+                  next[eid] = { ...(next[eid] || {}), ...reactionMap[eid] };
+                });
+                return next;
+              });
+
+              if (msgsToRender.length) {
+                setMessages(prev => {
+                  const incomingTxnIds = new Set(msgsToRender.map(m => m.txnId).filter(Boolean));
+                  const filteredPrev = prev.filter(m => !incomingTxnIds.has(m.id));
+                  return [...filteredPrev, ...msgsToRender];
+                });
+              }
             }
           }
         } catch (e) {
@@ -397,12 +496,12 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     poll();
   }
 
-  // ── Send text — optimistic update + txnId tracking to prevent sync duplicate ──
+  // ── Send text ─────────────────────────────────────────────────────────────
   const handleSend = async () => {
     const txt = inputText.trim();
     if (!txt || !roomId) return;
 
-    // Clear input IMMEDIATELY to prevent double-sends during async operations
+    // Clear input IMMEDIATELY
     setInputText('');
     const el = textareaRef.current;
     if (el) el.style.height = '40px';
@@ -410,92 +509,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     const sess = JSON.parse(localStorage.getItem('dispatcher') || '{}');
     const senderId = sess.userId || sess.user_id;
 
-    // Direct Message Logic: Check for mentions
-    const mentions = [...txt.matchAll(/@(\S+)/g)];
-    let dmSent = false;
-
-    if (mentions.length > 0) {
-      for (const match of mentions) {
-        const mentionName = match[1];
-        // Improved target lookup: check both displayName and userId
-        const target = roomMembers.find(m => 
-          m.displayName.toLowerCase() === mentionName.toLowerCase() || 
-          m.userId.toLowerCase().includes(mentionName.toLowerCase())
-        );
-        
-        if (target && target.userId !== senderId) {
-          dmSent = true;
-          try {
-            console.log('[InteractionsTab] Sending DM to:', target.userId);
-            
-            // 1. Find existing DM room
-            let dmRoomId = null;
-            const joinedRes = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/joined_rooms`, {
-              headers: { 'Authorization': `Bearer ${accessToken}` },
-            });
-            if (joinedRes.ok) {
-              const { joined_rooms = [] } = await joinedRes.json();
-              // To speed up, we look at the last 20 rooms or specifically for 1:1 DMs
-              for (const rid of joined_rooms.slice(-20)) {
-                const stRes = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/rooms/${encodeURIComponent(rid)}/state`, {
-                  headers: { 'Authorization': `Bearer ${accessToken}` },
-                });
-                if (stRes.ok) {
-                  const state = await stRes.json();
-                  const members = state.filter(e => e.type === 'm.room.member' && e.content?.membership === 'join');
-                  if (members.length === 2 && members.some(m => m.state_key === target.userId)) {
-                    dmRoomId = rid;
-                    break;
-                  }
-                }
-              }
-            }
-
-            // 2. Create DM if not found
-            if (!dmRoomId) {
-              const createRes = await fetch(`${SYNAPSE_BASE_URL}/_matrix/client/v3/createRoom`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${accessToken}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                  invite: [target.userId], 
-                  is_direct: true, 
-                  preset: "trusted_private_chat", 
-                  visibility: "private" 
-                }),
-              });
-              if (createRes.ok) {
-                const data = await createRes.json();
-                dmRoomId = data.room_id;
-              }
-            }
-
-            // 3. Send the DM
-            if (dmRoomId) {
-              await sendMessage(accessToken, dmRoomId, txt);
-              setMessages(prev => [...prev, {
-                id: 'dm-' + Date.now() + Math.random(),
-                sender: senderId,
-                ts: Date.now(),
-                msgtype: 'm.text',
-                body: `🔒 Sent DM to ${target.displayName}: ${txt}`,
-                url: null,
-                info: {},
-              }]);
-            }
-          } catch (err) {
-            console.error('[InteractionsTab] DM failed for:', target.userId, err);
-          }
-        }
-      }
-    }
-
-    // If we sent at least one DM, we don't send to the room
-    if (dmSent) {
-      setSending(false);
-      return;
-    }
-
-    // Standard room send
+    // Standard room send (DMs no longer triggered by @mention)
     const txnId = 'm' + Date.now() + Math.random().toString(36).slice(2, 7);
     pendingTxns.current.add(txnId);
 
@@ -514,7 +528,18 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     }, 50);
 
     try {
-      await sendMessage(accessToken, roomId, txt, txnId);
+      if (replyTo) {
+        await sendMessage(accessToken, roomId, txt, txnId, {
+          'm.relates_to': {
+            'm.in_reply_to': {
+              event_id: replyTo.id
+            }
+          }
+        });
+        setReplyTo(null);
+      } else {
+        await sendMessage(accessToken, roomId, txt, txnId);
+      }
     } catch (err) {
       console.error('[InteractionsTab] Room Send failed:', err);
     } finally {
@@ -539,7 +564,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
         const sess = JSON.parse(localStorage.getItem('dispatcher') || '{}');
         const senderId = sess.userId || sess.user_id;
         const txnId = 'loc-' + Date.now() + Math.random().toString(36).slice(2, 5);
-        
+
         pendingTxns.current.add(txnId);
         setMessages(prev => [...prev, {
           id: txnId,
@@ -647,6 +672,8 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     const mine = msg.sender === myUserId;
     const sender = shortSender(msg.sender);
     const time = fmtTime(msg.ts);
+    const isHovered = hoveredMsgId === msg.id;
+    const isPinned = pinnedEvents.includes(msg.id);
 
     const bubble = {
       maxWidth: '80%', padding: '7px 10px',
@@ -655,6 +682,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       border: mine ? '1px solid rgba(26,115,232,.3)' : '1px solid rgba(48,54,61,.9)',
       fontSize: 11, color: '#E6EDF3', fontFamily: 'Sora, sans-serif',
       lineHeight: 1.55, wordBreak: 'break-word',
+      position: 'relative',
     };
     const metaRow = {
       fontSize: 8, color: '#8B949E', marginTop: 3, display: 'flex', gap: 5,
@@ -666,6 +694,101 @@ export default function InteractionsTab({ ticketId, alertObj }) {
     const isLocation = msg.msgtype === 'm.location';
     let inner;
 
+    // Actions Menu (Element style)
+    const renderActions = () => (
+      <div style={{
+        position: 'absolute', top: -30, right: mine ? 0 : 'auto', left: mine ? 'auto' : 0,
+        display: 'flex', gap: 4, background: '#161B22', border: '1px solid #30363D',
+        borderRadius: 8, padding: '2px 4px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        zIndex: 10, opacity: isHovered ? 1 : 0, visibility: isHovered ? 'visible' : 'hidden',
+        transition: 'all 0.15s ease'
+      }}>
+        {isMedia && (
+          <button onClick={() => handleDownload(msg.mxc, msg.body)} style={st.actionBtn} title="Download">
+            <DownloadOutlined />
+          </button>
+        )}
+        <button onClick={() => setReplyTo(msg)} style={st.actionBtn} title="Reply">
+          <RollbackOutlined />
+        </button>
+        <button
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setReactionTarget({ eventId: msg.id, rect });
+          }}
+          style={st.actionBtn}
+          title="React"
+        >
+          <SmileOutlined />
+        </button>
+        <button onClick={() => handlePin(msg.id)} style={st.actionBtn} title={isPinned ? "Unpin" : "Pin"}>
+          {isPinned ? <PushpinFilled style={{ color: '#1A73E8' }} /> : <PushpinOutlined />}
+        </button>
+        <button
+          onClick={() => {
+            setForwardMsg(msg);
+            setShowForwardModal(true);
+          }}
+          style={st.actionBtn}
+          title="Forward"
+        >
+          <ExportOutlined />
+        </button>
+      </div>
+    );
+
+    const replyMsg = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
+
+    const renderReplyTag = () => replyMsg && (
+      <div
+        onClick={() => {
+          const el = document.getElementById(`msg-${msg.replyToId}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }}
+        style={{
+          background: mine ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.05)',
+          borderLeft: mine ? '3px solid #DBEAFE' : '3px solid #1A73E8',
+          padding: '4px 8px', borderRadius: 4, marginBottom: 6, cursor: 'pointer',
+          fontSize: 9, opacity: 0.9
+        }}
+      >
+        <div style={{ fontWeight: 700, color: mine ? '#DBEAFE' : '#82B4FF' }}>{shortSender(replyMsg.sender)}</div>
+        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: mine ? 'rgba(255,255,255,0.8)' : 'inherit' }}>{replyMsg.body}</div>
+      </div>
+    );
+
+    const renderReactions = () => {
+      const msgReactions = reactions[msg.id];
+      if (!msgReactions) return null;
+      return (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+          {Object.entries(msgReactions).map(([emoji, users]) => {
+            const hasReacted = users.includes(myUserId);
+            const userList = users.map(u => shortSender(u)).join(', ');
+            return (
+              <div
+                key={emoji}
+                title={`Reacted by: ${userList}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleReaction(msg.id, emoji); // This will toggle on server
+                }}
+                style={{
+                  background: hasReacted ? 'rgba(26,115,232,0.2)' : 'rgba(255,255,255,0.1)',
+                  border: hasReacted ? '1px solid rgba(26,115,232,0.4)' : '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 12, padding: '1px 6px', fontSize: 10, display: 'flex', alignItems: 'center', gap: 3,
+                  cursor: 'pointer', transition: 'all 0.2s'
+                }}
+              >
+                <span>{emoji}</span>
+                <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.7 }}>{users.length}</span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    };
+
     if (isLocation) {
       const g = msg.geo_uri?.replace('geo:', '').split(',') || [12.9716, 80.2425]; // Default to Chennai coords if missing
       const lat = g[0];
@@ -674,7 +797,9 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
 
       inner = (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>
+        <div id={`msg-${msg.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>
+          {renderActions()}
+          {renderReplyTag()}
           <div style={{
             background: 'rgba(0,0,0,0.15)', borderRadius: 12, overflow: 'hidden',
             border: '1px solid rgba(255,255,255,0.05)',
@@ -685,7 +810,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                 <div style={{ fontSize: 10, fontWeight: 700, color: '#E6EDF3' }}>Shared Location</div>
                 <div style={{ fontSize: 8, opacity: 0.6 }}>{lat}, {lng}</div>
               </div>
-              <a 
+              <a
                 href={mapsUrl} target="_blank" rel="noopener noreferrer"
                 style={{
                   background: 'rgba(26,115,232,0.2)', border: '1px solid rgba(26,115,232,0.3)',
@@ -694,7 +819,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                 }}
               >OPEN</a>
             </div>
-            
+
             {/* Embedded Map Widget */}
             <div style={{ width: '100%', height: 120, background: '#161B22', position: 'relative' }}>
               <iframe
@@ -708,6 +833,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
               <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', boxShadow: 'inset 0 0 40px rgba(0,0,0,0.3)' }} />
             </div>
           </div>
+          {renderReactions()}
           <div style={metaRow}><span>{sender}</span><span>{time}</span></div>
         </div>
       );
@@ -717,7 +843,9 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       const full = buildMediaUrl(msg.url);
 
       inner = (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div id={`msg-${msg.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {renderActions()}
+          {renderReplyTag()}
           {/* File block (Element-style) */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -733,18 +861,6 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                 <div style={{ fontSize: 8, color: '#8B949E', marginTop: 1 }}>{fmtSize(msg.info.size)}</div>
               )}
             </div>
-            <button
-              onClick={() => handleDownload(msg.url, msg.body)}
-              style={{
-                background: 'rgba(26,115,232,0.2)', border: '1px solid rgba(26,115,232,0.3)',
-                borderRadius: 6, color: '#82B4FF', fontSize: 10, fontWeight: 800,
-                padding: '4px 8px', cursor: 'pointer', transition: 'all .15s'
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(26,115,232,0.34)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'rgba(26,115,232,0.2)'}
-            >
-              DOWNLOAD
-            </button>
           </div>
 
           {/* Image preview (if applicable) */}
@@ -789,20 +905,29 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             />
           )}
 
+          {renderReactions()}
           <div style={metaRow}><span>{sender}</span><span>{time}</span></div>
         </div>
       );
     } else {
       inner = (
-        <>
+        <div id={`msg-${msg.id}`}>
+          {renderActions()}
+          {renderReplyTag()}
           <div style={{ fontSize: 11, lineHeight: 1.6 }}>{msg.body}</div>
+          {renderReactions()}
           <div style={metaRow}><span>{sender}</span><span>{time}</span></div>
-        </>
+        </div>
       );
     }
 
     return (
-      <div key={msg.id} style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: 5, marginBottom: 8 }}>
+      <div
+        key={msg.id}
+        onMouseEnter={() => setHoveredMsgId(msg.id)}
+        onMouseLeave={() => setHoveredMsgId(null)}
+        style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', alignItems: 'flex-end', gap: 5, marginBottom: 12 }}
+      >
         <div style={{ width: 10, height: 10, borderRadius: '50%', background: mine ? '#1A73E8' : '#30363D', flexShrink: 0, marginBottom: 2 }} />
         <div style={bubble}>{inner}</div>
       </div>
@@ -833,8 +958,35 @@ export default function InteractionsTab({ ticketId, alertObj }) {
   // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div style={st.wrap}>
+      {dmLoading && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(13,17,23,0.6)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <LoadingOutlined style={{ fontSize: 24, color: '#1A73E8' }} spin />
+          <div style={{ fontSize: 11, color: '#82B4FF', fontWeight: 700 }}>Opening Direct Message...</div>
+        </div>
+      )}
+
       {/* Message list */}
       <div style={st.msgList}>
+        {pinnedEvents.length > 0 && (
+          <div style={{
+            position: 'sticky', top: 0, zIndex: 5, background: 'rgba(13,17,23,0.95)',
+            borderBottom: '1px solid #30363D', padding: '6px 12px', marginBottom: 12,
+            display: 'flex', alignItems: 'center', gap: 10, borderRadius: '0 0 12px 12px'
+          }}>
+            <PushpinFilled style={{ color: '#1A73E8', fontSize: 14 }} />
+            <div style={{ flex: 1, fontSize: 10, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {pinnedEvents.length} Pinned {pinnedEvents.length === 1 ? 'Message' : 'Messages'}
+            </div>
+            <button
+              onClick={() => {
+                const firstPinId = pinnedEvents[0];
+                const el = document.getElementById(`msg-${firstPinId}`);
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }}
+              style={{ background: 'none', border: 'none', color: '#82B4FF', fontSize: 9, fontWeight: 700, cursor: 'pointer' }}
+            >VIEW</button>
+          </div>
+        )}
         {messages.length === 0 ? (
           <div style={{ textAlign: 'center', color: '#8B949E', fontSize: 10, paddingTop: 24 }}>
             <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.4 }}><MessageOutlined /></div>
@@ -862,6 +1014,23 @@ export default function InteractionsTab({ ticketId, alertObj }) {
         </div>
       )}
 
+      {/* Reply Preview */}
+      {replyTo && (
+        <div style={{
+          padding: '8px 12px', background: 'rgba(26,115,232,0.1)', borderLeft: '4px solid #1A73E8',
+          marginBottom: 8, borderRadius: '4px 8px 8px 4px', display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', animation: 'fadeIn 0.2s ease'
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#82B4FF', marginBottom: 2 }}>Replying to {shortSender(replyTo.sender)}</div>
+            <div style={{ fontSize: 10, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{replyTo.body}</div>
+          </div>
+          <button onClick={() => setReplyTo(null)} style={{ background: 'none', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 4 }}>
+            <CloseCircleOutlined style={{ fontSize: 14 }} />
+          </button>
+        </div>
+      )}
+
       {/* Input bar */}
       <div style={{ padding: '8px 0', borderTop: '1px solid #30363D', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFile} />
@@ -874,7 +1043,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             onChange={e => {
               const val = e.target.value;
               setInputText(val);
-              
+
               const cursor = e.target.selectionStart;
               const textBefore = val.substring(0, cursor);
               const mentionIdx = textBefore.lastIndexOf('@');
@@ -917,8 +1086,8 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           {/* Bottom Tool Row inside textarea container */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 8px 6px 8px' }}>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={isRecording ? stopRecording : startRecording}
                 style={{ background: 'transparent', border: 'none', color: isRecording ? '#E53935' : '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
               >
@@ -928,20 +1097,20 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             </div>
 
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowMoreMenu(false); }}
                 style={{ background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
               ><SmileOutlined style={{ fontSize: 18 }} /></button>
-              
-              <button 
-                type="button" 
+
+              <button
+                type="button"
                 onClick={() => fileInputRef.current?.click()}
                 style={{ background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
               ><PaperClipOutlined style={{ fontSize: 18 }} /></button>
 
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={() => { setShowMoreMenu(!showMoreMenu); setShowEmojiPicker(false); }}
                 style={{ background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', padding: 0, display: 'flex' }}
               ><MoreOutlined style={{ fontSize: 18 }} /></button>
@@ -970,7 +1139,12 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                     {m.displayName.substring(0, 2).toUpperCase()}
                   </div>
                   <div>
-                    <div style={{ fontWeight: 700 }}>{m.displayName}</div>
+                    <div style={{
+                      fontWeight: 700,
+                      color: m.userId === myUserId ? '#34A853' : 'inherit'
+                    }}>
+                      {m.displayName} {m.userId === myUserId && '(You)'}
+                    </div>
                     <div style={{ fontSize: 9, opacity: 0.6 }}>{m.userId}</div>
                   </div>
                 </div>
@@ -981,30 +1155,33 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           {/* Emoji Picker */}
           {showEmojiPicker && (
             <div style={{
-              position: 'absolute', bottom: '100%', right: 0, 
-              background: '#161B22', border: '1px solid #30363D', borderRadius: 12,
-              padding: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginBottom: 8,
-              zIndex: 110, width: 240, display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8
+              position: 'absolute', bottom: '100%', right: 0,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginBottom: 8,
+              zIndex: 110
             }}>
-              {['😀','😃','😄','😁','😆','😅','😂','🤣','☺️','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬'].map(emoji => (
-                <div 
-                  key={emoji} 
-                  onClick={() => { setInputText(prev => prev + emoji); setShowEmojiPicker(false); }}
-                  style={{ fontSize: 18, cursor: 'pointer', textAlign: 'center', padding: 4 }}
-                >{emoji}</div>
-              ))}
+              <EmojiPicker
+                theme="dark"
+                onEmojiClick={(emojiData) => {
+                  setInputText(prev => prev + emojiData.emoji);
+                  setShowEmojiPicker(false);
+                }}
+                width={300}
+                height={400}
+                lazyLoadEmojis={true}
+                searchPlaceHolder="Search emojis..."
+              />
             </div>
           )}
 
           {/* More Menu */}
           {showMoreMenu && (
             <div style={{
-              position: 'absolute', bottom: '100%', right: 0, 
+              position: 'absolute', bottom: '100%', right: 0,
               background: '#161B22', border: '1px solid #30363D', borderRadius: 12,
               overflow: 'hidden', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', marginBottom: 8,
               zIndex: 110, width: 180
             }}>
-              <div 
+              <div
                 onClick={() => { setShowLocModal(true); setShowMoreMenu(false); }}
                 style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 11, color: '#E6EDF3', display: 'flex', alignItems: 'center', gap: 10 }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
@@ -1012,7 +1189,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
               >
                 <EnvironmentOutlined style={{ color: '#00897b', fontSize: 14 }} /> Location Sharing
               </div>
-              <div 
+              <div
                 style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 11, color: '#E6EDF3', display: 'flex', alignItems: 'center', gap: 10, opacity: 0.5 }}
               >
                 <PushpinOutlined style={{ fontSize: 14 }} /> Other Options
@@ -1025,11 +1202,11 @@ export default function InteractionsTab({ ticketId, alertObj }) {
           type="button"
           onClick={handleSend}
           disabled={!inputText.trim() || !roomId}
-          style={{ 
-            width: 32, height: 32, borderRadius: 16, 
-            background: inputText.trim() ? '#1A73E8' : '#30363D', border: 'none', 
-            color: inputText.trim() ? '#fff' : '#8B949E', cursor: inputText.trim() ? 'pointer' : 'not-allowed', 
-            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 6 
+          style={{
+            width: 32, height: 32, borderRadius: 16,
+            background: inputText.trim() ? '#1A73E8' : '#30363D', border: 'none',
+            color: inputText.trim() ? '#fff' : '#8B949E', cursor: inputText.trim() ? 'pointer' : 'not-allowed',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 6
           }}
         ><SendOutlined style={{ fontSize: 14 }} /></button>
       </div>
@@ -1037,18 +1214,18 @@ export default function InteractionsTab({ ticketId, alertObj }) {
       {/* Location Modal */}
       {showLocModal && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', 
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
           zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center'
         }}>
           <div style={{
             background: '#fff', width: 320, borderRadius: 16, padding: '24px 20px',
             position: 'relative', color: '#111', fontFamily: 'Sora, sans-serif', textAlign: 'center'
           }}>
-            <button 
+            <button
               onClick={() => { setShowLocModal(false); setShowLiveDurations(false); }}
               style={{ position: 'absolute', top: 12, right: 12, background: '#eee', border: 'none', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', color: '#666' }}
             >×</button>
-            
+
             <div style={{ width: 64, height: 64, borderRadius: 32, background: '#00796b', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', color: '#fff' }}>
               <EnvironmentOutlined style={{ fontSize: 32 }} />
             </div>
@@ -1056,7 +1233,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             <h3 style={{ margin: '0 0 24px', fontSize: 18, fontWeight: 700 }}>What location type do you want to share?</h3>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <button 
+              <button
                 onClick={() => { handleSendLocation(null); setShowLocModal(false); }}
                 style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}
               >
@@ -1065,7 +1242,7 @@ export default function InteractionsTab({ ticketId, alertObj }) {
               </button>
 
               <div style={{ position: 'relative' }}>
-                <button 
+                <button
                   onClick={() => setShowLiveDurations(!showLiveDurations)}
                   style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}
                 >
@@ -1074,15 +1251,15 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                   </div>
                   <span style={{ fontWeight: 600, color: '#333' }}>My live location</span>
                 </button>
-                
+
                 {showLiveDurations && (
                   <div style={{
                     marginTop: 8, display: 'flex', justifyContent: 'center', gap: 8,
                     padding: '8px', background: '#f5f5f5', borderRadius: 8
                   }}>
                     {['15m', '1h', '8h'].map(d => (
-                      <button 
-                        key={d} 
+                      <button
+                        key={d}
                         onClick={() => {
                           handleSendLocation(`Mock: Share Live Location for ${d}`);
                           setShowLocModal(false);
@@ -1095,10 +1272,10 @@ export default function InteractionsTab({ ticketId, alertObj }) {
                 )}
               </div>
 
-              <button 
+              <button
                 onClick={() => {
-                   handleSendLocation("Dropped Pin");
-                   setShowLocModal(false);
+                  handleSendLocation("Dropped Pin");
+                  setShowLocModal(false);
                 }}
                 style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}
               >
@@ -1132,6 +1309,80 @@ export default function InteractionsTab({ ticketId, alertObj }) {
             }}
             style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,.7)', minWidth: 200, minHeight: 100 }}
           />
+        </div>
+      )}
+
+      {/* Reaction Picker Overlay */}
+      {reactionTarget && (
+        <div
+          onClick={() => setReactionTarget(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 10000 }}
+        >
+          <div style={{
+            position: 'absolute', top: reactionTarget.rect.top - 40, left: reactionTarget.rect.left,
+            background: '#161B22', border: '1px solid #30363D', borderRadius: 20,
+            padding: '4px 8px', display: 'flex', gap: 6, boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            animation: 'dropdownSlide 0.2s ease'
+          }}>
+            {['👍', '❤️', '😂', '😮', '😢', '🔥'].map(emoji => (
+              <button
+                key={emoji}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleReaction(reactionTarget.eventId, emoji);
+                  setReactionTarget(null);
+                }}
+                style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', padding: '2px 4px' }}
+              >{emoji}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Forward Modal */}
+      {showForwardModal && forwardMsg && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div
+            onClick={() => setShowForwardModal(false)}
+            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)' }}
+          />
+          <div style={{
+            position: 'relative', width: 340, background: '#161B22', border: '1px solid #30363D',
+            borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.8)', animation: 'modalPop .2s ease'
+          }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #30363D', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#E6EDF3' }}>Forward Message</div>
+              <button onClick={() => setShowForwardModal(false)} style={{ background: 'none', border: 'none', color: '#8B949E', cursor: 'pointer', fontSize: 18 }}>✕</button>
+            </div>
+
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 11, color: '#8B949E' }}>Forwarding: <span style={{ color: '#E6EDF3' }}>{forwardMsg.body}</span></div>
+              <div style={{ height: 1, background: '#30363D' }} />
+              <div style={{ fontSize: 11, color: '#1A73E8', fontWeight: 700 }}>Select a room to forward:</div>
+              <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {joinedRooms.length > 0 ? joinedRooms.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={async () => {
+                      try {
+                        await forwardMessage(accessToken, r.id, forwardMsg);
+                        setShowForwardModal(false);
+                        alert(`Forwarded to ${r.name}`);
+                      } catch (e) { alert('Forward failed'); }
+                    }}
+                    style={{
+                      padding: '10px 12px', background: 'rgba(26,115,232,0.1)', border: '1px solid #1A73E8',
+                      borderRadius: 8, color: '#82B4FF', fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                      textAlign: 'left'
+                    }}
+                  >{r.name}</button>
+                )) : (
+                  <div style={{ fontSize: 10, color: '#8B949E', textAlign: 'center', padding: 10 }}>Loading rooms...</div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -1186,6 +1437,11 @@ const st = {
     background: '#1A73E8', border: 'none', borderRadius: 7,
     color: '#fff', fontSize: 12, fontWeight: 700,
     padding: '4px 10px', cursor: 'pointer', flexShrink: 0, transition: 'opacity .15s',
+  },
+  actionBtn: {
+    background: 'none', border: 'none', color: '#8B949E', cursor: 'pointer',
+    padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 14, transition: 'all 0.1s ease', borderRadius: 4,
   },
   stateWrap: {
     display: 'flex', flexDirection: 'column', alignItems: 'center',

@@ -1,64 +1,64 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  MedicineBoxOutlined, 
-  FireOutlined, 
-  SafetyOutlined, 
-  AlertOutlined, 
-  WarningOutlined, 
-  ClockCircleOutlined, 
-  CheckCircleOutlined, 
-  NodeIndexOutlined, 
-  CloseCircleOutlined, 
-  SendOutlined, 
-  EnvironmentOutlined, 
-  AimOutlined, 
-  ApartmentOutlined 
+import {
+  MedicineBoxOutlined,
+  FireOutlined,
+  SafetyOutlined,
+  AlertOutlined,
+  WarningOutlined,
+  ClockCircleOutlined,
+  CheckCircleOutlined,
+  NodeIndexOutlined,
+  CloseCircleOutlined,
+  SendOutlined,
+  EnvironmentOutlined,
+  AimOutlined,
+  ApartmentOutlined
 } from '@ant-design/icons';
 import { API_BASE_URL } from '../config/apiConfig';
 
 const UCFG = {
-  ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Ambulance',  barColor: '#E53935' },
-  fire:      { icon: <FireOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Fire Engine', barColor: '#FF6D00' },
-  police:    { icon: <SafetyOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Police Unit', barColor: '#1565C0' },
-  rescue:    { icon: <AlertOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Rescue',      barColor: '#9C27B0' },
-  hazmat:    { icon: <WarningOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,  label: 'Hazmat',      barColor: '#F57F17' },
+  ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Ambulance', barColor: '#E53935' },
+  fire: { icon: <FireOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Fire Engine', barColor: '#FF6D00' },
+  police: { icon: <SafetyOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Police Unit', barColor: '#1565C0' },
+  rescue: { icon: <AlertOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Rescue', barColor: '#9C27B0' },
+  hazmat: { icon: <WarningOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Hazmat', barColor: '#F57F17' },
 };
 
 const FILTERS = [
-  { key: 'all',       label: 'All'          },
+  { key: 'all', label: 'All' },
   { key: 'ambulance', label: <><MedicineBoxOutlined style={{ marginRight: 4 }} /> Ambulance</> },
-  { key: 'fire',      label: <><FireOutlined style={{ marginRight: 4 }} /> Fire</>      },
-  { key: 'police',    label: <><SafetyOutlined style={{ marginRight: 4 }} /> Police</>    },
-  { key: 'rescue',    label: <><AlertOutlined style={{ marginRight: 4 }} /> Rescue</>    },
-  { key: 'hazmat',    label: <><WarningOutlined style={{ marginRight: 4 }} /> Hazmat</>    },
+  { key: 'fire', label: <><FireOutlined style={{ marginRight: 4 }} /> Fire</> },
+  { key: 'police', label: <><SafetyOutlined style={{ marginRight: 4 }} /> Police</> },
+  { key: 'rescue', label: <><AlertOutlined style={{ marginRight: 4 }} /> Rescue</> },
+  { key: 'hazmat', label: <><WarningOutlined style={{ marginRight: 4 }} /> Hazmat</> },
 ];
 
-const SEV_COLORS  = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
-const STATUS_CFG  = {
-  pending:    { label: 'Pending',    icon: <ClockCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#F9A825', bg: 'rgba(249,168,37,.12)'  },
-  accepted:   { label: 'Accepted',   icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
+const SEV_COLORS = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
+const STATUS_CFG = {
+  pending: { label: 'Pending', icon: <ClockCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#F9A825', bg: 'rgba(249,168,37,.12)' },
+  accepted: { label: 'Accepted', icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
   dispatched: { label: 'Dispatched', icon: <NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
-  completed:  { label: 'Completed',  icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)'   },
-  rejected:   { label: 'Rejected',   icon: <CloseCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#E53935', bg: 'rgba(229,57,53,.12)'   },
+  completed: { label: 'Completed', icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
+  rejected: { label: 'Rejected', icon: <CloseCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#E53935', bg: 'rgba(229,57,53,.12)' },
   en_route: {
-  label: 'En Route',
-  icon: <MedicineBoxOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
-  color: '#1A73E8',
-  bg: 'rgba(26,115,232,.12)'
-},
-on_action: {
-  label: 'On Action',
-  icon: <SendOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
-  color: '#FF6D00',
-  bg: 'rgba(255,109,0,.12)'
-},
-arrived: {
-  label: 'Arrived',
-  icon: <EnvironmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
-  color: '#34A853',
-  bg: 'rgba(52,168,83,.12)'
-},
+    label: 'En Route',
+    icon: <MedicineBoxOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
+    color: '#1A73E8',
+    bg: 'rgba(26,115,232,.12)'
+  },
+  on_action: {
+    label: 'On Action',
+    icon: <SendOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
+    color: '#FF6D00',
+    bg: 'rgba(255,109,0,.12)'
+  },
+  arrived: {
+    label: 'Arrived',
+    icon: <EnvironmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />,
+    color: '#34A853',
+    bg: 'rgba(52,168,83,.12)'
+  },
 };
 
 export default function AlertsPage() {
@@ -75,8 +75,8 @@ export default function AlertsPage() {
       const normalised = raw.map(a => ({
         ...a,
         vehicleType: a.vehicleType || 'ambulance',
-        status:      a.status      || 'pending',
-        severity:    a.severity    || 'medium',
+        status: a.status || 'pending',
+        severity: a.severity || 'medium',
       }));
       setAlerts(normalised);
       alertsRef.current = normalised; // keep ref in sync for the polling interval
@@ -109,15 +109,31 @@ export default function AlertsPage() {
   }, []); // run once — reads from alertsRef, not alerts state
 
 
+  // Grouping logic: multiple alerts for the same ticket should show as one card
+  const groupedAlerts = React.useMemo(() => {
+    const groups = {};
+    alerts.forEach(a => {
+      const key = a.agentTicketId || a.id;
+      if (!groups[key]) {
+        groups[key] = { ...a, assignedUnits: a.assignedUnit ? [a.assignedUnit] : [] };
+      } else {
+        if (a.assignedUnit && !groups[key].assignedUnits.includes(a.assignedUnit)) {
+          groups[key].assignedUnits.push(a.assignedUnit);
+        }
+      }
+    });
+    return Object.values(groups);
+  }, [alerts]);
+
   const visibleAlerts = filter === 'all'
-    ? alerts
-    : alerts.filter(a => a.vehicleType === filter);
+    ? groupedAlerts
+    : groupedAlerts.filter(a => a.vehicleType === filter);
 
   const counts = {};
   FILTERS.forEach(f => {
     counts[f.key] = f.key === 'all'
-      ? alerts.length
-      : alerts.filter(a => a.vehicleType === f.key).length;
+      ? groupedAlerts.length
+      : groupedAlerts.filter(a => a.vehicleType === f.key).length;
   });
 
   return (
@@ -172,8 +188,8 @@ export default function AlertsPage() {
       ) : (
         <div style={s.grid}>
           {visibleAlerts.map(a => {
-            const cfg   = UCFG[a.vehicleType] || UCFG.ambulance;
-            const t     = new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const cfg = UCFG[a.vehicleType] || UCFG.ambulance;
+            const t = new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const isMonitoringPage = true; // this file is monitoring only
 
             const statusToUse = isMonitoringPage
@@ -209,10 +225,11 @@ export default function AlertsPage() {
                   {/* Address */}
                   <div style={s.ticketAddr}><EnvironmentOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} /> {a.address || '—'}</div>
 
-                  {/* Assigned unit chip */}
-                  {a.assignedUnit && (
-                    <div style={{ fontSize: 10, color: '#82B4FF', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <MedicineBoxOutlined style={{ fontSize: '12px' }} /> Assigned: {a.assignedUnit}
+                  {/* Assigned unit(s) chip */}
+                  {a.assignedUnits && a.assignedUnits.length > 0 && (
+                    <div style={{ fontSize: 10, color: '#82B4FF', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                      <MedicineBoxOutlined style={{ fontSize: '12px' }} />
+                      <span style={{ fontWeight: 700 }}>Assigned:</span> {a.assignedUnits.join(', ')}
                     </div>
                   )}
 
@@ -264,33 +281,33 @@ export default function AlertsPage() {
 }
 
 const s = {
-  page:        { padding: '20px 28px', maxWidth: 1200, margin: '0 auto' },
-  pageHeader:  { marginBottom: 18 },
-  title:       { fontSize: 19, fontWeight: 800 },
-  filterRow:   { display: 'flex', gap: 7, marginBottom: 16, flexWrap: 'wrap' },
+  page: { padding: '20px 28px', maxWidth: 1200, margin: '0 auto' },
+  pageHeader: { marginBottom: 18 },
+  title: { fontSize: 19, fontWeight: 800 },
+  filterRow: { display: 'flex', gap: 7, marginBottom: 16, flexWrap: 'wrap' },
   fltBtn: {
     display: 'inline-flex', alignItems: 'center',
     padding: '5px 13px', borderRadius: 16, fontSize: 11, fontWeight: 600,
     border: '1px solid #30363D', background: '#0D1117', color: '#8B949E',
     cursor: 'pointer', fontFamily: 'Sora, sans-serif', transition: 'all .15s',
   },
-  fltActive:   { borderColor: '#8B949E', color: '#E6EDF3', background: 'rgba(139,148,158,.08)' },
-  grid:        { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: 12 },
-  empty:       { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', color: '#8B949E', textAlign: 'center', gap: 10 },
-  emptyIcon:   { fontSize: 48, opacity: .22 },
-  emptyMsg:    { fontSize: 14, fontWeight: 700 },
-  emptySub:    { fontSize: 11, opacity: .6 },
+  fltActive: { borderColor: '#8B949E', color: '#E6EDF3', background: 'rgba(139,148,158,.08)' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(320px,1fr))', gap: 12 },
+  empty: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', color: '#8B949E', textAlign: 'center', gap: 10 },
+  emptyIcon: { fontSize: 48, opacity: .22 },
+  emptyMsg: { fontSize: 14, fontWeight: 700 },
+  emptySub: { fontSize: 11, opacity: .6 },
   ticket: {
     background: '#161B22', border: '1px solid #30363D', borderRadius: 13,
     padding: '14px 16px', cursor: 'pointer', transition: 'border-color .2s, box-shadow .2s',
     position: 'relative', overflow: 'hidden',
   },
-  ticketBar:   { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderRadius: '13px 0 0 13px' },
+  ticketBar: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderRadius: '13px 0 0 13px' },
   ticketInner: { paddingLeft: 6 },
-  ticketTop:   { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
-  ticketName:  { fontSize: 15, fontWeight: 800, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  ticketAddr:  { fontSize: 11, color: '#8B949E', marginBottom: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  ticketFooter:{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, flexWrap: 'wrap', gap: 6 },
+  ticketTop: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
+  ticketName: { fontSize: 15, fontWeight: 800, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  ticketAddr: { fontSize: 11, color: '#8B949E', marginBottom: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  ticketFooter: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, flexWrap: 'wrap', gap: 6 },
   openBtn: {
     fontSize: 10, fontWeight: 700, color: '#1A73E8',
     background: 'rgba(26,115,232,.1)', border: '1px solid rgba(26,115,232,.2)',

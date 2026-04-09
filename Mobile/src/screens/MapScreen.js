@@ -23,10 +23,10 @@ const { width } = Dimensions.get('window');
 const MODE = { OVERVIEW: 'overview', NAVIGATE: 'navigate' };
 
 const TRAVEL_MODES = [
-  { key: 'driving', label: 'Drive', icon: 'car', lib: 'Feather' },
-  { key: 'walking', label: 'Walk', icon: 'user', lib: 'Feather' },
-  { key: 'bicycling', label: 'Cycle', icon: 'git-commit', lib: 'Feather' },
-  { key: 'transit', label: 'Transit', icon: 'navigation', lib: 'Feather' },
+  { key: 'driving', label: 'Drive', icon: 'car' },
+  { key: 'walking', label: 'Walk', icon: 'walk' },
+  { key: 'bicycling', label: 'Cycle', icon: 'bicycle' },
+  { key: 'transit', label: 'Transit', icon: 'bus' },
 ];
 
 const STATUS_PILL = {
@@ -677,7 +677,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
           {TRAVEL_MODES.map(tm => (
             <TouchableOpacity key={tm.key} onPress={() => setTMode(tm.key)}
               style={[s.modeBtn, tMode === tm.key && s.modeBtnOn]}>
-              <Feather name={tm.icon} size={17} color={tMode === tm.key ? '#fff' : '#666'} />
+              <Ionicons name={tm.icon} size={18} color={tMode === tm.key ? '#fff' : '#666'} />
               <Text style={[s.modeBtnLbl, tMode === tm.key && s.modeBtnLblOn]}>{tm.label}</Text>
             </TouchableOpacity>
           ))}

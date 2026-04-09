@@ -61,15 +61,15 @@ function previewText(event) {
   return '';
 }
 
-function roomDisplayName(roomId, dmNames = {}) {
+function roomDisplayName(roomId, roomNames = {}, dmNames = {}) {
+  if (roomNames[roomId]) return roomNames[roomId];
   if (dmNames[roomId]) return dmNames[roomId];
-  if (roomId === DISPATCH_ROOM_ID) return 'Dispatch Control';
-  return `${roomId}`;
+  return 'Loading...';
 }
 
-function roomInitials(roomId, dmNames = {}) {
-  const name = dmNames[roomId] || roomId;
-  if (roomId === DISPATCH_ROOM_ID) return 'DC';
+function roomInitials(roomId, roomNames = {}, dmNames = {}) {
+  const name = roomNames[roomId] || dmNames[roomId];
+  if (!name) return 'DM';
   const clean = name.replace(/[^a-zA-Z ]/g, '').trim();
   if (clean.length === 0) return 'DM';
   const parts = clean.split(' ');
@@ -78,8 +78,8 @@ function roomInitials(roomId, dmNames = {}) {
 }
 
 function avatarColor(roomId) {
-  if (roomId === DISPATCH_ROOM_ID) return { bg: '#DBEAFE', text: '#1E40AF' };
   const colours = [
+    { bg: '#DBEAFE', text: '#1E40AF' },
     { bg: '#FEF3C7', text: '#92400E' },
     { bg: '#D1FAE5', text: '#065F46' },
     { bg: '#EDE9FE', text: '#7C3AED' },
@@ -300,6 +300,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const [openRoomId, setOpenRoomId] = useState(null);
   const [openLabel, setOpenLabel] = useState('');
   const [membersVisible, setMembersVisible] = useState(false);
+  const [roomNames, setRoomNames] = useState({});
   const [dmNames, setDmNames] = useState({});
 
   const syncActive = useRef(true);
@@ -328,10 +329,23 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
       setLoading(true);
       const joined = await getJoinedRooms(session.accessToken);
       const allIds = Array.from(new Set([
-        DISPATCH_ROOM_ID,
         ...(extraRoomId ? [extraRoomId] : []),
         ...joined,
       ]));
+
+      // Fetch names for unknown rooms
+      const { getRoomName } = await import('../services/matrixService');
+      const names = { ...roomNames };
+      for (const rid of allIds) {
+        if (!names[rid] && rid !== DISPATCH_ROOM_ID) {
+          try {
+            const n = await getRoomName(session.accessToken, rid, session.userId);
+            if (n) names[rid] = n;
+          } catch {}
+        }
+      }
+      setRoomNames(names);
+
       const roomData = await Promise.all(
         allIds.map(async (roomId) => {
           try {
@@ -373,37 +387,78 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
 
           // Auto-join any invited rooms
           const invitedRooms = data.rooms?.invite || {};
+          let newRoomsFound = false;
           for (const invitedRoomId in invitedRooms) {
             try {
-              const { joinRoom } = await import('../services/matrixService');
+              const { joinRoom, saveDirectMessage } = await import('../services/matrixService');
               await joinRoom(session.accessToken, invitedRoomId);
-            } catch { }
+              newRoomsFound = true;
+              
+              // NEW: If this is a DM invite, ensure it's recorded in m.direct
+              const inviteState = invitedRooms[invitedRoomId].invite_state?.events || [];
+              const createEvent = inviteState.find(e => e.type === 'm.room.create');
+              const isDirect = createEvent?.content?.is_direct === true;
+              
+              if (isDirect) {
+                const memberEvent = inviteState.find(e => e.type === 'm.room.member' && e.state_key !== session.userId);
+                if (memberEvent?.state_key) {
+                  await saveDirectMessage(session.accessToken, session.userId, memberEvent.state_key, invitedRoomId);
+                }
+              }
+            } catch (err) {
+              console.warn('[RoomList] Auto-join failed for:', invitedRoomId, err.message);
+            }
           }
 
-          if (Object.keys(updatedRooms).length > 0) {
+          // If we joined new rooms or have updates in existing ones
+          if (newRoomsFound || Object.keys(updatedRooms).length > 0) {
+            // Resolve names for new rooms
+            const newIds = [
+              ...Object.keys(invitedRooms),
+              ...Object.keys(updatedRooms)
+            ].filter(rid => !roomNames[rid] && rid !== DISPATCH_ROOM_ID);
+
+            if (newIds.length > 0) {
+              const { getRoomName } = await import('../services/matrixService');
+              const nextNames = { ...roomNames };
+              let changed = false;
+              for (const rid of newIds) {
+                try {
+                  const n = await getRoomName(session.accessToken, rid, session.userId);
+                  if (n) { nextNames[rid] = n; changed = true; }
+                } catch { }
+              }
+              if (changed) setRoomNames(nextNames);
+            }
+
             setRooms(prev => {
               const map = {};
               prev.forEach(r => { map[r.roomId] = { ...r }; });
 
+              // 1. Add newly joined rooms from the invite block
+              for (const rid in invitedRooms) {
+                if (!map[rid]) {
+                  map[rid] = { roomId: rid, lastEvent: null, unread: 0 };
+                }
+              }
+
+              // 2. Process updates from join block
               Object.entries(updatedRooms).forEach(([rId, rData]) => {
+                // Ensure the room exists in our map even if no new messages
+                if (!map[rId]) {
+                  map[rId] = { roomId: rId, lastEvent: null, unread: 0 };
+                }
+
                 const events = (rData.timeline?.events || []).filter(e => e.type === 'm.room.message');
                 if (events.length > 0) {
                   const last = events[events.length - 1];
-                  // Count messages NOT from me and NOT in the currently open room
                   const incomingUnread = events.filter(
                     e => e.sender !== session.userId && rId !== openRoomIdRef.current
                   ).length;
 
-                  if (map[rId]) {
-                    // Room already in list — update it
-                    map[rId].lastEvent = last;
-                    if (incomingUnread > 0) {
-                      map[rId].unread = (map[rId].unread || 0) + incomingUnread;
-                    }
-                  } else {
-                    // FIX 1: New room (e.g. someone messaged in a DM we just created)
-                    // — add it to the list immediately
-                    map[rId] = { roomId: rId, lastEvent: last, unread: incomingUnread };
+                  map[rId].lastEvent = last;
+                  if (incomingUnread > 0) {
+                    map[rId].unread = (map[rId].unread || 0) + incomingUnread;
                   }
                 }
               });
@@ -427,7 +482,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const openRoom = (room, label) => {
     // Clear unread when opening room
     setRooms(prev => prev.map(r => r.roomId === room.roomId ? { ...r, unread: 0 } : r));
-    const displayLabel = label || roomDisplayName(room.roomId, dmNames);
+    const displayLabel = label || roomDisplayName(room.roomId, roomNames, dmNames);
     setOpenLabel(displayLabel);
     setOpenRoomId(room.roomId);
     setMembersVisible(false);
@@ -483,7 +538,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
           </TouchableOpacity>
           <View style={[styles.chatHeaderAvatar, { backgroundColor: colors.bg }]}>
             <Text style={[styles.chatHeaderAvatarTxt, { color: colors.text }]}>
-              {roomInitials(openRoomId, dmNames)}
+              {roomInitials(openRoomId, roomNames, dmNames)}
             </Text>
           </View>
           <View style={styles.chatHeaderInfo}>
@@ -491,9 +546,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
             <Text style={styles.chatHeaderSub}>
               {isDM
                 ? '🔒 Private conversation'
-                : openRoomId === DISPATCH_ROOM_ID
-                  ? 'Emergency Control Channel'
-                  : 'Alert Communication'}
+                : 'Alert Communication'}
             </Text>
           </View>
           <TouchableOpacity
@@ -522,18 +575,17 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
 
   // ── Room list ────────────────────────────────────────────────────────────
   const filtered = rooms.filter(r =>
-    roomDisplayName(r.roomId, dmNames).toLowerCase().includes(search.toLowerCase())
+    roomDisplayName(r.roomId, roomNames, dmNames).toLowerCase().includes(search.toLowerCase())
   );
 
   const renderRoom = ({ item }) => {
-    const name = roomDisplayName(item.roomId, dmNames);
+    const name = roomDisplayName(item.roomId, roomNames, dmNames);
     const preview = previewText(item.lastEvent);
     const time = formatTime(item.lastEvent?.origin_server_ts);
     const isMe = item.lastEvent?.sender === session.userId;
     const hasUnread = (item.unread || 0) > 0;
     const unreadCount = item.unread || 0;
     const colors = avatarColor(item.roomId);
-    const isDispatch = item.roomId === DISPATCH_ROOM_ID;
     const isDMRoom = !!dmNames[item.roomId];
 
     const getMsgTypeIcon = () => {
@@ -548,8 +600,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     return (
       <TouchableOpacity style={styles.roomRow} onPress={() => openRoom(item)} activeOpacity={0.75}>
         <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
-          <Text style={[styles.avatarTxt, { color: colors.text }]}>{roomInitials(item.roomId, dmNames)}</Text>
-          {isDispatch && <View style={styles.onlineDot} />}
+          <Text style={[styles.avatarTxt, { color: colors.text }]}>{roomInitials(item.roomId, roomNames, dmNames)}</Text>
           {isDMRoom && <View style={[styles.onlineDot, { backgroundColor: '#A78BFA' }]} />}
         </View>
 

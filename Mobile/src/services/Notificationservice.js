@@ -8,7 +8,7 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-const SERVER_URL = 'http://192.168.2.33:5000';
+import { SERVER_URL } from '../config';
 
 // Show banner even when app is open/foreground
 Notifications.setNotificationHandler({

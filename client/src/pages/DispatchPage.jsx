@@ -7,39 +7,39 @@ import { sendAlert, assignUnit } from '../api/api';
 import { useAuth } from "../context/AuthContext";
 import { createRoom, inviteUser } from "../services/MatrixService";
 import { matrixUserId } from "../config/apiConfig";
-import { 
+import {
   AimOutlined,
-  AlertOutlined, 
-  ApartmentOutlined, 
-  ArrowLeftOutlined, 
+  AlertOutlined,
+  ApartmentOutlined,
+  ArrowLeftOutlined,
   BarChartOutlined,
-  CheckCircleFilled, 
-  CheckCircleOutlined, 
-  ClockCircleFilled, 
-  ClockCircleOutlined, 
-  CloseCircleOutlined, 
-  CloseOutlined, 
-  CompassOutlined, 
-  DownOutlined, 
-  EditOutlined, 
-  EnvironmentOutlined, 
-  ExclamationCircleFilled, 
-  FileTextOutlined, 
-  FireOutlined, 
+  CheckCircleFilled,
+  CheckCircleOutlined,
+  ClockCircleFilled,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  CloseOutlined,
+  CompassOutlined,
+  DownOutlined,
+  EditOutlined,
+  EnvironmentOutlined,
+  ExclamationCircleFilled,
+  FileTextOutlined,
+  FireOutlined,
   LoadingOutlined,
-  LockOutlined, 
-  MedicineBoxOutlined, 
-  NodeIndexOutlined, 
+  LockOutlined,
+  MedicineBoxOutlined,
+  NodeIndexOutlined,
   PhoneOutlined,
-  PlusOutlined, 
+  PlusOutlined,
   PushpinOutlined,
-  ReloadOutlined, 
-  SafetyOutlined, 
-  SearchOutlined, 
-  SendOutlined, 
-  SettingOutlined, 
-  UpOutlined, 
-  WarningOutlined, 
+  ReloadOutlined,
+  SafetyOutlined,
+  SearchOutlined,
+  SendOutlined,
+  SettingOutlined,
+  UpOutlined,
+  WarningOutlined,
   WifiOutlined
 } from '@ant-design/icons';
 /* ── Unit config ── */
@@ -295,7 +295,7 @@ function TicketListScreen({ onSelectTicket }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 18, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span><span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.6px', textTransform: 'uppercase', color: cfg.barColor }}>{cfg.label}</span></div>
                     <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: '#8B949E' }}>{t}</span>
                   </div>
-                  <div style={s.ticketTime}>{new Date(ticket.timestamp).toLocaleTimeString()}</div>
+                  <div style={s.ticketName}>{ticket.name}</div>
                   <div style={s.ticketAddr}><EnvironmentOutlined style={{ marginRight: 4, fontSize: '12px', verticalAlign: 'middle' }} /> {ticket.address}</div>
                   <div style={s.detailsRow}>
                     {ticket.phone && <span style={{ ...s.detailChip, display: 'flex', alignItems: 'center', gap: 4 }}><PhoneOutlined style={{ fontSize: '10px' }} /> {ticket.phone}</span>}
@@ -519,12 +519,121 @@ export default function DispatchPage() {
   };
   const { dispatcher } = useAuth();
 
- /*  const handleDispatch = async () => {
+  /*  const handleDispatch = async () => {
+     setDispatching(true);
+     addLog(`🚨 Dispatching ${selectedUnitIds.length > 0 ? selectedUnitIds.length + ' unit(s)' : 'broadcast'}…`, 'warn');
+     const ids = [];
+     try {
+       const vehicleType = agentTicket?.vehicleType || 'ambulance';
+       const base = {
+         patientName: answers.f1 || 'Unknown',
+         patientPhone: answers.f2 || '',
+         address: answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
+         notes: answers.f7 || '',
+         destination: { latitude: pickedLat, longitude: pickedLng },
+         vehicleType, severity, answers,
+       };
+ 
+       // ── Matrix room creation (non-blocking — won't stop dispatch if Matrix is offline) ──
+       let roomId = null;
+       if (dispatcher?.accessToken && agentTicket?.id) {
+         try {
+           const room = await createRoom(dispatcher.accessToken, `Ticket-${agentTicket.id}`);
+           roomId = room.room_id;
+           addLog(`Matrix room created: ${roomId}`, 'ok');
+         } catch (matrixErr) {
+           addLog(`Matrix room creation skipped: ${matrixErr.message}`, 'warn');
+         }
+       }
+ 
+       if (selectedUnitIds.length === 0) {
+         const res = await sendAlert(base);
+         ids.push(res.data.id);
+         addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
+         addLog('Broadcast to all units', 'warn');
+       } else {
+         for (const unitId of selectedUnitIds) {
+           // ── Matrix invite (non-blocking) ──
+           if (roomId && dispatcher?.accessToken) {
+             const matrixInviteeId = matrixUserId('matrixuser');
+             try {
+               await inviteUser(dispatcher.accessToken, roomId, matrixInviteeId);
+               addLog(`Matrix invite sent: ${matrixInviteeId}`, 'ok');
+             } catch (err) {
+               addLog(`Matrix invite skipped for ${unitId}`, 'warn');
+             }
+           }
+ 
+           const res = await assignUnit({ ...base, unitId });
+           ids.push(res.data.id);
+           const unit = unitList.find(u => u.id === unitId);
+           addToHistory({
+             ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
+             status: 'pending'
+           });
+           addLog(`Assigned → ${unit?.name || unitId}`, 'ok');
+         }
+       }
+ 
+       if (agentTicket?.id) {
+         updateAgentTicket(agentTicket.id, {
+           status: 'dispatched',
+           assignedUnits: [...(agentTicket.assignedUnits || []), ...selectedUnitIds],
+           alertIds: [...(agentTicket.alertIds || []), ...ids],
+         });
+         const fresh = getAgentTickets().find(t => t.id === agentTicket.id);
+         if (fresh) { setAgentTicket(fresh); setSelectedTicket(fresh); }
+       }
+       setLastAlertIds(ids);
+       setStatusBox({ type: 'pending', icon: <NodeIndexOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: `${ids.length} alert(s) sent — waiting for units…` });
+       addLog(`Done — ${ids.length} alert(s) sent`, 'ok');
+       setShowModal(false); setSelectedUnitIds([]);
+     } catch (e) {
+       addLog('Failed: ' + (e.response?.data?.error || e.message), 'error');
+     }
+     setDispatching(false);
+   }; */
+
+  const handleDispatch = async () => {
     setDispatching(true);
     addLog(`🚨 Dispatching ${selectedUnitIds.length > 0 ? selectedUnitIds.length + ' unit(s)' : 'broadcast'}…`, 'warn');
     const ids = [];
+
     try {
       const vehicleType = agentTicket?.vehicleType || 'ambulance';
+
+      // ── STEP 1: Build dynamic invite list from selected unit IDs ──
+      const inviteUserIds = selectedUnitIds.map(id => `@${id}:localhost`);
+
+      // ── STEP 2: Create room with all units pre-invited ──
+      let roomId = null;
+      if (dispatcher?.accessToken && agentTicket?.id) {
+        try {
+          const room = await createRoom(
+            dispatcher.accessToken,
+            `Ticket-${agentTicket.id}`,
+            inviteUserIds          // ← dynamic, not hardcoded
+          );
+          roomId = room.room_id;
+          addLog(`✅ Matrix room created: ${roomId}`, 'ok');
+
+          // ── STEP 3: Invite any units not already invited via createRoom ──
+          // (safety net — in case createRoom invite list missed some)
+          for (const matrixUserId of inviteUserIds) {
+            try {
+              await inviteUser(dispatcher.accessToken, roomId, matrixUserId);
+              addLog(`📨 Invited: ${matrixUserId}`, 'ok');
+            } catch (err) {
+              // Already invited via createRoom — ignore "already in room" errors
+              addLog(`⚠️ Invite skipped for ${matrixUserId}: ${err.message}`, 'warn');
+            }
+          }
+        } catch (matrixErr) {
+          addLog(`⚠️ Matrix room creation skipped: ${matrixErr.message}`, 'warn');
+        }
+      }
+
+      // ── STEP 4: Build base payload with roomId ──
       const base = {
         patientName: answers.f1 || 'Unknown',
         patientPhone: answers.f2 || '',
@@ -532,162 +641,53 @@ export default function DispatchPage() {
         notes: answers.f7 || '',
         destination: { latitude: pickedLat, longitude: pickedLng },
         vehicleType, severity, answers,
+        roomId: roomId || '',
+        matrixRoomId: roomId || '',
       };
 
-      // ── Matrix room creation (non-blocking — won't stop dispatch if Matrix is offline) ──
-      let roomId = null;
-      if (dispatcher?.accessToken && agentTicket?.id) {
-        try {
-          const room = await createRoom(dispatcher.accessToken, `Ticket-${agentTicket.id}`);
-          roomId = room.room_id;
-          addLog(`Matrix room created: ${roomId}`, 'ok');
-        } catch (matrixErr) {
-          addLog(`Matrix room creation skipped: ${matrixErr.message}`, 'warn');
-        }
-      }
-
+      // ── STEP 5: Dispatch ──
       if (selectedUnitIds.length === 0) {
         const res = await sendAlert(base);
         ids.push(res.data.id);
         addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
-        addLog('Broadcast to all units', 'warn');
+        addLog('📡 Broadcast to all units', 'warn');
       } else {
         for (const unitId of selectedUnitIds) {
-          // ── Matrix invite (non-blocking) ──
-          if (roomId && dispatcher?.accessToken) {
-            const matrixInviteeId = matrixUserId('matrixuser');
-            try {
-              await inviteUser(dispatcher.accessToken, roomId, matrixInviteeId);
-              addLog(`Matrix invite sent: ${matrixInviteeId}`, 'ok');
-            } catch (err) {
-              addLog(`Matrix invite skipped for ${unitId}`, 'warn');
-            }
-          }
-
           const res = await assignUnit({ ...base, unitId });
           ids.push(res.data.id);
           const unit = unitList.find(u => u.id === unitId);
           addToHistory({
             ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
-            status: 'pending'
+            status: 'pending',
           });
-          addLog(`Assigned → ${unit?.name || unitId}`, 'ok');
+          addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
         }
       }
 
+      // ── STEP 6: Update local ticket ──
       if (agentTicket?.id) {
         updateAgentTicket(agentTicket.id, {
           status: 'dispatched',
           assignedUnits: [...(agentTicket.assignedUnits || []), ...selectedUnitIds],
           alertIds: [...(agentTicket.alertIds || []), ...ids],
+          roomId,
         });
         const fresh = getAgentTickets().find(t => t.id === agentTicket.id);
         if (fresh) { setAgentTicket(fresh); setSelectedTicket(fresh); }
       }
+
       setLastAlertIds(ids);
-      setStatusBox({ type: 'pending', icon: <NodeIndexOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, text: `${ids.length} alert(s) sent — waiting for units…` });
-      addLog(`Done — ${ids.length} alert(s) sent`, 'ok');
-      setShowModal(false); setSelectedUnitIds([]);
+      setStatusBox({ type: 'pending', icon: '📡', text: `${ids.length} alert(s) sent — waiting for units…` });
+      addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
+      setShowModal(false);
+      setSelectedUnitIds([]);
+
     } catch (e) {
-      addLog('Failed: ' + (e.response?.data?.error || e.message), 'error');
+      addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
     }
+
     setDispatching(false);
-  }; */
-
-  const handleDispatch = async () => {
-  setDispatching(true);
-  addLog(`🚨 Dispatching ${selectedUnitIds.length > 0 ? selectedUnitIds.length + ' unit(s)' : 'broadcast'}…`, 'warn');
-  const ids = [];
-
-  try {
-    const vehicleType = agentTicket?.vehicleType || 'ambulance';
-
-    // ── STEP 1: Build dynamic invite list from selected unit IDs ──
-    const inviteUserIds = selectedUnitIds.map(id => `@${id}:localhost`);
-
-    // ── STEP 2: Create room with all units pre-invited ──
-    let roomId = null;
-    if (dispatcher?.accessToken && agentTicket?.id) {
-      try {
-        const room = await createRoom(
-          dispatcher.accessToken,
-          `Ticket-${agentTicket.id}`,
-          inviteUserIds          // ← dynamic, not hardcoded
-        );
-        roomId = room.room_id;
-        addLog(`✅ Matrix room created: ${roomId}`, 'ok');
-
-        // ── STEP 3: Invite any units not already invited via createRoom ──
-        // (safety net — in case createRoom invite list missed some)
-        for (const matrixUserId of inviteUserIds) {
-          try {
-            await inviteUser(dispatcher.accessToken, roomId, matrixUserId);
-            addLog(`📨 Invited: ${matrixUserId}`, 'ok');
-          } catch (err) {
-            // Already invited via createRoom — ignore "already in room" errors
-            addLog(`⚠️ Invite skipped for ${matrixUserId}: ${err.message}`, 'warn');
-          }
-        }
-      } catch (matrixErr) {
-        addLog(`⚠️ Matrix room creation skipped: ${matrixErr.message}`, 'warn');
-      }
-    }
-
-    // ── STEP 4: Build base payload with roomId ──
-    const base = {
-      patientName:  answers.f1 || 'Unknown',
-      patientPhone: answers.f2 || '',
-      address:      answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
-      notes:        answers.f7 || '',
-      destination:  { latitude: pickedLat, longitude: pickedLng },
-      vehicleType, severity, answers,
-      roomId:      roomId || '',
-      matrixRoomId: roomId || '',
-    };
-
-    // ── STEP 5: Dispatch ──
-    if (selectedUnitIds.length === 0) {
-      const res = await sendAlert(base);
-      ids.push(res.data.id);
-      addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
-      addLog('📡 Broadcast to all units', 'warn');
-    } else {
-      for (const unitId of selectedUnitIds) {
-        const res = await assignUnit({ ...base, unitId });
-        ids.push(res.data.id);
-        const unit = unitList.find(u => u.id === unitId);
-        addToHistory({
-          ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
-          status: 'pending',
-        });
-        addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
-      }
-    }
-
-    // ── STEP 6: Update local ticket ──
-    if (agentTicket?.id) {
-      updateAgentTicket(agentTicket.id, {
-        status:        'dispatched',
-        assignedUnits: [...(agentTicket.assignedUnits || []), ...selectedUnitIds],
-        alertIds:      [...(agentTicket.alertIds || []), ...ids],
-        roomId,
-      });
-      const fresh = getAgentTickets().find(t => t.id === agentTicket.id);
-      if (fresh) { setAgentTicket(fresh); setSelectedTicket(fresh); }
-    }
-
-    setLastAlertIds(ids);
-    setStatusBox({ type: 'pending', icon: '📡', text: `${ids.length} alert(s) sent — waiting for units…` });
-    addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
-    setShowModal(false);
-    setSelectedUnitIds([]);
-
-  } catch (e) {
-    addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
-  }
-
-  setDispatching(false);
-};
+  };
 
   function buildEntry(id, unitId, vehicleType) {
     return {
