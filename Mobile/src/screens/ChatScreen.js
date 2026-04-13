@@ -1,21 +1,33 @@
 /**
  * ChatScreen.js
  *
- * Original icons & colors preserved (Feather, Ionicons, Slider, expo-video,
- * expo-audio, MapView — all original imports kept).
+ * ✅ NEW ADDITIONS vs original:
+ *  1. handleRecordVideo()      — opens system camera in video mode (long press → record)
+ *  2. VideoNoteModal component — circular in-app recorder (like WhatsApp video note)
+ *  3. handleVideoNoteSend()    — uploads & sends video note
+ *  4. Circular bubble renderer — videos with body starting "vidnote:" show as circles
+ *  5. Two new ATTACH_ITEMS     — "Record" (red) and "Video Note" (purple)
+ *  6. Detailed console.log()   — every action logged for debugging
  *
- * NEW features added from new code:
- *  1. WhatsApp-style keyboard: typing → keyboard slides up, input bar stays
- *     pinned above keyboard.
- *  2. Tapping 📎 → keyboard dismissed, attach grid slides in below input bar.
- *  3. Tapping the message list → keyboard + attach both dismiss.
- *  4. Auto-join invited rooms during sync.
+ * NEW IMPORTS NEEDED (run these if not already installed):
+ *   npx expo install expo-camera
+ *   npx expo install react-native-svg
  */
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTS  (✅ NEW lines marked)
+// ─────────────────────────────────────────────────────────────────────────────
 import Slider from '@react-native-community/slider';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Video as AVVideo } from 'expo-av';
-import { useAudioPlayer, useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync } from 'expo-audio';
+import {
+  useAudioPlayer,
+  useAudioRecorder,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+} from 'expo-audio';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera'; // ✅ NEW
+import Svg, { Circle } from 'react-native-svg'; // ✅ NEW  (for progress ring)
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
@@ -61,6 +73,9 @@ import {
   getRoomState,
 } from '../services/matrixService';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
 export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader = false }) {
   const { session } = useAuth();
 
@@ -87,10 +102,15 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   const [mentionSearch, setMentionSearch] = useState('');
   const [roomMembers, setRoomMembers] = useState([]);
   const [currentRoomName, setCurrentRoomName] = useState(roomLabel || '');
-  const [mapRegion, setMapRegion] = useState({ latitude: 12.9716, longitude: 77.5946, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+  const [mapRegion, setMapRegion] = useState({
+    latitude: 12.9716, longitude: 77.5946,
+    latitudeDelta: 0.01, longitudeDelta: 0.01,
+  });
 
-  // NEW: WhatsApp panel state: 'none' | 'keyboard' | 'attach'
   const [panel, setPanel] = useState('none');
+
+  // ✅ NEW — video note modal state
+  const [showVideoNote, setShowVideoNote] = useState(false);
 
   const flatRef = useRef(null);
   const syncActive = useRef(true);
@@ -98,17 +118,18 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   const roomIdRef = useRef(roomId);
   const inputRef = useRef(null);
 
-  const [reactions, setReactions] = useState({}); // eventId -> { emoji: [users] }
+  const [reactions, setReactions] = useState({});
   const [pinnedEvents, setPinnedEvents] = useState([]);
-  const [joinedRooms, setJoinedRooms] = useState([]); // for forwarding
+  const [joinedRooms, setJoinedRooms] = useState([]);
   const [showForwardModal, setShowForwardModal] = useState(false);
   const [forwardMsg, setForwardMsg] = useState(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState(null);
   const highlightTimeoutRef = useRef(null);
+  const [patientData, setPatientData] = useState(null);
 
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
 
-  // NEW: Keyboard listeners for WhatsApp-style behavior
+  // ─── Keyboard listeners ────────────────────────────────────────────────────
   useEffect(() => {
     const showEv = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEv = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
@@ -124,25 +145,21 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     return () => { s1.remove(); s2.remove(); };
   }, []);
 
+  // ─── Room init ────────────────────────────────────────────────────────────
   useEffect(() => {
     syncActive.current = true;
     setMessages([]);
     setLoadingInit(true);
     loadMessages();
-    return () => {
-      syncActive.current = false;
-    };
+    return () => { syncActive.current = false; };
   }, [roomId]);
 
   useEffect(() => {
     if (!roomId || !session.accessToken) return;
     const fetchData = async () => {
       try {
-        // Fetch Members
         const members = await getRoomMembers(session.accessToken, roomId);
         setRoomMembers(members);
-
-        // Fetch Room Name if not provided
         if (!roomLabel) {
           const state = await getRoomState(session.accessToken, roomId, 'm.room.name');
           if (state?.name) setCurrentRoomName(state.name);
@@ -154,6 +171,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     fetchData();
   }, [roomId, session.accessToken, roomLabel]);
 
+  // ─── Reactions ────────────────────────────────────────────────────────────
   const handleReaction = async (eventId, emoji) => {
     try {
       await sendReaction(session.accessToken, roomId, eventId, emoji);
@@ -162,6 +180,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     }
   };
 
+  // ─── Load messages ────────────────────────────────────────────────────────
   const loadMessages = async () => {
     try {
       await new Promise(r => setTimeout(r, 300));
@@ -181,41 +200,32 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     setTimeout(() => flatRef.current?.scrollToEnd({ animated: false }), 100);
   };
 
+  // ─── Sync ─────────────────────────────────────────────────────────────────
   const startSync = useCallback(async () => {
     let since = null;
-
     try {
-      console.log("🚀 [SYNC] Initial sync start...");
+      console.log('🚀 [SYNC] Initial sync start...');
       const initial = await syncMatrix(session.accessToken, null, 0);
       since = initial.next_batch;
-
-      // Parse initial pins
       const joinData = initial.rooms?.join?.[roomIdRef.current];
       const pinEvent = joinData?.state?.events?.find(e => e.type === 'm.room.pinned_events');
       if (pinEvent) setPinnedEvents(pinEvent.content?.pinned || []);
-
-      console.log("✅ [SYNC] Initial sync done");
+      console.log('✅ [SYNC] Initial sync done');
     } catch (err) {
-      console.warn("❌ [SYNC] Initial sync failed:", err.message);
+      console.warn('❌ [SYNC] Initial sync failed:', err.message);
     }
 
     while (syncActive.current) {
       try {
         const data = await syncMatrix(session.accessToken, since, 10000);
         since = data.next_batch;
-
         const cur = roomIdRef.current;
         const roomData = data.rooms?.join?.[cur];
-
         if (roomData) {
-          // Sync pins
           const pinEvent = roomData.state?.events?.find(e => e.type === 'm.room.pinned_events');
           if (pinEvent) setPinnedEvents(pinEvent.content?.pinned || []);
-
           if (roomData.timeline?.events) {
             const events = roomData.timeline.events;
-
-            // Handle reactions
             const newReactions = {};
             events.filter(e => e.type === 'm.reaction').forEach(e => {
               const relate = e.content?.['m.relates_to'];
@@ -227,7 +237,6 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                 if (!newReactions[eid][key].includes(e.sender)) newReactions[eid][key].push(e.sender);
               }
             });
-
             if (Object.keys(newReactions).length > 0) {
               setReactions(prev => {
                 const next = { ...prev };
@@ -237,20 +246,14 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                 return next;
               });
             }
-
-            const newMsgs = events
-              .filter(e => e.type === 'm.room.message')
-              .map(parseEvent);
-
+            const newMsgs = events.filter(e => e.type === 'm.room.message').map(parseEvent);
             if (newMsgs.length > 0) {
               setMessages(prev => {
                 const ids = new Set(prev.map(m => m.id));
                 const incoming = newMsgs.filter(m => !ids.has(m.id));
                 if (!incoming.length) return prev;
-                
                 const filtered = prev.filter(p => {
                   if (!p.id.startsWith('opt_')) return true;
-                  // If incoming message has a txnId that matches our optimistic ID, remove optimistic
                   return !incoming.some(i => i.txnId === p.id);
                 });
                 return [...filtered, ...incoming];
@@ -265,6 +268,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     }
   }, [session.accessToken, roomId]);
 
+  // ─── Parse event ──────────────────────────────────────────────────────────
   function parseEvent(event) {
     const content = event.content || {};
     const isMe = event.sender === session.userId;
@@ -284,7 +288,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       filename: content.filename || content.body || '',
       mimeType: content.info?.mimetype || '',
       fileSize: content.info?.size || 0,
-      geo: content.geo_uri || content["org.matrix.msc3488.location"]?.uri || null,
+      geo: content.geo_uri || content['org.matrix.msc3488.location']?.uri || null,
       isLive: content.is_live || false,
       liveUntil: content.live_until || 0,
       replyToId: content?.['m.relates_to']?.['m.in_reply_to']?.event_id,
@@ -292,33 +296,27 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     };
   }
 
-  // NEW: Panel helpers (WhatsApp-style)
+  // ─── Panel helpers ────────────────────────────────────────────────────────
   const openAttach = () => {
     Keyboard.dismiss();
     setTimeout(() => setPanel('attach'), Platform.OS === 'ios' ? 50 : 10);
   };
-
   const closePanel = () => {
     Keyboard.dismiss();
     setPanel('none');
   };
-
   const toggleAttach = () => {
-    if (panel === 'attach') {
-      closePanel();
-    } else {
-      openAttach();
-    }
+    if (panel === 'attach') closePanel();
+    else openAttach();
   };
 
   const highlightMessage = (msgId) => {
     if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
     setHighlightedMsgId(msgId);
-    highlightTimeoutRef.current = setTimeout(() => {
-      setHighlightedMsgId(null);
-    }, 3000);
+    highlightTimeoutRef.current = setTimeout(() => setHighlightedMsgId(null), 3000);
   };
 
+  // ─── Send text ────────────────────────────────────────────────────────────
   async function handleSend() {
     const text = inputText.trim();
     if (!text || sending) return;
@@ -335,11 +333,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       if (replyTo) {
         await sendTextMessage(session.accessToken, roomId, text, {
           txnId: optId,
-          'm.relates_to': {
-            'm.in_reply_to': {
-              event_id: replyTo.id
-            }
-          }
+          'm.relates_to': { 'm.in_reply_to': { event_id: replyTo.id } },
         });
         setReplyTo(null);
       } else {
@@ -355,6 +349,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     }
   }
 
+  // ─── Pick image ───────────────────────────────────────────────────────────
   async function handlePickImage() {
     closePanel();
     try {
@@ -362,17 +357,21 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow photo access.'); return; }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8
+        quality: 0.8,
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
       setUploading(true);
       const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'image/jpeg', asset.fileName || `photo_${Date.now()}.jpg`);
       await sendImageMessage(session.accessToken, roomId, mxcUri, asset.fileName || 'photo.jpg', asset.width, asset.height);
-    } catch (err) { Alert.alert('Upload Failed', err.message); }
-    finally { setUploading(false); }
+    } catch (err) {
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
   }
 
+  // ─── Camera photo ─────────────────────────────────────────────────────────
   async function handleCamera() {
     closePanel();
     try {
@@ -385,10 +384,14 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       const filename = `photo_${Date.now()}.jpg`;
       const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'image/jpeg', filename);
       await sendImageMessage(session.accessToken, roomId, mxcUri, filename, asset.width, asset.height);
-    } catch (err) { Alert.alert('Upload Failed', err.message); }
-    finally { setUploading(false); }
+    } catch (err) {
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
   }
 
+  // ─── Pick video from gallery ───────────────────────────────────────────────
   async function handlePickVideo() {
     closePanel();
     try {
@@ -396,7 +399,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow photo access.'); return; }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        videoMaxDuration: 60
+        videoMaxDuration: 60,
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
@@ -404,10 +407,105 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       const filename = asset.fileName || `video_${Date.now()}.mp4`;
       const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'video/mp4', filename);
       await sendVideoMessage(session.accessToken, roomId, mxcUri, filename);
-    } catch (err) { Alert.alert('Upload Failed', err.message); }
-    finally { setUploading(false); }
+    } catch (err) {
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // ✅ NEW — handleRecordVideo
+  // Opens the SYSTEM CAMERA in video mode (like WhatsApp camera → hold record)
+  // allowsEditing:true gives the user a preview/trim screen before sending
+  // ─────────────────────────────────────────────────────────────────────────
+  async function handleRecordVideo() {
+    console.log('📹 [RecordVideo] Opening system camera in video mode...');
+    closePanel();
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        console.warn('📹 [RecordVideo] Camera permission denied');
+        Alert.alert('Permission needed', 'Allow camera access.');
+        return;
+      }
+
+      console.log('📹 [RecordVideo] Launching camera...');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        videoMaxDuration: 120,    // 2 minutes max
+        allowsEditing: true,      // shows trim/preview screen before sending
+        quality: 0.7,
+      });
+
+      if (result.canceled) {
+        console.log('📹 [RecordVideo] User cancelled');
+        return;
+      }
+      if (!result.assets?.[0]) {
+        console.warn('📹 [RecordVideo] No asset returned');
+        return;
+      }
+
+      const asset = result.assets[0];
+      console.log('📹 [RecordVideo] Got video asset:', {
+        uri: asset.uri,
+        duration: asset.duration,
+        fileSize: asset.fileSize,
+      });
+
+      setUploading(true);
+      const filename = `video_${Date.now()}.mp4`;
+      console.log('📹 [RecordVideo] Uploading as:', filename);
+
+      const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'video/mp4', filename);
+      console.log('📹 [RecordVideo] Upload done, mxcUri:', mxcUri);
+
+      await sendVideoMessage(session.accessToken, roomId, mxcUri, filename);
+      console.log('📹 [RecordVideo] ✅ Video sent successfully');
+    } catch (err) {
+      console.error('📹 [RecordVideo] ❌ Error:', err.message);
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ✅ NEW — handleVideoNoteSend
+  // Called by VideoNoteModal when the user stops recording.
+  // Uploads the video and sends it with "vidnote:" prefix so the bubble
+  // knows to render it as a circle.
+  // ─────────────────────────────────────────────────────────────────────────
+  async function handleVideoNoteSend(uri) {
+    console.log('🔵 [VideoNote] Received recorded URI:', uri);
+    setShowVideoNote(false);
+
+    if (!uri) {
+      console.warn('🔵 [VideoNote] No URI received, aborting');
+      return;
+    }
+
+    try {
+      setUploading(true);
+      const filename = `vnote_${Date.now()}.mp4`;
+      console.log('🔵 [VideoNote] Uploading as:', filename);
+
+      const mxcUri = await uploadMedia(session.accessToken, uri, 'video/mp4', filename);
+      console.log('🔵 [VideoNote] Upload done, mxcUri:', mxcUri);
+
+      // "vidnote:" prefix tells the bubble renderer to show a circle
+      await sendVideoMessage(session.accessToken, roomId, mxcUri, `vidnote:${filename}`);
+      console.log('🔵 [VideoNote] ✅ Video note sent successfully');
+    } catch (err) {
+      console.error('🔵 [VideoNote] ❌ Error:', err.message);
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // ─── Pick file ────────────────────────────────────────────────────────────
   async function handlePickFile() {
     closePanel();
     try {
@@ -420,19 +518,24 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       setUploading(true);
       const mxcUri = await uploadMedia(session.accessToken, asset.uri, mimeType, filename);
       await sendFileMessage(session.accessToken, roomId, mxcUri, filename, mimeType, fileSize);
-    } catch (err) { Alert.alert('Upload Failed', err.message); }
-    finally { setUploading(false); }
+    } catch (err) {
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
   }
 
+  // ─── Audio recording ──────────────────────────────────────────────────────
   async function startRecording() {
     try {
       const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow microphone access.'); return; }
-
       await recorder.prepareToRecordAsync();
       recorder.record();
       setIsRecording(true);
-    } catch (err) { Alert.alert('Recording Failed', err.message); }
+    } catch (err) {
+      Alert.alert('Recording Failed', err.message);
+    }
   }
 
   async function stopRecordingAndSend() {
@@ -442,16 +545,19 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       await recorder.stop();
       const uri = recorder.uri;
       const duration = Math.round(recorder.currentTime || 0);
-
       if (!uri) return;
       setUploading(true);
       const filename = `voice_${Date.now()}.m4a`;
       const mxcUri = await uploadMedia(session.accessToken, uri, 'audio/m4a', filename);
       await sendAudioMessage(session.accessToken, roomId, mxcUri, filename, duration);
-    } catch (err) { Alert.alert('Send Failed', err.message); }
-    finally { setUploading(false); }
+    } catch (err) {
+      Alert.alert('Send Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
   }
 
+  // ─── Location ─────────────────────────────────────────────────────────────
   async function handleShareCurrentLocation() {
     setShowLocationModal(false);
     try {
@@ -459,7 +565,9 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       if (status !== 'granted') { Alert.alert('Permission needed', 'Allow location access.'); return; }
       const loc = await Location.getCurrentPositionAsync({});
       await sendLocationMessage(session.accessToken, roomId, loc.coords.latitude, loc.coords.longitude, 'My Current Location');
-    } catch (err) { Alert.alert('Error', err.message); }
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    }
   }
 
   async function handleShareLiveLocation(durMs) {
@@ -469,16 +577,21 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       if (status !== 'granted') { Alert.alert('Permission needed', 'Allow location access.'); return; }
       const loc = await Location.getCurrentPositionAsync({});
       await sendLiveLocationMessage(session.accessToken, roomId, loc.coords.latitude, loc.coords.longitude, durMs);
-    } catch (err) { Alert.alert('Error', err.message); }
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    }
   }
 
   async function handleSharePinLocation() {
     setShowPinModal(false);
     try {
       await sendLocationMessage(session.accessToken, roomId, mapRegion.latitude, mapRegion.longitude, 'Pinned Location');
-    } catch (err) { Alert.alert('Error', err.message); }
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    }
   }
 
+  // ─── Misc helpers ─────────────────────────────────────────────────────────
   function handleEmojiSelect(emoji) {
     setInputText(prev => prev + emoji);
     setShowEmojiPicker(false);
@@ -490,11 +603,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   }
 
   function togglePlayAudio(msg) {
-    if (playingId === msg.id) {
-      setPlayingId(null);
-    } else {
-      setPlayingId(msg.id);
-    }
+    setPlayingId(playingId === msg.id ? null : msg.id);
   }
 
   function fmtDuration(ms) {
@@ -519,33 +628,55 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     return 'file';
   }
 
-  // Original attach items using Feather icons
+  // ─────────────────────────────────────────────────────────────────────────
+  // ✅ CHANGED — ATTACH_ITEMS
+  // Added 'video_cam' (Record Video via system camera)
+  // Added 'vidnote'   (Video Note — circular in-app recorder)
+  // ─────────────────────────────────────────────────────────────────────────
   const ATTACH_ITEMS = [
-    { key: 'camera', icon: 'camera', label: 'Camera', color: '#1E40AF', bg: '#DBEAFE' },
-    { key: 'gallery', icon: 'image', label: 'Gallery', color: '#3B82F6', bg: '#EFF6FF' },
-    { key: 'video', icon: 'video', label: 'Video', color: '#8B5CF6', bg: '#EDE9FE' },
-    { key: 'document', icon: 'paperclip', label: 'Document', color: '#6366F1', bg: '#E0E7FF' },
-    { key: 'location', icon: 'map-pin', label: 'Location', color: '#10B981', bg: '#D1FAE5' },
-    { key: 'emoji', icon: 'smile', label: 'Emoji', color: '#F59E0B', bg: '#FEF3C7' },
+    { key: 'camera',    icon: 'camera',    label: 'Camera',     color: '#1E40AF', bg: '#DBEAFE' },
+    { key: 'video_cam', icon: 'video',     label: 'Record',     color: '#EF4444', bg: '#FEE2E2' }, // ✅ NEW
+    { key: 'vidnote',   icon: 'aperture',  label: 'Video Note', color: '#8B5CF6', bg: '#EDE9FE' }, // ✅ NEW
+    { key: 'gallery',   icon: 'image',     label: 'Gallery',    color: '#3B82F6', bg: '#EFF6FF' },
+    { key: 'video',     icon: 'film',      label: 'Video',      color: '#6366F1', bg: '#E0E7FF' },
+    { key: 'document',  icon: 'paperclip', label: 'Document',   color: '#6366F1', bg: '#E0E7FF' },
+    { key: 'location',  icon: 'map-pin',   label: 'Location',   color: '#10B981', bg: '#D1FAE5' },
+    { key: 'emoji',     icon: 'smile',     label: 'Emoji',      color: '#F59E0B', bg: '#FEF3C7' },
   ];
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // ✅ CHANGED — attachHandlers
+  // Added handlers for 'video_cam' and 'vidnote'
+  // ─────────────────────────────────────────────────────────────────────────
   const attachHandlers = {
-    camera: handleCamera,
-    gallery: handlePickImage,
-    video: handlePickVideo,
-    document: handlePickFile,
-    location: () => { closePanel(); setShowLocationModal(true); },
-    emoji: () => { closePanel(); setShowEmojiPicker(true); },
+    camera:    handleCamera,
+    video_cam: handleRecordVideo,                              // ✅ NEW
+    vidnote:   () => { closePanel(); setShowVideoNote(true); }, // ✅ NEW
+    gallery:   handlePickImage,
+    video:     handlePickVideo,
+    document:  handlePickFile,
+    location:  () => { closePanel(); setShowLocationModal(true); },
+    emoji:     () => { closePanel(); setShowEmojiPicker(true); },
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // renderMessage
+  // ✅ CHANGED — m.video block now checks for "vidnote:" prefix
+  //             to show a circular bubble instead of the normal video player
+  // ─────────────────────────────────────────────────────────────────────────
   const renderMessage = ({ item: msg, index }) => {
-    const time = new Date(msg.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const time = new Date(msg.ts).toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    });
     const isPlaying = playingId === msg.id;
     const prevMsg = index > 0 ? messages[index - 1] : null;
     const showMeta = !prevMsg || prevMsg.sender !== msg.sender;
     const replyMsg = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
     const msgReactions = reactions[msg.id];
     const isHighlighted = highlightedMsgId === msg.id;
+
+    // ✅ NEW — detect video note by body prefix
+    const isVideoNote = msg.msgtype === 'm.video' && msg.body?.startsWith('vidnote:');
 
     return (
       <View style={[styles.msgRow, msg.isMe && styles.msgRowMe]}>
@@ -562,15 +693,14 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         )}
 
         <TouchableOpacity
-          onLongPress={() => {
-            setSelectedMessage(msg);
-            setShowActionMenu(true);
-          }}
+          onLongPress={() => { setSelectedMessage(msg); setShowActionMenu(true); }}
           activeOpacity={0.9}
           style={[
             styles.bubble,
             msg.isMe ? styles.bubbleMe : styles.bubbleThem,
-            isHighlighted && styles.bubbleHighlighted
+            isHighlighted && styles.bubbleHighlighted,
+            // ✅ NEW — transparent bg for video note so circle looks clean
+            isVideoNote && styles.bubbleVideoNote,
           ]}
         >
           {!msg.isMe && showMeta && (
@@ -600,10 +730,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
           {msg.msgtype === 'm.image' && msg.mediaUrl && (
             <TouchableOpacity
               onPress={() => setFullImage(msg.mediaUrl)}
-              onLongPress={() => {
-                setSelectedMessage(msg);
-                setShowActionMenu(true);
-              }}
+              onLongPress={() => { setSelectedMessage(msg); setShowActionMenu(true); }}
               activeOpacity={0.9}
             >
               <AuthImage
@@ -615,13 +742,36 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
             </TouchableOpacity>
           )}
 
+          {/* ─────────────────────────────────────────────────────────────
+              ✅ CHANGED — m.video rendering
+              If body starts with "vidnote:" → show circular bubble
+              Otherwise → show normal rectangular video player
+          ──────────────────────────────────────────────────────────────── */}
           {msg.msgtype === 'm.video' && msg.mediaUrl && (
-            <AuthVideo
-              uri={msg.mediaUrl}
-              accessToken={session.accessToken}
-              filename={msg.body}
-              isMe={msg.isMe}
-            />
+            isVideoNote ? (
+              // ✅ NEW — Circular video note bubble
+              <View style={circleVideoStyles.wrap}>
+                <AVVideo
+                  source={{
+                    uri: msg.mediaUrl,
+                    headers: { Authorization: `Bearer ${session.accessToken}` },
+                  }}
+                  useNativeControls
+                  resizeMode="cover"
+                  style={circleVideoStyles.video}
+                />
+                {/* Small label below circle */}
+                <Text style={circleVideoStyles.label}>Video note</Text>
+              </View>
+            ) : (
+              // Normal video player (unchanged)
+              <AuthVideo
+                uri={msg.mediaUrl}
+                accessToken={session.accessToken}
+                filename={msg.body}
+                isMe={msg.isMe}
+              />
+            )
           )}
 
           {msg.msgtype === 'm.audio' && msg.mediaUrl && (
@@ -666,15 +816,15 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                 scrollEnabled={false}
                 zoomEnabled={false}
               >
-                <Marker
-                  coordinate={{
-                    latitude: parseFloat(msg.geo?.split(':')[1]?.split(',')[0]) || 0,
-                    longitude: parseFloat(msg.geo?.split(':')[1]?.split(',')[1]) || 0,
-                  }}
-                />
+                <Marker coordinate={{
+                  latitude: parseFloat(msg.geo?.split(':')[1]?.split(',')[0]) || 0,
+                  longitude: parseFloat(msg.geo?.split(':')[1]?.split(',')[1]) || 0,
+                }} />
               </MapView>
               <View style={styles.locInfo}>
-                <Text style={[styles.locName, msg.isMe && { color: '#fff' }]}>{msg.isLive ? 'Live Location' : 'Shared Location'}</Text>
+                <Text style={[styles.locName, msg.isMe && { color: '#fff' }]}>
+                  {msg.isLive ? 'Live Location' : 'Shared Location'}
+                </Text>
                 {msg.isLive && (
                   <Text style={[styles.locSub, msg.isMe && { color: 'rgba(255,255,255,0.7)' }]}>
                     {msg.liveUntil > Date.now() ? 'Active' : 'Expired'}
@@ -707,8 +857,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     );
   };
 
-  const [patientData, setPatientData] = useState(null);
-
+  // ─── Patient / incidents ──────────────────────────────────────────────────
   const fetchIncidents = async () => {
     try {
       const res = await fetch(`${SERVER_URL}/incidents`);
@@ -716,13 +865,8 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       if (json.success && json.data) {
         const match = json.data.find(inc => (inc.matrixRoomId || inc.roomId) === roomId);
         if (match) {
-          const data = {
-            name: match.patientName || 'Unknown',
-            address: match.address || ''
-          };
+          const data = { name: match.patientName || 'Unknown', address: match.address || '' };
           setPatientData(data);
-          
-          // Also update AsyncStorage for list screen
           const rawCache = await AsyncStorage.getItem('TICKET_NAMES') || '{}';
           const cache = JSON.parse(rawCache);
           cache[roomId] = data;
@@ -746,6 +890,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     }
   }, [roomId]);
 
+  // ─── Loading screen ───────────────────────────────────────────────────────
   if (loadingInit) {
     return (
       <View style={styles.loader}>
@@ -755,22 +900,34 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     );
   }
 
-  const displayTitle = patientData?.name || (currentRoomName?.trim()?.toLowerCase()?.includes('ticket-') ? 'Incident Chat' : (currentRoomName || (isDispatchRoom ? 'Dispatch Chat' : 'Alert Chat')));
-  const subTitle = currentRoomName?.trim()?.toLowerCase()?.includes('ticket-') ? currentRoomName : (isDispatchRoom ? 'Emergency Control Channel' : 'Incident Communication');
+  const displayTitle = patientData?.name ||
+    (currentRoomName?.trim()?.toLowerCase()?.includes('ticket-')
+      ? 'Incident Chat'
+      : (currentRoomName || (isDispatchRoom ? 'Dispatch Chat' : 'Alert Chat')));
+
+  const subTitle = currentRoomName?.trim()?.toLowerCase()?.includes('ticket-')
+    ? currentRoomName
+    : (isDispatchRoom ? 'Emergency Control Channel' : 'Incident Communication');
 
   const showAttach = panel === 'attach';
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      keyboardVerticalOffset={0}
     >
+      {/* Header */}
       {!hideHeader && (
         <View style={styles.header}>
           <View style={styles.headerTitleWrap}>
             <View style={[styles.avatarSmall, { backgroundColor: '#fff', marginRight: 10 }]}>
-              <Text style={{ color: '#1E40AF', fontWeight: 'bold', fontSize: 13 }}>{getInitials(displayTitle)}</Text>
+              <Text style={{ color: '#1E40AF', fontWeight: 'bold', fontSize: 13 }}>
+                {getInitials(displayTitle)}
+              </Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.headerTitle}>{displayTitle}</Text>
@@ -781,27 +938,26 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </View>
       )}
 
+      {/* Pinned banner */}
       {pinnedEvents.length > 0 && (
         <View style={styles.pinnedHeader}>
           <Ionicons name="pin" size={16} color="#1E40AF" />
           <Text style={styles.pinnedTxt} numberOfLines={1}>
             {pinnedEvents.length} Pinned {pinnedEvents.length === 1 ? 'Message' : 'Messages'}
           </Text>
-          <TouchableOpacity
-            onPress={() => {
-              const idx = messages.findIndex(m => m.id === pinnedEvents[0]);
-              if (idx !== -1) {
-                flatRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-                highlightMessage(pinnedEvents[0]);
-              }
-            }}
-          >
+          <TouchableOpacity onPress={() => {
+            const idx = messages.findIndex(m => m.id === pinnedEvents[0]);
+            if (idx !== -1) {
+              flatRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+              highlightMessage(pinnedEvents[0]);
+            }
+          }}>
             <Text style={styles.pinnedViewBtn}>VIEW</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* NEW: onScrollBeginDrag closes keyboard+attach */}
+      {/* Message list */}
       <FlatList
         ref={flatRef}
         data={messages}
@@ -824,6 +980,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         }
       />
 
+      {/* Recording bar */}
       {isRecording && (
         <View style={styles.recordingBar}>
           <View style={styles.recordingDot} />
@@ -834,7 +991,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </View>
       )}
 
-      {/* Reply Preview */}
+      {/* Reply preview */}
       {replyTo && (
         <View style={styles.replyPreview}>
           <View style={{ flex: 1 }}>
@@ -847,28 +1004,29 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </View>
       )}
 
-      {/* Mention Popup */}
+      {/* Mention popup */}
       {mentionOpen && (
         <View style={styles.mentionPopup}>
-          {roomMembers.filter(m => m.displayName.toLowerCase().includes(mentionSearch.toLowerCase())).map(m => (
-            <TouchableOpacity
-              key={m.userId}
-              style={styles.mentionItem}
-              onPress={() => {
-                const parts = inputText.split('@');
-                const last = parts.pop();
-                const newText = parts.join('@') + '@' + m.displayName + ' ';
-                setInputText(newText);
-                setMentionOpen(false);
-                inputRef.current?.focus();
-              }}
-            >
-              <View style={styles.mentionAvatar}>
-                <Text style={styles.mentionAvatarTxt}>{m.displayName.charAt(0).toUpperCase()}</Text>
-              </View>
-              <Text style={styles.mentionName}>{m.displayName}</Text>
-            </TouchableOpacity>
-          ))}
+          {roomMembers
+            .filter(m => m.displayName.toLowerCase().includes(mentionSearch.toLowerCase()))
+            .map(m => (
+              <TouchableOpacity
+                key={m.userId}
+                style={styles.mentionItem}
+                onPress={() => {
+                  const parts = inputText.split('@');
+                  parts.pop();
+                  setInputText(parts.join('@') + '@' + m.displayName + ' ');
+                  setMentionOpen(false);
+                  inputRef.current?.focus();
+                }}
+              >
+                <View style={styles.mentionAvatar}>
+                  <Text style={styles.mentionAvatarTxt}>{m.displayName.charAt(0).toUpperCase()}</Text>
+                </View>
+                <Text style={styles.mentionName}>{m.displayName}</Text>
+              </TouchableOpacity>
+            ))}
         </View>
       )}
 
@@ -899,11 +1057,8 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                 } else if (mentionOpen) {
                   const parts = text.split('@');
                   const lastPart = parts[parts.length - 1];
-                  if (lastPart.includes(' ')) {
-                    setMentionOpen(false);
-                  } else {
-                    setMentionSearch(lastPart);
-                  }
+                  if (lastPart.includes(' ')) setMentionOpen(false);
+                  else setMentionSearch(lastPart);
                 }
               }}
               onFocus={() => setPanel('keyboard')}
@@ -939,14 +1094,16 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
           activeOpacity={0.8}
         >
           {inputText.trim() ? (
-            sending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={20} color="#fff" />
+            sending
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <Ionicons name="send" size={20} color="#fff" />
           ) : (
             <Feather name={isRecording ? 'square' : 'mic'} size={22} color="#fff" />
           )}
         </TouchableOpacity>
       </View>
 
-      {/* NEW: Attach grid — slides in below input bar (WhatsApp style) */}
+      {/* Attach grid */}
       {showAttach && !isRecording && (
         <View style={styles.attachMenu}>
           <View style={styles.attachHandle} />
@@ -968,6 +1125,19 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </View>
       )}
 
+      {/* ───────────────────────────────────────────────────────────────────
+          ✅ NEW — VideoNoteModal
+          Place this INSIDE the KeyboardAvoidingView, alongside other Modals
+      ──────────────────────────────────────────────────────────────────── */}
+      <VideoNoteModal
+        visible={showVideoNote}
+        onClose={() => {
+          console.log('🔵 [VideoNote] Modal closed without sending');
+          setShowVideoNote(false);
+        }}
+        onSend={handleVideoNoteSend}
+      />
+
       {/* Location modal */}
       <Modal visible={showLocationModal} transparent animationType="fade" onRequestClose={() => setShowLocationModal(false)}>
         <View style={styles.locModalBg}>
@@ -981,21 +1151,18 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
               </View>
             </View>
             <Text style={styles.locModalTitle}>What location type do you want to share?</Text>
-
             <TouchableOpacity style={styles.locOptionBtn} onPress={handleShareCurrentLocation}>
               <View style={[styles.locOptionIcon, { borderColor: '#10B981' }]}>
                 <Text style={{ color: '#10B981', fontWeight: 'bold' }}>M</Text>
               </View>
               <Text style={styles.locOptionTxt}>My current location</Text>
             </TouchableOpacity>
-
             <TouchableOpacity style={styles.locOptionBtn} onPress={() => { setShowLocationModal(false); setShowLiveDurationModal(true); }}>
               <View style={[styles.locOptionIcon, { backgroundColor: '#8B5CF6' }]}>
                 <Ionicons name="wifi" size={18} color="#fff" />
               </View>
               <Text style={styles.locOptionTxt}>My live location</Text>
             </TouchableOpacity>
-
             <TouchableOpacity style={styles.locOptionBtn} onPress={() => { setShowLocationModal(false); setShowPinModal(true); }}>
               <View style={[styles.locOptionIcon, { backgroundColor: '#059669' }]}>
                 <Ionicons name="location" size={18} color="#fff" />
@@ -1028,11 +1195,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
 
       <Modal visible={showPinModal} transparent animationType="slide" onRequestClose={() => setShowPinModal(false)}>
         <View style={{ flex: 1 }}>
-          <MapView
-            style={{ flex: 1 }}
-            initialRegion={mapRegion}
-            onRegionChangeComplete={setMapRegion}
-          >
+          <MapView style={{ flex: 1 }} initialRegion={mapRegion} onRegionChangeComplete={setMapRegion}>
             <Marker coordinate={mapRegion} />
           </MapView>
           <View style={styles.pinToolbar}>
@@ -1054,7 +1217,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
           <View style={styles.emojiContent}>
             <Text style={styles.emojiTitle}>Select Emoji</Text>
             <View style={styles.emojiGrid}>
-              {['😀', '😂', '😍', '👍', '🔥', '🙏', '💯', '🚀', '❤️', '✅', '❌', '⚠️', '🚑', '🚨', '📞', '📍', '🏥', '🏠', '🚶', '🏃'].map(e => (
+              {['😀','😂','😍','👍','🔥','🙏','💯','🚀','❤️','✅','❌','⚠️','🚑','🚨','📞','📍','🏥','🏠','🚶','🏃'].map(e => (
                 <TouchableOpacity key={e} style={styles.emojiItem} onPress={() => handleEmojiSelect(e)}>
                   <Text style={{ fontSize: 28 }}>{e}</Text>
                 </TouchableOpacity>
@@ -1064,29 +1227,24 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </TouchableOpacity>
       </Modal>
 
-      {/* Full Image Lightbox */}
+      {/* Full image lightbox */}
       {fullImage && (
         <Modal visible transparent animationType="fade" onRequestClose={() => setFullImage(null)}>
           <View style={styles.fullImageBg}>
             <TouchableOpacity style={styles.fullImageClose} onPress={() => setFullImage(null)}>
               <Ionicons name="close" size={28} color="#fff" />
             </TouchableOpacity>
-            <AuthImage
-              uri={fullImage}
-              accessToken={session.accessToken}
-              style={styles.fullImage}
-              resizeMode="contain"
-            />
+            <AuthImage uri={fullImage} accessToken={session.accessToken} style={styles.fullImage} resizeMode="contain" />
           </View>
         </Modal>
       )}
 
-      {/* Action Menu (WhatsApp style bottom sheet) */}
+      {/* Action menu */}
       <Modal visible={showActionMenu} transparent animationType="slide" onRequestClose={() => setShowActionMenu(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setShowActionMenu(false)}>
           <View style={styles.whatsappActionMenu}>
             <View style={styles.whatsappReactionRow}>
-              {['👍', '❤️', '😂', '😮', '😢', '🔥'].map(emoji => (
+              {['👍','❤️','😂','😮','😢','🔥'].map(emoji => (
                 <TouchableOpacity
                   key={emoji}
                   style={styles.whatsappReactionBtn}
@@ -1108,11 +1266,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
             <View style={styles.whatsappActionList}>
               <TouchableOpacity
                 style={styles.whatsappActionItem}
-                onPress={() => {
-                  setReplyTo(selectedMessage);
-                  setShowActionMenu(false);
-                  inputRef.current?.focus();
-                }}
+                onPress={() => { setReplyTo(selectedMessage); setShowActionMenu(false); inputRef.current?.focus(); }}
               >
                 <Ionicons name="arrow-undo-outline" size={24} color="#1E40AF" />
                 <Text style={styles.whatsappActionText}>Reply</Text>
@@ -1128,8 +1282,10 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                   setShowActionMenu(false);
                 }}
               >
-                <Ionicons name={pinnedEvents.includes(selectedMessage?.id) ? "pin-off" : "pin"} size={24} color="#1E40AF" />
-                <Text style={styles.whatsappActionText}>{pinnedEvents.includes(selectedMessage?.id) ? "Unpin Message" : "Pin Message"}</Text>
+                <Ionicons name={pinnedEvents.includes(selectedMessage?.id) ? 'pin-off' : 'pin'} size={24} color="#1E40AF" />
+                <Text style={styles.whatsappActionText}>
+                  {pinnedEvents.includes(selectedMessage?.id) ? 'Unpin Message' : 'Pin Message'}
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1138,7 +1294,6 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                   setForwardMsg(selectedMessage);
                   setShowActionMenu(false);
                   setShowForwardModal(true);
-                  // Fetch rooms
                   try {
                     const roomIds = await getJoinedRooms(session.accessToken);
                     const roomDetails = await Promise.all(roomIds.map(async (rid) => {
@@ -1156,10 +1311,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
               {selectedMessage?.msgtype === 'm.file' && (
                 <TouchableOpacity
                   style={styles.whatsappActionItem}
-                  onPress={() => {
-                    Alert.alert('Download', 'File download started');
-                    setShowActionMenu(false);
-                  }}
+                  onPress={() => { Alert.alert('Download', 'File download started'); setShowActionMenu(false); }}
                 >
                   <Ionicons name="download-outline" size={24} color="#1E40AF" />
                   <Text style={styles.whatsappActionText}>Download File</Text>
@@ -1169,7 +1321,8 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
           </View>
         </TouchableOpacity>
       </Modal>
-      {/* Forward Modal */}
+
+      {/* Forward modal */}
       <Modal visible={showForwardModal} transparent animationType="slide" onRequestClose={() => setShowForwardModal(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setShowForwardModal(false)}>
           <View style={styles.whatsappActionMenu}>
@@ -1193,10 +1346,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                 </TouchableOpacity>
               ))}
             </ScrollView>
-            <TouchableOpacity
-              style={{ padding: 16, alignItems: 'center' }}
-              onPress={() => setShowForwardModal(false)}
-            >
+            <TouchableOpacity style={{ padding: 16, alignItems: 'center' }} onPress={() => setShowForwardModal(false)}>
               <Text style={{ fontSize: 16, color: '#EF4444', fontWeight: '600' }}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -1206,6 +1356,197 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ✅ NEW — VideoNoteModal
+// A circular in-app camera recorder. Works exactly like WhatsApp video notes:
+//   • Shows circular live preview
+//   • Tap record button to start
+//   • Tap again (or release) to stop & send
+//   • Red progress ring counts up to 60 seconds
+//
+// WHERE TO PLACE THIS: At the bottom of the file, after the ChatScreen export,
+// alongside AuthImage / AuthVideo / AuthAudio components.
+// ─────────────────────────────────────────────────────────────────────────────
+function VideoNoteModal({ visible, onClose, onSend }) {
+  const [camPerm, requestCamPerm] = useCameraPermissions();
+  const [micPerm, requestMicPerm] = useMicrophonePermissions();
+  const [isRecording, setIsRecording] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const cameraRef = useRef(null);
+  const timerRef = useRef(null);
+  const MAX_DURATION = 60; // seconds
+  const CIRCLE_SIZE = 220;
+  const RADIUS = (CIRCLE_SIZE - 8) / 2;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+  // Request permissions when modal opens
+  useEffect(() => {
+    if (visible) {
+      console.log('🔵 [VideoNoteModal] Opened — requesting permissions...');
+      requestCamPerm().then(r => console.log('🔵 [VideoNoteModal] Camera perm:', r.status));
+      requestMicPerm().then(r => console.log('🔵 [VideoNoteModal] Mic perm:', r.status));
+      setProgress(0);
+      setIsRecording(false);
+    }
+    return () => {
+      clearInterval(timerRef.current);
+    };
+  }, [visible]);
+
+  async function startRecording() {
+    if (!cameraRef.current) {
+      console.warn('🔵 [VideoNoteModal] Camera ref not ready');
+      return;
+    }
+    if (!camPerm?.granted || !micPerm?.granted) {
+      console.warn('🔵 [VideoNoteModal] Permissions not granted');
+      Alert.alert('Permission needed', 'Allow camera and microphone access.');
+      return;
+    }
+
+    console.log('🔵 [VideoNoteModal] Starting recording...');
+    setIsRecording(true);
+    setProgress(0);
+
+    let elapsed = 0;
+    timerRef.current = setInterval(() => {
+      elapsed += 0.1;
+      const p = elapsed / MAX_DURATION;
+      setProgress(p);
+      if (elapsed >= MAX_DURATION) {
+        console.log('🔵 [VideoNoteModal] Max duration reached, stopping...');
+        stopRecording();
+      }
+    }, 100);
+
+    try {
+      // recordAsync resolves when stopRecording() is called
+      const video = await cameraRef.current.recordAsync({ maxDuration: MAX_DURATION });
+      console.log('🔵 [VideoNoteModal] Recording done. URI:', video?.uri);
+      if (video?.uri) {
+        onSend(video.uri);
+      }
+    } catch (err) {
+      console.error('🔵 [VideoNoteModal] recordAsync error:', err.message);
+      // Don't show alert — user may have just cancelled
+    }
+  }
+
+  async function stopRecording() {
+    console.log('🔵 [VideoNoteModal] stopRecording called');
+    clearInterval(timerRef.current);
+    setIsRecording(false);
+    try {
+      cameraRef.current?.stopRecording();
+    } catch (err) {
+      console.warn('🔵 [VideoNoteModal] stopRecording error:', err.message);
+    }
+    onClose();
+  }
+
+  if (!visible) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={vidNoteStyles.overlay}>
+        <View style={vidNoteStyles.container}>
+
+          {/* ── Circular camera preview with progress ring ── */}
+          <View style={vidNoteStyles.circleWrap}>
+            {camPerm?.granted && micPerm?.granted ? (
+              <CameraView
+                ref={cameraRef}
+                style={vidNoteStyles.camera}
+                facing="front"
+                mode="video"
+              />
+            ) : (
+              <View style={[vidNoteStyles.camera, vidNoteStyles.permPlaceholder]}>
+                <Ionicons name="camera-outline" size={32} color="#94A3B8" />
+                <Text style={vidNoteStyles.permText}>Camera permission needed</Text>
+              </View>
+            )}
+
+            {/* Progress ring using react-native-svg */}
+            {isRecording && (
+              <Svg
+                style={StyleSheet.absoluteFill}
+                width={CIRCLE_SIZE}
+                height={CIRCLE_SIZE}
+              >
+                {/* Background ring */}
+                <Circle
+                  cx={CIRCLE_SIZE / 2}
+                  cy={CIRCLE_SIZE / 2}
+                  r={RADIUS}
+                  stroke="rgba(255,255,255,0.2)"
+                  strokeWidth={4}
+                  fill="none"
+                />
+                {/* Progress ring */}
+                <Circle
+                  cx={CIRCLE_SIZE / 2}
+                  cy={CIRCLE_SIZE / 2}
+                  r={RADIUS}
+                  stroke="#EF4444"
+                  strokeWidth={4}
+                  fill="none"
+                  strokeDasharray={CIRCUMFERENCE}
+                  strokeDashoffset={CIRCUMFERENCE * (1 - progress)}
+                  strokeLinecap="round"
+                  transform={`rotate(-90 ${CIRCLE_SIZE / 2} ${CIRCLE_SIZE / 2})`}
+                />
+              </Svg>
+            )}
+
+            {/* Recording indicator dot */}
+            {isRecording && (
+              <View style={vidNoteStyles.recIndicator}>
+                <View style={vidNoteStyles.recDotSmall} />
+              </View>
+            )}
+          </View>
+
+          {/* Duration text */}
+          {isRecording && (
+            <Text style={vidNoteStyles.durationText}>
+              {Math.min(Math.round(progress * MAX_DURATION), MAX_DURATION)}s / {MAX_DURATION}s
+            </Text>
+          )}
+
+          {/* Record / Stop button */}
+          <TouchableOpacity
+            style={[
+              vidNoteStyles.recordBtn,
+              isRecording && vidNoteStyles.recordBtnActive,
+            ]}
+            onPress={isRecording ? stopRecording : startRecording}
+            activeOpacity={0.8}
+          >
+            {isRecording
+              ? <View style={vidNoteStyles.stopIcon} />
+              : <View style={vidNoteStyles.recDot} />
+            }
+          </TouchableOpacity>
+
+          <Text style={vidNoteStyles.hint}>
+            {isRecording ? 'Tap to stop & send' : 'Tap to record'}
+          </Text>
+
+          {/* Cancel button */}
+          <TouchableOpacity onPress={onClose} style={vidNoteStyles.cancelBtn}>
+            <Ionicons name="close" size={22} color="#94A3B8" />
+            <Text style={vidNoteStyles.cancelTxt}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH COMPONENTS (unchanged from original)
+// ─────────────────────────────────────────────────────────────────────────────
 function AuthImage({ uri, accessToken, style, resizeMode = 'cover' }) {
   if (!uri) return (
     <View style={[style, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#DBEAFE' }]}>
@@ -1213,13 +1554,9 @@ function AuthImage({ uri, accessToken, style, resizeMode = 'cover' }) {
       <Text style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>Unavailable</Text>
     </View>
   );
-
   return (
     <ExpoImage
-      source={{
-        uri,
-        headers: { Authorization: `Bearer ${accessToken}` }
-      }}
+      source={{ uri, headers: { Authorization: `Bearer ${accessToken}` } }}
       style={style}
       contentFit={resizeMode === 'cover' ? 'cover' : 'contain'}
       transition={200}
@@ -1231,10 +1568,7 @@ function AuthVideo({ uri, accessToken, filename, isMe }) {
   return (
     <View style={[videoStyles.container, isMe && videoStyles.containerMe]}>
       <AVVideo
-        source={{
-          uri,
-          headers: { Authorization: `Bearer ${accessToken}` }
-        }}
+        source={{ uri, headers: { Authorization: `Bearer ${accessToken}` } }}
         useNativeControls
         resizeMode="contain"
         isLooping={false}
@@ -1247,45 +1581,30 @@ function AuthVideo({ uri, accessToken, filename, isMe }) {
 function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, duration: initialDuration }) {
   const player = useAudioPlayer({
     uri,
-    headers: { Authorization: `Bearer ${accessToken}` }
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   const [pos, setPos] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
-
-  // NEW: track duration state locally
   const [loadedDuration, setLoadedDuration] = useState(initialDuration || 0);
 
   useEffect(() => {
-    if (player.duration > 0 && !loadedDuration) {
-      setLoadedDuration(player.duration);
-    }
+    if (player.duration > 0 && !loadedDuration) setLoadedDuration(player.duration);
   }, [player.duration]);
 
   useEffect(() => {
-    if (isPlaying) {
-      player.play();
-    } else {
-      player.pause();
-    }
+    if (isPlaying) player.play();
+    else player.pause();
   }, [isPlaying, player]);
 
   useEffect(() => {
-    const unsubFinish = player.addListener('playToEnd', () => {
-      onFinish();
-      setPos(0);
-    });
+    const unsubFinish = player.addListener('playToEnd', () => { onFinish(); setPos(0); });
     const interval = setInterval(() => {
-      if (!isSeeking && isPlaying) {
-        setPos(player.currentTime);
-      }
+      if (!isSeeking && isPlaying) setPos(player.currentTime);
     }, 500);
-    return () => {
-      unsubFinish.remove();
-      clearInterval(interval);
-    };
+    return () => { unsubFinish.remove(); clearInterval(interval); };
   }, [player, onFinish, isPlaying, isSeeking]);
 
-  function fmtDuration(ms) {
+  function fmtD(ms) {
     if (!ms) return '0:00';
     const s = Math.round(ms / 1000);
     return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
@@ -1301,13 +1620,8 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
           onPress={onToggle}
           activeOpacity={0.7}
         >
-          <Ionicons
-            name={isPlaying ? 'pause' : 'play'}
-            size={22}
-            color={isPlaying ? '#fff' : '#1E40AF'}
-          />
+          <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color={isPlaying ? '#fff' : '#1E40AF'} />
         </TouchableOpacity>
-
         <View style={styles.audioSeekWrap}>
           <Slider
             style={styles.audioSlider}
@@ -1315,33 +1629,126 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
             maximumValue={duration > 0 ? duration : 100}
             value={pos}
             onSlidingStart={() => setIsSeeking(true)}
-            onSlidingComplete={(val) => {
-              player.seekTo(val);
-              setPos(val);
-              setIsSeeking(false);
-            }}
+            onSlidingComplete={(val) => { player.seekTo(val); setPos(val); setIsSeeking(false); }}
             minimumTrackTintColor={isMe ? '#DBEAFE' : '#1E40AF'}
             maximumTrackTintColor={isMe ? 'rgba(219,234,254,0.3)' : 'rgba(30,64,175,0.1)'}
             thumbTintColor={isMe ? '#fff' : '#1E40AF'}
           />
         </View>
       </View>
-
       <View style={styles.audioMetaRow}>
         <Text style={[styles.audioTimeTxt, isMe && styles.audioTimeTxtMe]}>
-          {fmtDuration(pos)} / {fmtDuration(duration)}
+          {fmtD(pos)} / {fmtD(duration)}
         </Text>
       </View>
     </View>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+function getInitials(name = '') {
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLES
+// ─────────────────────────────────────────────────────────────────────────────
 const videoStyles = StyleSheet.create({
   container: { width: 260, overflow: 'hidden', borderRadius: 12, backgroundColor: '#DBEAFE', marginBottom: 2 },
   containerMe: { backgroundColor: 'rgba(255,255,255,0.1)' },
   video: { width: 260, height: 195 },
-  info: { padding: 8, paddingBottom: 6 },
-  name: { fontSize: 12, color: '#1E3A8A', fontWeight: '600' },
+});
+
+// ✅ NEW — Circular video note bubble styles
+const circleVideoStyles = StyleSheet.create({
+  wrap: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    overflow: 'hidden',
+    backgroundColor: '#0F172A',
+    marginBottom: 4,
+  },
+  video: { width: 160, height: 160 },
+  label: {
+    fontSize: 11,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+});
+
+// ✅ NEW — VideoNoteModal styles
+const vidNoteStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.82)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  container: { alignItems: 'center', gap: 18 },
+  circleWrap: {
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    overflow: 'hidden',
+    backgroundColor: '#1E293B',
+  },
+  camera: { width: 220, height: 220 },
+  permPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  permText: { color: '#94A3B8', fontSize: 12, textAlign: 'center', paddingHorizontal: 20 },
+  recIndicator: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  recDotSmall: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+  },
+  durationText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: -8,
+  },
+  recordBtn: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#EF4444',
+  },
+  recordBtnActive: { backgroundColor: '#FEE2E2' },
+  recDot: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#EF4444',
+  },
+  stopIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    backgroundColor: '#EF4444',
+  },
+  hint: { color: 'rgba(255,255,255,0.7)', fontSize: 13 },
+  cancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10 },
+  cancelTxt: { color: '#94A3B8', fontSize: 14 },
 });
 
 const styles = StyleSheet.create({
@@ -1354,19 +1761,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E40AF',
     paddingHorizontal: 16, paddingVertical: 14, gap: 10,
   },
-  headerStatusDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#22C55E' },
-  headerTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  avatarSmall: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  headerTitleWrap: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  avatarSmall: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   headerTitle: { fontSize: 15, fontWeight: '700', color: '#fff' },
   headerSub: { fontSize: 11, color: 'rgba(255,255,255,0.65)' },
 
@@ -1377,19 +1773,16 @@ const styles = StyleSheet.create({
 
   msgRow: { flexDirection: 'row', marginBottom: 4, alignItems: 'flex-end' },
   msgRowMe: { flexDirection: 'row-reverse' },
-
   avatarWrap: { marginRight: 6 },
   avatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   avatarTxt: { color: '#1E40AF', fontSize: 13, fontWeight: '700' },
 
-  bubble: { maxWidth: '76%', borderRadius: 18, paddingHorizontal: 13, paddingTop: 9, paddingBottom: 7, borderWidth: 0, borderColor: 'transparent' },
+  bubble: { maxWidth: '76%', borderRadius: 18, paddingHorizontal: 13, paddingTop: 9, paddingBottom: 7 },
   bubbleThem: { backgroundColor: '#fff', borderBottomLeftRadius: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   bubbleMe: { backgroundColor: '#1E40AF', borderBottomRightRadius: 4, marginRight: 4 },
-  bubbleHighlighted: {
-    backgroundColor: '#FEF9C3', // Light yellow
-    borderColor: '#FDE047',
-    borderWidth: 1,
-  },
+  bubbleHighlighted: { backgroundColor: '#FEF9C3', borderColor: '#FDE047', borderWidth: 1 },
+  // ✅ NEW — transparent background for video note bubble
+  bubbleVideoNote: { backgroundColor: 'transparent', paddingHorizontal: 4, paddingVertical: 4 },
 
   senderName: { fontSize: 11, color: '#1E40AF', fontWeight: '700', marginBottom: 4 },
   msgText: { fontSize: 15, color: '#0F172A', lineHeight: 21 },
@@ -1412,79 +1805,31 @@ const styles = StyleSheet.create({
   audioPlayBtnActive: { backgroundColor: '#1E40AF' },
   audioPlayBtnActiveMe: { backgroundColor: 'rgba(255,255,255,0.3)' },
 
-  fileCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: '#EFF6FF', borderRadius: 12, padding: 12, minWidth: 170,
-    borderWidth: 0.5, borderColor: '#BFDBFE',
-  },
+  fileCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#EFF6FF', borderRadius: 12, padding: 12, minWidth: 170, borderWidth: 0.5, borderColor: '#BFDBFE' },
   fileCardMe: { backgroundColor: 'rgba(255,255,255,0.15)', borderColor: 'rgba(255,255,255,0.2)' },
   fileCardIconCircle: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   fileCardInfo: { flex: 1 },
   fileCardName: { fontSize: 13, fontWeight: '600', color: '#1E3A8A', lineHeight: 18 },
   fileCardMeta: { fontSize: 11, color: '#64748B', marginTop: 2 },
 
-  recordingBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: '#FFF7ED', paddingHorizontal: 16, paddingVertical: 12,
-    borderTopWidth: 1, borderTopColor: '#FED7AA',
-  },
+  recordingBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFF7ED', paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#FED7AA' },
   recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444' },
   recordingTxt: { flex: 1, fontSize: 13, color: '#92400E', fontWeight: '600' },
   cancelRecBtn: { padding: 4 },
 
-  // NEW: Attach grid (WhatsApp style, replaces old attachMenu)
-  attachMenu: {
-    backgroundColor: '#fff',
-    borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
-    paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
-    paddingHorizontal: 4,
-  },
-  attachHandle: {
-    alignSelf: 'center', width: 36, height: 4,
-    borderRadius: 2, backgroundColor: '#CBD5E1', marginBottom: 12,
-  },
-  attachGrid: {
-    flexDirection: 'row', flexWrap: 'wrap',
-  },
-  attachCell: {
-    width: '33.33%', alignItems: 'center', paddingVertical: 12, gap: 6,
-  },
-  attachItemIcon: {
-    width: 56, height: 56, borderRadius: 28,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 0.5,
-    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
+  attachMenu: { backgroundColor: '#fff', borderTopWidth: 0.5, borderTopColor: '#E2E8F0', paddingTop: 8, paddingBottom: Platform.OS === 'ios' ? 28 : 16, paddingHorizontal: 4 },
+  attachHandle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1', marginBottom: 12 },
+  attachGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  attachCell: { width: '33.33%', alignItems: 'center', paddingVertical: 12, gap: 6 },
+  attachItemIcon: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   attachItemLabel: { fontSize: 11, color: '#64748B', fontWeight: '600' },
 
-  inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    backgroundColor: '#fff', borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
-    padding: 10, paddingHorizontal: 10,
-    paddingBottom: Platform.OS === 'ios' ? 26 : 12,
-    gap: 8,
-  },
-  iconActionBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#F1F5F9',
-  },
-  iconActionBtnActive: { backgroundColor: '#DBEAFE' },
-  iconActionBtnRec: { backgroundColor: '#FEE2E2' },
-
-  textInput: {
-    flex: 1,
-    backgroundColor: '#F8FAFF',
-    borderWidth: 0.5, borderColor: '#CBD5E1',
-    borderRadius: 22,
-    paddingHorizontal: 16, paddingVertical: 10,
-    color: '#0F172A', fontSize: 15,
-    maxHeight: 100,
-  },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#1E40AF', alignItems: 'center', justifyContent: 'center', shadowColor: '#1E40AF', shadowOpacity: 0.3, shadowRadius: 6, elevation: 3 },
-  sendBtnDisabled: { opacity: 0.4 },
+  whatsappInputBar: { flexDirection: 'row', alignItems: 'flex-end', padding: 8, paddingBottom: Platform.OS === 'ios' ? 26 : 12, gap: 6 },
+  inputContainer: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', backgroundColor: '#fff', borderRadius: 25, paddingHorizontal: 8, paddingVertical: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, elevation: 2 },
+  whatsappTextInput: { flex: 1, maxHeight: 120, minHeight: 40, fontSize: 16, color: '#0F172A', paddingHorizontal: 8, paddingVertical: 8 },
+  innerActionBtn: { padding: 8 },
+  voiceSendBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#1E40AF', alignItems: 'center', justifyContent: 'center', shadowColor: '#1E40AF', shadowOpacity: 0.3, shadowRadius: 6, elevation: 3 },
+  voiceSendBtnRec: { backgroundColor: '#EF4444' },
 
   fullImageBg: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   fullImageClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, padding: 4 },
@@ -1519,104 +1864,37 @@ const styles = StyleSheet.create({
   emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 15, justifyContent: 'center' },
   emojiItem: { width: 50, height: 50, alignItems: 'center', justifyContent: 'center' },
 
-  replyPreview: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#fff', padding: 10,
-    borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
-    borderLeftWidth: 4, borderLeftColor: '#1E40AF',
-  },
+  replyPreview: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 10, borderTopWidth: 0.5, borderTopColor: '#E2E8F0', borderLeftWidth: 4, borderLeftColor: '#1E40AF' },
   replyTitle: { fontSize: 11, fontWeight: '700', color: '#1E40AF', marginBottom: 2 },
   replyText: { fontSize: 13, color: '#64748B' },
 
-  mentionPopup: {
-    backgroundColor: '#fff', borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
-    maxHeight: 200,
-  },
+  mentionPopup: { backgroundColor: '#fff', borderTopWidth: 0.5, borderTopColor: '#E2E8F0', maxHeight: 200 },
   mentionItem: { flexDirection: 'row', alignItems: 'center', padding: 10, borderBottomWidth: 0.5, borderBottomColor: '#F1F5F9' },
   mentionAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
   mentionAvatarTxt: { color: '#1E40AF', fontSize: 12, fontWeight: '700' },
   mentionName: { fontSize: 14, color: '#0F172A', fontWeight: '500' },
 
-  actionMenuContent: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
-  reactionGrid: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 20, paddingBottom: 20, borderBottomWidth: 0.5, borderBottomColor: '#F1F5F9' },
-  reactionItem: { padding: 8 },
-  actionItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, gap: 15 },
-  actionItemTxt: { fontSize: 16, color: '#0F172A', fontWeight: '500' },
-
-  whatsappInputBar: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    padding: 8, paddingBottom: Platform.OS === 'ios' ? 26 : 12,
-    gap: 6,
-  },
-  inputContainer: {
-    flex: 1, flexDirection: 'row', alignItems: 'flex-end',
-    backgroundColor: '#fff', borderRadius: 25,
-    paddingHorizontal: 8, paddingVertical: 4,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, elevation: 2,
-  },
-  whatsappTextInput: {
-    flex: 1, maxHeight: 120, minHeight: 40,
-    fontSize: 16, color: '#0F172A',
-    paddingHorizontal: 8, paddingVertical: 8,
-  },
-  innerActionBtn: { padding: 8 },
-  voiceSendBtn: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: '#1E40AF', alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#1E40AF', shadowOpacity: 0.3, shadowRadius: 6, elevation: 3,
-  },
-  voiceSendBtnRec: { backgroundColor: '#EF4444' },
-
-  whatsappActionMenu: {
-    backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 34 : 20,
-  },
-  whatsappReactionRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 0.5, borderBottomColor: '#F1F5F9',
-  },
-  whatsappReactionBtn: { padding: 4 },
-  whatsappActionList: { paddingHorizontal: 16, paddingTop: 8 },
-  whatsappActionItem: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 14, gap: 16,
-  },
-  whatsappActionText: { fontSize: 16, color: '#0F172A', fontWeight: '400' },
-
-  replyBubble: {
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    borderLeftWidth: 3, borderLeftColor: '#1E40AF',
-    padding: 6, borderRadius: 4, marginBottom: 6,
-  },
+  replyBubble: { backgroundColor: 'rgba(0,0,0,0.05)', borderLeftWidth: 3, borderLeftColor: '#1E40AF', padding: 6, borderRadius: 4, marginBottom: 6 },
   replySender: { fontSize: 11, fontWeight: '700', color: '#1E40AF', marginBottom: 2 },
   replyBody: { fontSize: 12, color: '#475569' },
-
-  replyBubbleMe: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderLeftColor: '#DBEAFE',
-  },
+  replyBubbleMe: { backgroundColor: 'rgba(255,255,255,0.15)', borderLeftColor: '#DBEAFE' },
   replySenderMe: { color: '#DBEAFE' },
   replyBodyMe: { color: 'rgba(219,234,254,0.8)' },
 
   reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginRight: 8 },
-  reactionPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 2,
-    backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1,
-  },
-  reactionPillActive: {
-    backgroundColor: '#DBEAFE',
-    borderColor: '#1E40AF',
-    borderWidth: 0.5,
-  },
+  reactionPill: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1 },
+  reactionPillActive: { backgroundColor: '#DBEAFE', borderColor: '#1E40AF', borderWidth: 0.5 },
   reactionEmoji: { fontSize: 10 },
   reactionCount: { fontSize: 10, fontWeight: '600', color: '#64748B' },
 
-  pinnedHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 8,
-    borderBottomWidth: 0.5, borderBottomColor: '#E2E8F0',
-  },
+  pinnedHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E2E8F0' },
   pinnedTxt: { flex: 1, fontSize: 13, color: '#1E293B', fontWeight: '500' },
   pinnedViewBtn: { fontSize: 12, fontWeight: '700', color: '#1E40AF' },
+
+  whatsappActionMenu: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 34 : 20 },
+  whatsappReactionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#F1F5F9' },
+  whatsappReactionBtn: { padding: 4 },
+  whatsappActionList: { paddingHorizontal: 16, paddingTop: 8 },
+  whatsappActionItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, gap: 16 },
+  whatsappActionText: { fontSize: 16, color: '#0F172A', fontWeight: '400' },
 });

@@ -153,11 +153,23 @@ const fmtDist = (m) => m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round
 const fmtTime = (s) => { if (s <= 0) return '0 min'; const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h === 0 ? `${m} min` : m === 0 ? `${h} hr` : `${h} hr ${m} min`; };
 const fmtArrival = (remSeconds) => { const d = new Date(Date.now() + remSeconds * 1000); let h = d.getHours(), m = d.getMinutes(); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return h + ':' + m.toString().padStart(2, '0') + ' ' + ap; };
 
-const ping = (ambulanceId, coords, h, spd, distM, timeS, status, stepI, totalS, dDest) =>
-  fetch(`${SERVER_URL}/update-unit-location`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ unitId: ambulanceId, latitude: coords.latitude, longitude: coords.longitude, heading: h || 0, speed: spd || 0, remainingDistM: distM || 0, remainingTimeS: timeS || 0, tripStatus: status, stepIdx: stepI || 0, totalSteps: totalS || 0, distToDest: dDest || 0 }),
-  }).catch(() => { });
+const ping = (ambulanceId, coords, spd, tripStatus) => {
+  if (!coords?.latitude || !coords?.longitude) return;
+ 
+  fetch(`${SERVER_URL}/track`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      unitId:      ambulanceId,
+      latitude:    coords.latitude,
+      longitude:   coords.longitude,
+      speed:       spd || 0,
+      tripStatus:  tripStatus || 'idle',
+      // locationInfo: omit → server will reverse-geocode from lat/lng
+      isActive:    true,
+    }),
+  }).catch(() => {});
+};
 
 const notifyStatus = (unitId, status) =>
   fetch(`${SERVER_URL}/update-dispatch-status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unitId, tripStatus: status }) });
@@ -406,10 +418,17 @@ export default function MapScreen({ route: navRoute, navigation }) {
   };
 
   const startPing = () => {
-    pingTimer.current = setInterval(() => {
-      if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, tripStatusRef.current, stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
-    }, 1000);
-  };
+  pingTimer.current = setInterval(() => {
+    if (carRef.current) {
+      ping(
+        ambulanceId,
+        carRef.current,        // { latitude, longitude }
+        speedRef.current,      // km/h
+        tripStatusRef.current  // "en_route" | "arrived" | etc.
+      );
+    }
+  }, 30000); // ← every 30 seconds
+};
 
   const stopAll = () => { clearInterval(pingTimer.current); locationSub.current?.remove(); };
 
@@ -539,7 +558,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
   setTripStatus('completed');
   isCompletedRef.current = true;
   notifyStatus(ambulanceId, 'completed');
-  if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+  if (carRef.current) ping(ambulanceId, carRef.current, speedRef.current, 'completed');
   stopAll();
   navigation.navigate('Alert');
 };
@@ -550,7 +569,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
       {
         text: 'Yes, Abandon', style: 'destructive', onPress: () => {
           tripStatusRef.current = 'abandoned'; setTripStatus('abandoned'); notifyStatus(ambulanceId, 'abandoned');
-          if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'abandoned', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+          if (carRef.current) ping(ambulanceId, carRef.current, speedRef.current, 'abandoned');
           stopAll(); navigation.navigate('Alert');
         }
       },

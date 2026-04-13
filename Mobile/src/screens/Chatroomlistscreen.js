@@ -372,7 +372,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   useEffect(() => {
     if (autoOpenRoomId) {
       setOpenRoomId(autoOpenRoomId);
-      setOpenLabel(roomDisplayName(autoOpenRoomId, dmNames));
+      setOpenLabel(roomDisplayName(autoOpenRoomId, roomNames, dmNames));
     }
   }, [autoOpenRoomId]);
 
@@ -381,6 +381,13 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     loadRooms();
     return () => { syncActive.current = false; };
   }, [extraRoomId]);
+
+  useEffect(() => {
+  if (openRoomId) {
+    const updatedName = roomDisplayName(openRoomId, roomNames, dmNames);
+    setOpenLabel(updatedName);
+  }
+}, [roomNames, dmNames]);
 
   const loadRooms = async () => {
     try {
