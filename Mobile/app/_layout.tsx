@@ -10,6 +10,7 @@ import { Slot, router, useSegments } from 'expo-router';
 import { useEffect } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
+import { ThemeProvider } from '../src/context/ThemeContext';
 
 function AuthGuard() {
   const auth = useAuth();
@@ -49,7 +50,9 @@ function AuthGuard() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <AuthGuard />
+      <ThemeProvider>
+        <AuthGuard />
+      </ThemeProvider>
     </AuthProvider>
   );
 }

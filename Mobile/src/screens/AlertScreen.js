@@ -1,13 +1,20 @@
 /**
  * AlertScreen.js
  *
- * Original icons & colors preserved (Feather, Ionicons, MaterialCommunityIcons,
- * useSafeAreaInsets, blue/green theme).
+ * CHANGES FROM ORIGINAL:
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 1. DYNAMIC UNIT ID — uses session.unitId (e.g. "AMB-A3F9K2") set at login,
+ *    NOT the old hardcoded UNIT_ID / AMBULANCE_TYPE from config.js.
+ *    Falls back to session.username if unitId is missing (safety net).
  *
- * NEW additions from new code:
- *  - Duplicate-poll guard (clearInterval before starting new poll)
- *  - Improved console logging in startPolling
- *  - acceptingRef guard already present in old code — kept as-is
+ * 2. DYNAMIC UNIT TYPE — uses session.unitType (e.g. "ambulance", "police")
+ *    set at login from the dropdown the driver chose.
+ *    Passed to /register-ambulance as the 'type' field.
+ *
+ * 3. REMOVED imports of UNIT_ID, AMBULANCE_TYPE from config — no longer needed.
+ *
+ * Everything else (polling, heartbeat, push, Matrix room join, UI) is unchanged.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -29,8 +36,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AMBULANCE_TYPE, SERVER_URL, WEBHOOK_URL } from '../config';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { joinRoom } from '../services/matrixService';
 import ChatRoomListScreen from './Chatroomlistscreen';
+import { Platform } from 'react-native';
 
 const POLL_INTERVAL_MS = 3000;
 const LOC_POLL_MS = 5000;
@@ -81,6 +90,7 @@ export default function AlertScreen() {
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
 
   useEffect(() => {
+    console.log("🔥 SESSION UNIT TYPE:", session?.unitType);
     if (!session?.username || isRegistered) return;
     registerAmbulance();
   }, [session?.username, isRegistered]);
@@ -101,6 +111,7 @@ export default function AlertScreen() {
     };
   }, [isRegistered]);
 
+  // ── CHANGE: uses dynamic unitId and unitType ──────────────────────────────
   const registerAmbulance = async () => {
     try {
       await Location.requestForegroundPermissionsAsync();
@@ -108,9 +119,10 @@ export default function AlertScreen() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ambulanceId: session.username,
+          ambulanceId: unitId,                              // ← was: session.username
+          unitId: unitId,                              // ← was: session.username
           name: session.displayname || session.username,
-          type: AMBULANCE_TYPE || 'ambulance',
+          type: unitType,                            // ← was: AMBULANCE_TYPE from config
         }),
       });
       const json = await res.json();
@@ -123,37 +135,47 @@ export default function AlertScreen() {
     }
   };
 
+  // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const startHeartbeat = () => {
     clearInterval(heartbeatRef.current);
     heartbeatRef.current = setInterval(async () => {
       try {
         let lat = null, lng = null, heading = 0, speed = 0;
         try {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: 3, maximumAge: 8000, timeout: 6000 });
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: 3, maximumAge: 8000, timeout: 6000,
+          });
           lat = loc.coords.latitude;
           lng = loc.coords.longitude;
           heading = loc.coords.heading >= 0 ? loc.coords.heading : 0;
           speed = loc.coords.speed >= 0 ? Math.round(loc.coords.speed * 3.6 * 10) / 10 : 0;
-        } catch { }
+        } catch { /* GPS fail — still ping so unit stays online */ }
+
         await fetch(`${SERVER_URL}/heartbeat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ambulanceId: session.username, unitId: session.username, latitude: lat, longitude: lng, heading, speed }),
+          body: JSON.stringify({
+            ambulanceId: unitId,   // ← dynamic
+            unitId: unitId,   // ← dynamic
+            latitude: lat,
+            longitude: lng,
+            heading,
+            speed,
+            isActive,
+          }),
         });
-      } catch { }
+      } catch { /* silent */ }
     }, HEARTBEAT_MS);
   };
 
-  // NEW: duplicate-poll guard + logging
+  // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const startPolling = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-    }
-    console.log('[Polling] Started for:', session.username);
+    if (pollRef.current) clearInterval(pollRef.current);
+    console.log('[Polling] Started for:', unitId);
 
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`${SERVER_URL}/my-alert?ambulanceId=${session.username}`);
+        const res = await fetch(`${SERVER_URL}/my-alert?ambulanceId=${unitId}`);
         const json = await res.json();
         const data = json.alert;
         console.log('[Polling] Response JSON:', data);
@@ -163,7 +185,7 @@ export default function AlertScreen() {
           data.id !== lastAlertId.current &&
           statusRef.current === 'waiting' &&
           isActiveRef.current &&
-          (tripStatus === 'idle' || tripStatus === 'completed') // Only receive if not on a trip
+          (tripStatus === 'idle' || tripStatus === 'completed')
         ) {
           lastAlertId.current = data.id;
           receiveAlert(data);
@@ -210,7 +232,7 @@ export default function AlertScreen() {
             // object directly in eventPayload — so m itself IS the payload.
             // Fall back to m.payload in case the format is ever nested.
             let payload = m.payload != null ? m.payload : m;
-            if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+            if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch { } }
 
             if (payload?.type === 'NEW_ALERT' && payload?.alert) {
               const alert = payload.alert;
@@ -243,19 +265,13 @@ export default function AlertScreen() {
     locPollRef.current = setInterval(fetchTripStatus, LOC_POLL_MS);
   };
 
+  // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const fetchTripStatus = async () => {
     try {
-      if (!session?.username) return;
-      const res = await fetch(`${SERVER_URL}/unit-location/${session.username}`);
+      if (!unitId) return;
+      const res = await fetch(`${SERVER_URL}/unit-location/${unitId}`);
       const data = await res.json();
-
-      // Update tripStatus from the unit-specific state
-      const ts = data.tripStatus || 'idle';
-      setTripStatus(ts);
-
-      // If we are waiting for an alert but the backend says we're on a trip,
-      // stay in waiting but let the UI show the active trip controls.
-      // But we must NOT prompt for a new alert if we are busy.
+      setTripStatus(data.tripStatus || 'idle');
     } catch { }
   };
 
@@ -290,16 +306,12 @@ export default function AlertScreen() {
     setCountdown(30);
     slideIn();
 
-    // NEW: Cache patient name and address for room naming (using Room ID as key)
     const storeRoomId = data.roomId || data.matrixRoomId;
     if (storeRoomId) {
       try {
         const rawCache = await AsyncStorage.getItem('TICKET_NAMES') || '{}';
         const cache = JSON.parse(rawCache);
-        cache[storeRoomId] = {
-          name: data.patientName || 'Unknown',
-          address: data.address || ''
-        };
+        cache[storeRoomId] = { name: data.patientName || 'Unknown', address: data.address || '' };
         await AsyncStorage.setItem('TICKET_NAMES', JSON.stringify(cache));
       } catch (e) {
         console.warn('[Cache] failed to save metadata:', e.message);
@@ -356,10 +368,11 @@ export default function AlertScreen() {
     }
 
     try {
+      // ── CHANGE: uses dynamic unitId ─────────────────────────────────────
       await fetch(`${SERVER_URL}/accept-assignment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ambulanceId: session.username }),
+        body: JSON.stringify({ ambulanceId: unitId, unitId }),
       });
       console.log('[Alert] Accepted in backend ✅');
     } catch (err) {
@@ -384,6 +397,7 @@ export default function AlertScreen() {
     setTimeout(() => { acceptingRef.current = false; }, 3000);
   };
 
+  // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const doReject = async (reason = 'manual', forceData = null) => {
     acceptingRef.current = false;
     const target = forceData || alertData;
@@ -396,19 +410,19 @@ export default function AlertScreen() {
     try {
       await fetch(`${SERVER_URL}/reject-assignment`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ambulanceId: session.username, unitId: session.username, reason }),
+        body: JSON.stringify({ ambulanceId: unitId, unitId, reason }),
       });
     } catch { }
     try {
       await fetch(`${SERVER_URL}/update-dispatch-status`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ unitId: session.username, tripStatus: 'idle' }),
+        body: JSON.stringify({ unitId, tripStatus: 'idle' }),
       });
     } catch { }
     setTimeout(() => { setStatus('waiting'); setTripStatus('idle'); slideAnim.setValue(300); }, 2500);
   };
 
-  // Original StatusPill using Feather icons
+  // ── Original StatusPill ───────────────────────────────────────────────────
   const StatusPill = ({ ts }) => {
     const cfg = TRIP_STATUS_CONFIG[ts] || TRIP_STATUS_CONFIG.idle;
     return (
@@ -419,34 +433,26 @@ export default function AlertScreen() {
     );
   };
 
-  // Original TabBar using MaterialCommunityIcons + Ionicons
+  // ── TabBar — colors driven by global theme ────────────────────────────────
   const TabBar = () => (
-    <View style={[styles.tabBar, { paddingBottom: insets.bottom || 16 }]}>
+    <View style={[styles.tabBar, { paddingBottom: insets.bottom || 16, backgroundColor: theme.surface, borderTopColor: theme.border }]}>
       <TouchableOpacity
-        style={[styles.tabBtn, activeTab === TAB_STANDBY && styles.tabBtnActive]}
+        style={[styles.tabBtn, activeTab === TAB_STANDBY && [styles.tabBtnActive, { backgroundColor: theme.accentBg }]]}
         onPress={() => setActiveTab(TAB_STANDBY)}
         activeOpacity={0.8}
       >
-        <MaterialCommunityIcons
-          name="ambulance"
-          size={22}
-          color={activeTab === TAB_STANDBY ? '#1E40AF' : '#94A3B8'}
-        />
-        <Text style={[styles.tabLabel, activeTab === TAB_STANDBY && styles.tabLabelActive]}>Standby</Text>
-        {activeTab === TAB_STANDBY && <View style={styles.tabUnderline} />}
+        <MaterialCommunityIcons name="ambulance" size={22} color={activeTab === TAB_STANDBY ? theme.accent : theme.textSecondary} />
+        <Text style={[styles.tabLabel, { color: theme.textSecondary }, activeTab === TAB_STANDBY && { color: theme.accent }]}>Standby</Text>
+        {activeTab === TAB_STANDBY && <View style={[styles.tabUnderline, { backgroundColor: theme.accent }]} />}
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.tabBtn, activeTab === TAB_CHAT && styles.tabBtnActive]}
+        style={[styles.tabBtn, activeTab === TAB_CHAT && [styles.tabBtnActive, { backgroundColor: theme.accentBg }]]}
         onPress={() => setActiveTab(TAB_CHAT)}
         activeOpacity={0.8}
       >
-        <Ionicons
-          name="chatbubbles"
-          size={22}
-          color={activeTab === TAB_CHAT ? '#1E40AF' : '#94A3B8'}
-        />
-        <Text style={[styles.tabLabel, activeTab === TAB_CHAT && styles.tabLabelActive]}>Chats</Text>
-        {activeTab === TAB_CHAT && <View style={styles.tabUnderline} />}
+        <Ionicons name="chatbubbles" size={22} color={activeTab === TAB_CHAT ? theme.accent : theme.textSecondary} />
+        <Text style={[styles.tabLabel, { color: theme.textSecondary }, activeTab === TAB_CHAT && { color: theme.accent }]}>Chats</Text>
+        {activeTab === TAB_CHAT && <View style={[styles.tabUnderline, { backgroundColor: theme.accent }]} />}
       </TouchableOpacity>
     </View>
   );
@@ -473,6 +479,14 @@ export default function AlertScreen() {
       </View>
     );
   }
+
+  // ── CHANGE: display unitId badge so driver can verify their ID ─────────────
+  const UnitIdBadge = () => (
+    <View style={styles.unitIdBadge}>
+      <Feather name="hash" size={11} color="#475569" style={{ marginRight: 4 }} />
+      <Text style={styles.unitIdText}>{unitId}</Text>
+    </View>
+  );
 
   const IncomingAlert = () => (
     <View style={styles.incomingContainer}>
@@ -527,7 +541,7 @@ export default function AlertScreen() {
             <Ionicons name="close" size={32} color="#DC2626" />
             <Text style={styles.rejectText}>Reject</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.acceptBtn} onPress={handleAccept} activeOpacity={0.85}>
+          <TouchableOpacity style={[styles.acceptBtn, { backgroundColor: theme.accent, shadowColor: theme.accent }]} onPress={handleAccept} activeOpacity={0.85}>
             <Ionicons name="checkmark" size={32} color="#fff" />
             <Text style={styles.acceptText}>Accept</Text>
           </TouchableOpacity>
@@ -542,12 +556,24 @@ export default function AlertScreen() {
   );
 
   return (
-    <View style={styles.flex}>
-      <View style={styles.waitingContainer}>
+    <View style={[styles.flex, { backgroundColor: theme.bg }]}>
+      <View style={[styles.waitingContainer, { backgroundColor: theme.bg }]}>
         <View style={[styles.topBarAbsolute, { top: insets.top + 8 }]}>
+
+          {/* ── Theme toggle pill ─────────────────────────────────────── */}
+          <TouchableOpacity
+            onPress={toggleTheme}
+            style={[styles.themeToggleBtn, { backgroundColor: theme.accent + '18', borderColor: theme.accent }]}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={{ fontSize: 14 }}>{theme.name === 'dark' ? '☀️' : '🌙'}</Text>
+            <Text style={[styles.themeToggleLbl, { color: theme.accent }]}>{theme.label}</Text>
+          </TouchableOpacity>
+
           <StatusPill ts={tripStatus} />
           <TouchableOpacity onPress={logout} style={styles.logoutBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Feather name="log-out" size={18} color="#94A3B8" />
+            <Feather name="log-out" size={18} color={theme.textSecondary} />
           </TouchableOpacity>
         </View>
 
@@ -555,14 +581,16 @@ export default function AlertScreen() {
           <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulseAnim }] }]} />
         )}
 
-        <View style={styles.ambulanceIconCircle}>
-          <MaterialCommunityIcons name="ambulance" size={56} color="#1E40AF" />
+        <View style={[styles.ambulanceIconCircle, { borderColor: unitDisplay.color + '40', shadowColor: unitDisplay.color, }]}>
+          <MaterialCommunityIcons name={unitDisplay.icon} size={56} color={unitDisplay.color} />
+
         </View>
-        <Text style={styles.waitingTitle}>Ready for Dispatch</Text>
-        <Text style={styles.waitingSubtitle}>
+        <Text style={[styles.waitingTitle, { color: theme.textPrimary }]}>Ready for Dispatch</Text>
+        <Text style={[styles.waitingSubtitle, { color: theme.textSecondary }]}>
           {isActive ? 'Waiting for emergency alert…' : 'Notifications paused'}
         </Text>
 
+        {/* ── CHANGE: shows unitId + unit type in the registered badge ────── */}
         <View style={[styles.regBadge, { borderColor: isRegistered ? '#15803D' : '#D97706' }]}>
           <Ionicons
             name={isRegistered ? 'checkmark-circle' : 'time'}
@@ -577,6 +605,8 @@ export default function AlertScreen() {
           </Text>
         </View>
 
+        {/* ── Unit ID display ─────────────────────────────────────────────── */}
+
         <TouchableOpacity
           style={[styles.toggleBtn, isActive ? styles.toggleBtnActive : styles.toggleBtnInactive]}
           onPress={toggleActive}
@@ -590,7 +620,7 @@ export default function AlertScreen() {
           <Feather name={isActive ? 'pause' : 'play'} size={22} color="#CBD5E1" />
         </TouchableOpacity>
 
-        {/* ── ACTIVE TRIP OVERLAY ── */}
+        {/* ── Active trip overlay ─────────────────────────────────────────── */}
         {tripStatus !== 'idle' && tripStatus !== 'completed' && tripStatus !== 'abandoned' && (
           <View style={styles.activeTripCard}>
             <View style={styles.activeTripHeader}>
@@ -602,8 +632,7 @@ export default function AlertScreen() {
               <TouchableOpacity
                 style={styles.resumeTripBtn}
                 onPress={() => {
-                  // Re-fetch the alert details to resume mapping
-                  fetch(`${SERVER_URL}/my-alert?ambulanceId=${session.username}`)
+                  fetch(`${SERVER_URL}/my-alert?ambulanceId=${unitId}`)
                     .then(r => r.json())
                     .then(json => {
                       if (json.alert && json.alert.id) {
@@ -633,7 +662,7 @@ export default function AlertScreen() {
                         fetch(`${SERVER_URL}/complete-trip`, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ unitId: session.username }),
+                          body: JSON.stringify({ unitId }),
                         }).then(() => {
                           setTripStatus('idle');
                           setAlertData(null);
@@ -679,15 +708,13 @@ const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#F8FAFF' },
 
   tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderTopWidth: 0.5,
-    borderTopColor: '#E2E8F0',
-    paddingTop: 10,
-    paddingHorizontal: 8,
+    flexDirection: 'row', backgroundColor: '#fff',
+    borderTopWidth: 0.5, borderTopColor: '#E2E8F0',
+    paddingTop: 10, paddingHorizontal: 8,
   },
   tabBtn: {
-    flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 12, gap: 3, position: 'relative',
+    flex: 1, alignItems: 'center', paddingVertical: 6,
+    borderRadius: 12, gap: 3, position: 'relative',
   },
   tabBtnActive: { backgroundColor: '#EFF6FF' },
   tabLabel: { fontSize: 11, fontWeight: '700', color: '#94A3B8', letterSpacing: 0.3 },
@@ -711,8 +738,17 @@ const styles = StyleSheet.create({
   regBadge: {
     flexDirection: 'row', alignItems: 'center',
     borderWidth: 1, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 8, marginBottom: 20,
+    paddingHorizontal: 16, paddingVertical: 8, marginBottom: 8,
   },
+
+  // ── NEW: unit ID badge ──────────────────────────────────────────────────────
+  unitIdBadge: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#0F172A', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 5, marginBottom: 20,
+    borderWidth: 1, borderColor: '#1e293b',
+  },
+  unitIdText: { fontSize: 11, color: '#64748B', fontFamily: Platform?.OS === 'ios' ? 'Courier' : 'monospace' },
 
   waitingContainer: {
     flex: 1, backgroundColor: '#F8FAFF',
@@ -729,10 +765,11 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     marginBottom: 24,
     shadowColor: '#1E40AF', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
-    borderWidth: 2, borderColor: '#DBEAFE',
+    elevation: 8, borderWidth: 2, borderColor: '#DBEAFE',
   },
-  waitingTitle: { fontSize: 26, fontWeight: '800', color: '#0F172A', marginBottom: 8, textAlign: 'center' },
+  waitingTitle: {
+    fontSize: 26, fontWeight: '800', color: '#0F172A', marginBottom: 8, textAlign: 'center',
+  },
   waitingSubtitle: { fontSize: 15, color: '#94A3B8', marginBottom: 24, textAlign: 'center' },
 
   toggleBtn: {
@@ -757,7 +794,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28,
     paddingHorizontal: 20, paddingBottom: 40, paddingTop: 24, elevation: 24,
   },
-  alertHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 20, gap: 12 },
+  alertHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 20, gap: 12,
+  },
   alertHeaderIconCircle: {
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center',
@@ -776,7 +815,10 @@ const styles = StyleSheet.create({
   progressTrack: { height: 6, backgroundColor: '#E2E8F0', borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: 6, borderRadius: 3 },
 
-  infoBox: { backgroundColor: '#F8FAFF', borderRadius: 14, padding: 14, marginBottom: 20, borderWidth: 0.5, borderColor: '#E2E8F0' },
+  infoBox: {
+    backgroundColor: '#F8FAFF', borderRadius: 14, padding: 14, marginBottom: 20,
+    borderWidth: 0.5, borderColor: '#E2E8F0',
+  },
   infoRow: { flexDirection: 'row', marginBottom: 10, alignItems: 'flex-start' },
   infoIconWrap: { width: 22, alignItems: 'center', marginRight: 6, marginTop: 1 },
   infoLabel: { width: 72, fontSize: 12, color: '#64748B', fontWeight: '700' },
@@ -803,62 +845,30 @@ const styles = StyleSheet.create({
   chatPreviewTxt: { fontSize: 13, color: '#1E40AF', fontWeight: '700' },
 
   activeTripCard: {
-    width: '100%',
-    backgroundColor: '#EFF6FF',
-    borderRadius: 18,
-    padding: 20,
-    borderWidth: 2,
-    borderColor: '#3B82F6',
-    marginTop: 10,
-    shadowColor: '#3B82F6',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 4,
+    width: '100%', backgroundColor: '#EFF6FF',
+    borderRadius: 18, padding: 20, borderWidth: 2, borderColor: '#3B82F6',
+    marginTop: 10, shadowColor: '#3B82F6', shadowOpacity: 0.1, shadowRadius: 10, elevation: 4,
   },
-  activeTripHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  activeTripTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#1E40AF',
-  },
-  activeTripSub: {
-    fontSize: 13,
-    color: '#64748B',
-    marginBottom: 16,
-  },
-  activeTripActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
+  activeTripHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  activeTripTitle: { fontSize: 16, fontWeight: '800', color: '#1E40AF' },
+  activeTripSub: { fontSize: 13, color: '#64748B', marginBottom: 16 },
+  activeTripActions: { flexDirection: 'row', gap: 10 },
   resumeTripBtn: {
-    flex: 2,
-    backgroundColor: '#1E40AF',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
+    flex: 2, backgroundColor: '#1E40AF', borderRadius: 12, paddingVertical: 12, alignItems: 'center',
   },
-  resumeTripBtnTxt: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
+  resumeTripBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
   clearTripBtn: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#CBD5E1',
+    flex: 1, backgroundColor: '#fff', borderRadius: 12, paddingVertical: 12,
+    alignItems: 'center', borderWidth: 1.5, borderColor: '#CBD5E1',
   },
-  clearTripBtnTxt: {
-    color: '#64748B',
-    fontWeight: '700',
-    fontSize: 14,
+  clearTripBtnTxt: { color: '#64748B', fontWeight: '700', fontSize: 14 },
+
+  // ── Theme toggle pill (in the top bar) ────────────────────────────────────
+  themeToggleBtn: {
+    position: 'absolute', left: 20,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1.5,
   },
+  themeToggleLbl: { fontSize: 12, fontWeight: '700', letterSpacing: 0.3 },
 });

@@ -23,6 +23,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { SERVER_URL } from '../config';
 import {
   getJoinedRooms,
@@ -310,6 +311,7 @@ const MP = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   const { session } = useAuth();
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
 
   const [rooms, setRooms] = useState([]);
@@ -372,7 +374,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   useEffect(() => {
     if (autoOpenRoomId) {
       setOpenRoomId(autoOpenRoomId);
-      setOpenLabel(roomDisplayName(autoOpenRoomId, dmNames));
+      setOpenLabel(roomDisplayName(autoOpenRoomId, roomNames, dmNames));
     }
   }, [autoOpenRoomId]);
 
@@ -381,6 +383,13 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     loadRooms();
     return () => { syncActive.current = false; };
   }, [extraRoomId]);
+
+  useEffect(() => {
+  if (openRoomId) {
+    const updatedName = roomDisplayName(openRoomId, roomNames, dmNames);
+    setOpenLabel(updatedName);
+  }
+}, [roomNames, dmNames]);
 
   const loadRooms = async () => {
     try {
@@ -590,8 +599,8 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     const isDM = !!dmNames[openRoomId];
 
     return (
-      <View style={styles.flex}>
-        <View style={[styles.chatHeader, { paddingTop: insets.top + 10 }]}>
+      <View style={[styles.flex, { backgroundColor: theme.bg }]}>
+        <View style={[styles.chatHeader, { paddingTop: insets.top + 10, backgroundColor: theme.topBar }]}>
           <TouchableOpacity onPress={closeRoom} style={styles.backBtn} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="chevron-back" size={26} color="#fff" />
           </TouchableOpacity>
@@ -666,7 +675,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     };
 
     return (
-      <TouchableOpacity style={styles.roomRow} onPress={() => openRoom(item, displayName)} activeOpacity={0.75}>
+      <TouchableOpacity style={[styles.roomRow, { backgroundColor: theme.surface }]} onPress={() => openRoom(item, displayName)} activeOpacity={0.75}>
         <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
             <Text style={[styles.avatarTxt, { color: colors.text }]}>{getInitials(displayName)}</Text>
           {isDMRoom && <View style={[styles.onlineDot, { backgroundColor: '#A78BFA' }]} />}
@@ -676,11 +685,15 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
           <View style={styles.roomNameRow}>
             <View style={styles.roomNameWrap}>
               {isDMRoom && <View style={styles.dmTag}><Text style={styles.dmTagTxt}>DM</Text></View>}
-              <Text style={[styles.roomName, hasUnread && styles.roomNameUnread]} numberOfLines={1}>
+              {/* roomName — always use theme.textPrimary so it's visible in dark & light */}
+              <Text
+                style={[styles.roomName, { color: theme.textPrimary }, hasUnread && { fontWeight: '700', color: theme.textPrimary }]}
+                numberOfLines={1}
+              >
                 {displayName}
               </Text>
             </View>
-            <Text style={[styles.roomTime, hasUnread && styles.roomTimeUnread]}>{time}</Text>
+            <Text style={[styles.roomTime, { color: theme.textSecondary }, hasUnread && { color: theme.accent, fontWeight: '600' }]}>{time}</Text>
           </View>
 
           {isTicketRoom && (
@@ -691,7 +704,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
 
           {isTicketRoom && patientAddress && (
             <View style={{ marginBottom: 4 }}>
-              <Text style={{ fontSize: 11, color: '#475569' }} numberOfLines={1}>{patientAddress}</Text>
+              <Text style={{ fontSize: 11, color: theme.textSecondary }} numberOfLines={1}>{patientAddress}</Text>
             </View>
           )}
 
@@ -699,14 +712,13 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
             <View style={styles.previewLeft}>
               {getMsgTypeIcon()}
               <Text
-                style={[styles.roomPreview, hasUnread && styles.roomPreviewUnread]}
+                style={[styles.roomPreview, { color: theme.textSecondary }, hasUnread && { color: theme.textPrimary, fontWeight: '500' }]}
                 numberOfLines={1}
               >
                 {isMe ? `You: ${preview}` : preview}
               </Text>
             </View>
 
-            {/* FIX 2: WhatsApp-style unread badge on the right */}
             {hasUnread && (
               <View style={styles.unreadBadge}>
                 <Text style={styles.unreadTxt}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
@@ -719,21 +731,21 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   };
 
   return (
-    <View style={styles.flex}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 10 }]}>
+    <View style={[styles.flex, { backgroundColor: theme.bg }]}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 10, backgroundColor: theme.topBar }]}>
         <Text style={styles.topBarTitle}>Messages</Text>
         <TouchableOpacity onPress={loadRooms} style={styles.refreshBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Feather name="refresh-cw" size={20} color="rgba(255,255,255,0.8)" />
         </TouchableOpacity>
       </View>
 
-      <View style={styles.searchWrap}>
-        <View style={styles.searchBar}>
-          <Feather name="search" size={16} color="#94A3B8" style={{ marginRight: 8 }} />
+      <View style={[styles.searchWrap, { backgroundColor: theme.topBar }]}>
+        <View style={[styles.searchBar, { backgroundColor: theme.surface }]}>
+          <Feather name="search" size={16} color={theme.textSecondary} style={{ marginRight: 8 }} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: theme.textPrimary }]}
             placeholder="Search chats…"
-            placeholderTextColor="#94A3B8"
+            placeholderTextColor={theme.textSecondary}
             value={search}
             onChangeText={setSearch}
           />
@@ -752,16 +764,16 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
         </View>
       ) : filtered.length === 0 ? (
         <View style={styles.emptyWrap}>
-          <Ionicons name="chatbubbles-outline" size={56} color="#BFDBFE" />
-          <Text style={styles.emptyTxt}>No chats yet</Text>
-          <Text style={styles.emptySub}>Your dispatch and alert rooms will appear here</Text>
+          <Ionicons name="chatbubbles-outline" size={56} color={theme.accent} />
+          <Text style={[styles.emptyTxt, { color: theme.textPrimary }]}>No chats yet</Text>
+          <Text style={[styles.emptySub, { color: theme.textSecondary }]}>Your dispatch and alert rooms will appear here</Text>
         </View>
       ) : (
         <FlatList
           data={filtered}
           keyExtractor={r => r.roomId}
           renderItem={renderRoom}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: theme.border }]} />}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: 20 }}
         />

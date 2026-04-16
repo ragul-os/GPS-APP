@@ -1,5 +1,5 @@
 /**
- * server.js — Emergency Control System  v4.1
+ * server.js — Emergency Control System  v5.2
  *
  * KEY FIX vs v4.0:
  * ─────────────────────────────────────────────────────────────────────────────
@@ -24,6 +24,7 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 const { v4: uuidv4 } = require('uuid');
 const { connect: connectNats, StringCodec } = require('nats');
 const { Pool: PgPool } = require('pg');
@@ -39,7 +40,7 @@ app.use(cors({ origin: '*' }));
 app.use(bodyParser.json());
 
 // ══════════════════════════════════════════════════════════════════════════════
-// DATABASE
+// MYSQL — forms, submissions
 // ══════════════════════════════════════════════════════════════════════════════
 const db = mysql.createPool({
   host: process.env.MYSQL_HOST || 'localhost',
@@ -88,47 +89,44 @@ let nc = null;
 const units = new Map();
 const assignments = new Map();
 const incidents = new Map();
+const unitTripState = new Map();
 
-// ── PER-UNIT trip state (THE FIX) ─────────────────────────────────────────
-// Each unit that posts a location update gets its own slot here.
-// /unit-location/:unitId reads ONLY from unitTripState.get(unitId).
-const unitTripState = new Map(); // Map<unitId, tripStateObj>
-
-function makeFreshTripState(overrides = {}) {
-  return {
-    latitude: null,
-    longitude: null,
-    heading: 0,
-    speed: 0,
-    remainingDistM: 0,
-    remainingTimeS: 0,
-    tripStatus: 'dispatched',
-    stepIdx: 0,
-    totalSteps: 0,
-    distToDest: 0,
-    timestamp: null,
-    trail: [],
-    ...overrides,
-  };
-}
-
-// Legacy single-unit shared state — kept so /ambulance-location still works
-// for any old clients. NOT used by the new per-unit tracking.
 let ambulanceLocation = makeFreshTripState({ tripStatus: 'idle' });
-
-let currentAlert = {
-  id: null, status: 'waiting', patientName: '',
-  patientPhone: '', address: '', destination: null, notes: '', reason: ''
-};
-
+let currentAlert = { id: null, status: 'waiting', patientName: '', patientPhone: '', address: '', destination: null, notes: '', reason: '' };
 let pushTokens = new Set();
 
+// ══════════════════════════════════════════════════════════════════════════════
+// OFFLINE DETECTION — checks lastSeen set by /heartbeat
+// When a unit transitions to offline → insert ONE DB row recording the event
+// ══════════════════════════════════════════════════════════════════════════════
 setInterval(() => {
   const now = Date.now();
   for (const [id, unit] of units.entries()) {
     if (now - unit.lastSeen > HEARTBEAT_TIMEOUT_MS && unit.status !== 'offline') {
       unit.status = 'offline';
       console.log(`📴 Unit offline: ${id}`);
+
+      const ts = unitTripState.get(id);
+      // Best coords: prefer unitTripState (most recent from /track or heartbeat),
+      // fall back to unit.location (set by heartbeat), skip insert if nothing known
+      const offLat = ts?.latitude || unit.location?.latitude;
+      const offLng = ts?.longitude || unit.location?.longitude;
+      const offSpd = ts?.speed || unit.location?.speed || 0;
+
+      if (offLat && offLng) {
+        trackInsert({
+          unitId: id,
+          latitude: offLat,
+          longitude: offLng,
+          speed: offSpd,
+          tripStatus: ts?.tripStatus || 'idle',
+          locationInfo: null,
+          forceDeviceStatus: 'offline',
+        }).catch(() => { });
+        console.log(`🔴 DB: ${id} → offline @ ${offLat},${offLng}`);
+      } else {
+        console.log(`🔴 Unit ${id} went offline — no coords available, skipping DB insert`);
+      }
     }
   }
 }, 15000);
@@ -173,12 +171,12 @@ setInterval(() => {
     } catch (tlsErr) {
       // If TLS failed, attempt plain text fallback
       if (tlsEnabled) {
-         console.warn('⚠️  NATS TLS connection failed. Attempting plain connection...');
-         delete natsOptions.tls;
-         nc = await connectNats(natsOptions);
-         console.log(`✅ NATS connected → ${natsUrl} (Plain fallback)`);
+        console.warn('⚠️  NATS TLS connection failed. Attempting plain connection...');
+        delete natsOptions.tls;
+        nc = await connectNats(natsOptions);
+        console.log(`✅ NATS connected → ${natsUrl} (Plain fallback)`);
       } else {
-         throw tlsErr;
+        throw tlsErr;
       }
     }
 
@@ -188,17 +186,17 @@ setInterval(() => {
         try {
           const data = JSON.parse(sc.decode(msg.data));
           if (!data.unit_id && !data.ticket_no && !data.unitId) continue;
-          
+
           const unitId = data.unit_id || data.unitId || data.ambulanceId;
           const ticketNo = data.ticket_no || data.ticketNo || '';
           console.log(`📥 NATS RECV [gps.stream.req] -> Unit: ${unitId}, Ticket: ${ticketNo}`);
-          
+
           let lat = parseFloat(data.latitude);
           let lng = parseFloat(data.longitude);
           const speed = parseFloat(data.speed) || 0;
           const tripStatus = data.trip_status || data.tripStatus || 'en_route';
           const heading = parseFloat(data.heading) || 0;
-          
+
           if (isNaN(lat) || isNaN(lng)) continue;
 
           // Store in PostgreSQL
@@ -260,7 +258,7 @@ setInterval(() => {
             ticket_no: ticketNo,
             ...point
           })));
-          
+
         } catch (e) {
           console.error('❌ Error processing gps.stream.req:', e.message);
         }
@@ -276,25 +274,25 @@ setInterval(() => {
           if (data.alert_type === 'dispatch' || data.alert_type === 'assignment') {
             const { unit_id, ticket_data } = data;
             const targetUnit = unit_id || ticket_data?.unitId || 'matrixuser';
-            
+
             console.log(`📡 [NATS DISPATCH] Received from Webhook for Unit: ${targetUnit}`);
-            
+
             // 1. Sync internal state (Memory)
             if (!units.has(targetUnit)) {
-               units.set(targetUnit, { id: targetUnit, name: targetUnit, status: 'online', type: ticket_data?.vehicleType || 'ambulance', lastSeen: Date.now() });
+              units.set(targetUnit, { id: targetUnit, name: targetUnit, status: 'online', type: ticket_data?.vehicleType || 'ambulance', lastSeen: Date.now() });
             }
             const unit = units.get(targetUnit);
 
             const alertId = ticket_data.id || uuidv4();
-            const alertObj = { 
-              ...ticket_data, 
-              id: alertId, 
-              status: 'pending', 
+            const alertObj = {
+              ...ticket_data,
+              id: alertId,
+              status: 'pending',
               assignedAt: Date.now(),
               unitId: targetUnit,
               unitName: unit.name
             };
-            
+
             assignments.set(targetUnit, alertObj);
             incidents.set(alertId, alertObj);
             unit.status = 'busy';
@@ -311,7 +309,7 @@ setInterval(() => {
             } catch (dbErr) {
               console.warn('⚠️ MySQL Alert Save Failed:', dbErr.message);
             }
-            
+
             // 3. Publish back to NATS Unit Inbox for the Webhook Bridge to pick up
             const inboxSubject = `unit.inbox.${targetUnit}`;
             nc.publish(inboxSubject, sc.encode(JSON.stringify({
@@ -367,7 +365,7 @@ setInterval(() => {
           } else if (data.alert_type === 'registration') {
             handleRegister({ body: data.unit_data }, { json: (r) => console.log('✅ NATS Registration Done') });
           } else if (data.alert_type === 'location_update') {
-            handleLocationUpdate({ body: data.unit_data }, { json: (r) => {} });
+            handleLocationUpdate({ body: data.unit_data }, { json: (r) => { } });
           }
         } catch (err) {
           console.error('❌ Error handling NATS query:', err.message);
@@ -383,82 +381,26 @@ setInterval(() => {
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
+function makeFreshTripState(overrides = {}) {
+  return { latitude: null, longitude: null, heading: 0, speed: 0, remainingDistM: 0, remainingTimeS: 0, tripStatus: 'dispatched', stepIdx: 0, totalSteps: 0, distToDest: 0, timestamp: null, trail: [], ...overrides };
+}
+
 function haversineMetres(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
-  const dφ = (lat2 - lat1) * Math.PI / 180;
-  const dλ = (lon2 - lon1) * Math.PI / 180;
+  const R = 6371000, φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+  const dφ = (lat2 - lat1) * Math.PI / 180, dλ = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function resetUnitTripState(unitId) {
-  unitTripState.set(unitId, makeFreshTripState({ tripStatus: 'dispatched' }));
-}
-
-function resetLegacyLocation() {
-  ambulanceLocation = makeFreshTripState({ tripStatus: 'dispatched' });
-}
+function resetLegacyLocation() { ambulanceLocation = makeFreshTripState({ tripStatus: 'dispatched' }); }
 
 function dispatchToNearestUnits(alert, type) {
   const nearby = Array.from(units.values())
     .filter(u => u.type === type && u.status === 'available' && u.location)
-    .map(u => ({
-      ...u,
-      distance: haversineMetres(
-        alert.destination?.latitude, alert.destination?.longitude,
-        u.location.latitude, u.location.longitude
-      )
-    }))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, 5);
+    .map(u => ({ ...u, distance: haversineMetres(alert.destination?.latitude, alert.destination?.longitude, u.location.latitude, u.location.longitude) }))
+    .sort((a, b) => a.distance - b.distance).slice(0, 5);
   nearby.forEach(unit => assignments.set(unit.id, alert));
   return nearby;
-}
-
-async function sendPushToToken(token, alert) {
-  if (!token) return;
-  try {
-    const r = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify([{
-        to: token, sound: 'default', priority: 'high',
-        channelId: 'emergency-alerts', ttl: 300,
-        title: `🚨 Emergency — ${alert.patientName || 'Incident'}`,
-        body: `📍 ${alert.address || 'Location pending'}\n📝 ${alert.notes || ''}`,
-        data: { type: 'emergency_alert', ...alert },
-      }]),
-    });
-    const result = await r.json();
-    const item = result.data?.[0];
-    if (item?.status === 'ok') console.log(`✅ Push sent`);
-    else console.warn(`❌ Push failed:`, item?.message);
-  } catch (err) { console.error('Push error:', err.message); }
-}
-
-async function broadcastPush(alert) {
-  if (!pushTokens.size) return;
-  const messages = [...pushTokens].map(token => ({
-    to: token, sound: 'default', priority: 'high',
-    channelId: 'emergency-alerts', ttl: 300,
-    title: `🚨 Emergency — ${alert.patientName || 'Incident'}`,
-    body: `📍 ${alert.address || 'Location pending'}`,
-    data: { type: 'emergency_alert', ...alert },
-  }));
-  try {
-    const r = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(messages),
-    });
-    const result = await r.json();
-    result.data?.forEach((item, i) => {
-      if (item.status === 'ok') console.log(`✅ Broadcast push device ${i + 1}`);
-      else if (item.details?.error === 'DeviceNotRegistered')
-        pushTokens.delete([...pushTokens][i]);
-    });
-  } catch (err) { console.error('Broadcast push error:', err.message); }
 }
 
 function validateAnswers(fields, answers) {
@@ -466,150 +408,110 @@ function validateAnswers(fields, answers) {
   for (const field of fields) {
     if (!field.required) continue;
     const val = answers[field.id];
-    const empty = val === undefined || val === null || val === '' ||
-      (Array.isArray(val) && val.length === 0);
-    if (empty) errors.push(`"${field.label}" is required`);
+    if (val === undefined || val === null || val === '' || (Array.isArray(val) && !val.length)) errors.push(`"${field.label}" is required`);
   }
   return errors;
 }
 
+async function reverseGeocode(lat, lng) {
+  try {
+    const data = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_KEY}`).then(r => r.json());
+    if (data.status === 'OK' && data.results.length > 0) {
+      const c = data.results[0].address_components;
+      const locality = c.find(x => x.types.includes('locality'))?.long_name;
+      const state = c.find(x => x.types.includes('administrative_area_level_1'))?.long_name;
+      if (locality && state) return `${locality}, ${state}`;
+      return data.results[0].formatted_address.split(',').slice(0, 2).join(',').trim();
+    }
+  } catch { /* silent */ }
+  return null;
+}
+
+// ── THE ONLY FUNCTION WRITING TO POSTGRESQL ───────────────────────────────
+// forceDeviceStatus: if provided, overrides the lastSeen-based online/offline calc.
+//   Used for: registration (→ 'online'), offline-checker (→ 'offline'), comeback (→ 'online')
+async function trackInsert({ unitId, latitude, longitude, speed = 0, tripStatus = 'idle', locationInfo = null, forceDeviceStatus = null }) {
+  if (!unitId || latitude == null || longitude == null) return;
+  const unit = units.get(unitId);
+  const unit_status = unit?.assignedIncidentId ? 'busy' : 'available';
+  const isOnline = unit ? (Date.now() - unit.lastSeen < HEARTBEAT_TIMEOUT_MS) : false;
+  // forceDeviceStatus lets callers hard-set 'online' or 'offline' for event rows
+  const device_status = forceDeviceStatus || (isOnline ? 'online' : 'offline');
+  const location_info = locationInfo || await reverseGeocode(latitude, longitude);
+  try {
+    await pgPool.query(
+      `INSERT INTO public.unit_locations ("timestamp",unit_id,unit_type,user_name,latitude,longitude,unit_status,device_status,ticket_no,trip_status,speed,location_info,remarks) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [new Date(), unitId, unit?.type || 'ambulance', unit?.name || unitId, parseFloat(latitude), parseFloat(longitude), unit_status, device_status, unit?.assignedIncidentId || null, tripStatus, parseFloat(speed) || 0, location_info || null, null]
+    );
+    console.log(`📍 DB ✅ ${unitId} | ${tripStatus} | ${device_status} | spd=${speed}`);
+  } catch (err) { console.error('❌ DB INSERT failed:', err.message); }
+}
+
+async function sendPushToToken(token, alert) {
+  if (!token) return;
+  try {
+    const r = await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify([{ to: token, sound: 'default', priority: 'high', channelId: 'emergency-alerts', ttl: 300, title: `🚨 Emergency — ${alert.patientName || 'Incident'}`, body: `📍 ${alert.address || 'Location pending'}\n📝 ${alert.notes || ''}`, data: { type: 'emergency_alert', ...alert } }]) });
+    const item = (await r.json()).data?.[0];
+    if (item?.status === 'ok') console.log('✅ Push sent'); else console.warn('❌ Push failed:', item?.message);
+  } catch (err) { console.error('Push error:', err.message); }
+}
+
+async function broadcastPush(alert) {
+  if (!pushTokens.size) return;
+  try {
+    const r = await fetch('https://exp.host/--/api/v2/push/send', { method: 'POST', headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify([...pushTokens].map(token => ({ to: token, sound: 'default', priority: 'high', channelId: 'emergency-alerts', ttl: 300, title: `🚨 Emergency — ${alert.patientName || 'Incident'}`, body: `📍 ${alert.address || 'Location pending'}`, data: { type: 'emergency_alert', ...alert } }))) });
+    (await r.json()).data?.forEach((item, i) => { if (item.details?.error === 'DeviceNotRegistered') pushTokens.delete([...pushTokens][i]); });
+  } catch (err) { console.error('Broadcast push error:', err.message); }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
-// FORM ROUTES (unchanged from v4.0)
+// FORM ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 app.get('/forms/:unitType', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT f.*, ft.name AS type_name FROM forms f
-       JOIN form_types ft ON f.form_type_id = ft.id
-       WHERE f.unit_type = ? AND f.form_type_id = 1 AND f.is_active = 1 LIMIT 1`,
-      [req.params.unitType]
-    );
-    if (!rows.length) return res.status(404).json({ success: false, error: 'Form not found' });
-    res.json({ success: true, data: rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const [rows] = await db.query(`SELECT f.*, ft.name AS type_name FROM forms f JOIN form_types ft ON f.form_type_id = ft.id WHERE f.unit_type = ? AND f.form_type_id = 1 AND f.is_active = 1 LIMIT 1`, [req.params.unitType]); if (!rows.length) return res.status(404).json({ success: false, error: 'Form not found' }); res.json({ success: true, data: rows[0] }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.get('/forms/scene/assessment', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT f.*, ft.name AS type_name FROM forms f
-       JOIN form_types ft ON f.form_type_id = ft.id
-       WHERE f.form_type_id = 2 AND f.is_active = 1 LIMIT 1`
-    );
-    if (!rows.length) return res.status(404).json({ success: false, error: 'Scene form not found' });
-    res.json({ success: true, data: rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const [rows] = await db.query(`SELECT f.*, ft.name AS type_name FROM forms f JOIN form_types ft ON f.form_type_id = ft.id WHERE f.form_type_id = 2 AND f.is_active = 1 LIMIT 1`); if (!rows.length) return res.status(404).json({ success: false, error: 'Scene form not found' }); res.json({ success: true, data: rows[0] }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.post('/forms/:formId/submit', async (req, res) => {
   try {
     const { answers = {}, incidentId, submittedBy = 'dispatcher' } = req.body;
     const [rows] = await db.query('SELECT * FROM forms WHERE id = ? AND is_active = 1', [req.params.formId]);
     if (!rows.length) return res.status(404).json({ success: false, error: 'Form not found' });
-    const form = rows[0];
-    const fields = typeof form.fields === 'string' ? JSON.parse(form.fields) : form.fields;
-    const errors = validateAnswers(fields, answers);
+    const form = rows[0], fields = typeof form.fields === 'string' ? JSON.parse(form.fields) : form.fields, errors = validateAnswers(fields, answers);
     if (errors.length) return res.status(400).json({ success: false, errors });
-    const [result] = await db.query(
-      `INSERT INTO form_submissions (form_id, incident_id, submitted_by, answers) VALUES (?, ?, ?, ?)`,
-      [form.id, incidentId || null, submittedBy, JSON.stringify(answers)]
-    );
+    const [result] = await db.query(`INSERT INTO form_submissions (form_id, incident_id, submitted_by, answers) VALUES (?, ?, ?, ?)`, [form.id, incidentId || null, submittedBy, JSON.stringify(answers)]);
     res.json({ success: true, submissionId: result.insertId });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.get('/forms/submissions/:incidentId', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT fs.*, f.name AS form_name, f.unit_type, ft.name AS form_type_name
-       FROM form_submissions fs
-       JOIN forms f ON fs.form_id = f.id
-       JOIN form_types ft ON f.form_type_id = ft.id
-       WHERE fs.incident_id = ? ORDER BY fs.submitted_at DESC`,
-      [req.params.incidentId]
-    );
-    res.json({ success: true, data: rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const [rows] = await db.query(`SELECT fs.*, f.name AS form_name, f.unit_type, ft.name AS form_type_name FROM form_submissions fs JOIN forms f ON fs.form_id = f.id JOIN form_types ft ON f.form_type_id = ft.id WHERE fs.incident_id = ? ORDER BY fs.submitted_at DESC`, [req.params.incidentId]); res.json({ success: true, data: rows }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.get('/admin/forms', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT f.id, f.name, f.unit_type, f.is_active,
-              ft.name AS type_name, JSON_LENGTH(f.fields) AS field_count,
-              f.created_at, f.updated_at
-       FROM forms f JOIN form_types ft ON f.form_type_id = ft.id
-       ORDER BY f.form_type_id, f.unit_type`
-    );
-    res.json({ success: true, data: rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const [rows] = await db.query(`SELECT f.id, f.name, f.unit_type, f.is_active, ft.name AS type_name, JSON_LENGTH(f.fields) AS field_count, f.created_at, f.updated_at FROM forms f JOIN form_types ft ON f.form_type_id = ft.id ORDER BY f.form_type_id, f.unit_type`); res.json({ success: true, data: rows }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.get('/admin/forms/:id', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      'SELECT f.*, ft.name AS type_name FROM forms f JOIN form_types ft ON f.form_type_id = ft.id WHERE f.id = ?',
-      [req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ success: false, error: 'Not found' });
-    res.json({ success: true, data: rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const [rows] = await db.query('SELECT f.*, ft.name AS type_name FROM forms f JOIN form_types ft ON f.form_type_id = ft.id WHERE f.id = ?', [req.params.id]); if (!rows.length) return res.status(404).json({ success: false, error: 'Not found' }); res.json({ success: true, data: rows[0] }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.post('/admin/forms', async (req, res) => {
-  try {
-    const { form_type_id, name, unit_type, fields } = req.body;
-    if (!name || !unit_type || !fields?.length)
-      return res.status(400).json({ success: false, error: 'name, unit_type, fields required' });
-    const [result] = await db.query(
-      'INSERT INTO forms (form_type_id, name, unit_type, fields) VALUES (?, ?, ?, ?)',
-      [form_type_id || 1, name, unit_type, JSON.stringify(fields)]
-    );
-    res.json({ success: true, id: result.insertId });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const { form_type_id, name, unit_type, fields } = req.body; if (!name || !unit_type || !fields?.length) return res.status(400).json({ success: false, error: 'name, unit_type, fields required' }); const [result] = await db.query('INSERT INTO forms (form_type_id, name, unit_type, fields) VALUES (?, ?, ?, ?)', [form_type_id || 1, name, unit_type, JSON.stringify(fields)]); res.json({ success: true, id: result.insertId }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.put('/admin/forms/:id', async (req, res) => {
-  try {
-    const { fields, name, is_active } = req.body;
-    const updates = [], vals = [];
-    if (fields) { updates.push('fields = ?'); vals.push(JSON.stringify(fields)); }
-    if (name) { updates.push('name = ?'); vals.push(name); }
-    if (is_active !== undefined) { updates.push('is_active = ?'); vals.push(is_active ? 1 : 0); }
-    if (!updates.length) return res.status(400).json({ success: false, error: 'Nothing to update' });
-    vals.push(req.params.id);
-    await db.query(`UPDATE forms SET ${updates.join(', ')} WHERE id = ?`, vals);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const { fields, name, is_active } = req.body, updates = [], vals = []; if (fields) { updates.push('fields = ?'); vals.push(JSON.stringify(fields)); } if (name) { updates.push('name = ?'); vals.push(name); } if (is_active !== undefined) { updates.push('is_active = ?'); vals.push(is_active ? 1 : 0); } if (!updates.length) return res.status(400).json({ success: false, error: 'Nothing to update' }); vals.push(req.params.id); await db.query(`UPDATE forms SET ${updates.join(', ')} WHERE id = ?`, vals); res.json({ success: true }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
-
 app.get('/admin/form-types', async (req, res) => {
-  try {
-    const [rows] = await db.query('SELECT * FROM form_types ORDER BY id');
-    res.json({ success: true, data: rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  try { const [rows] = await db.query('SELECT * FROM form_types ORDER BY id'); res.json({ success: true, data: rows }); } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// UNIT REGISTRATION
+// UNIT REGISTRATION — pure in-memory setup only. NO database insert here.
+//
+// WHY: Registration fires before GPS is ready on the mobile side, so coords
+// are always missing at this point. The heartbeat (sent every 10s) arrives
+// WITH real lat/lng — that is the correct moment to record 'online' in the DB.
+//
+// _needsOnlineInsert = true tells the heartbeat handler to write the DB row
+// on the very first heartbeat it receives with valid coords.
 // ══════════════════════════════════════════════════════════════════════════════
 function handleRegister(req, res) {
   const unitId = req.body.unitId || req.body.ambulanceId;
@@ -617,28 +519,37 @@ function handleRegister(req, res) {
   const type = req.body.type || 'ambulance';
   const pushToken = req.body.pushToken || null;
   if (!unitId || !name) return res.status(400).json({ error: 'unitId and name required' });
+
   const existing = units.get(unitId);
+
   const unit = {
-    id: unitId, name, type,
+    id: unitId,
+    name,
+    type,
     status: existing?.status === 'busy' ? 'busy' : 'available',
     lastSeen: Date.now(),
     registeredAt: existing?.registeredAt || Date.now(),
     pushToken: pushToken || existing?.pushToken || null,
     assignedIncidentId: existing?.assignedIncidentId || null,
     location: existing?.location || null,
+    _needsOnlineInsert: true,  // heartbeat will write the 'online' DB row with real coords
   };
+
   units.set(unitId, unit);
   if (pushToken) pushTokens.add(pushToken);
-  // Ensure this unit has its own trip state slot
-  if (!unitTripState.has(unitId)) {
-    unitTripState.set(unitId, makeFreshTripState());
-  }
-  console.log(`✅ Unit registered: ${name} (${unitId})`);
+  if (!unitTripState.has(unitId)) unitTripState.set(unitId, makeFreshTripState({ tripStatus: 'idle' }));
+  console.log(`✅ Unit registered: ${name} (${unitId}) — waiting for first heartbeat to record online event`);
+
   res.json({ success: true, unit });
 }
 app.post('/register-unit', handleRegister);
 app.post('/register-ambulance', handleRegister);
 
+// ══════════════════════════════════════════════════════════════════════════════
+// HEARTBEAT — keep-alive ONLY. Updates lastSeen + in-memory location.
+// ONLY inserts to DB when a unit COMES BACK online after being offline.
+// Normal heartbeats (unit already online) → NO database insert.
+// ══════════════════════════════════════════════════════════════════════════════
 app.post('/heartbeat', (req, res) => {
   const unitId = req.body.unitId || req.body.ambulanceId;
   const unit = units.get(unitId);
@@ -653,17 +564,12 @@ app.post('/heartbeat', (req, res) => {
 
   const lat = parseFloat(req.body.latitude);
   const lng = parseFloat(req.body.longitude);
+  const spd = parseFloat(req.body.speed) >= 0 ? parseFloat(req.body.speed) : 0;
+  const hdg = parseFloat(req.body.heading) >= 0 ? parseFloat(req.body.heading) : 0;
+  const hasCoords = !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
 
-  if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-    unit.location = {
-      latitude: lat,
-      longitude: lng,
-      heading: parseFloat(req.body.heading) || unit.location?.heading || 0,
-      speed: parseFloat(req.body.speed) || unit.location?.speed || 0,
-      updatedAt: Date.now(),
-    };
-
-    // ── Update THIS unit's trip state only ────────────────────────────────
+  if (hasCoords) {
+    unit.location = { latitude: lat, longitude: lng, heading: hdg, speed: spd, updatedAt: Date.now() };
     const prev = unitTripState.get(unitId) || makeFreshTripState();
     unitTripState.set(unitId, {
       ...prev,
@@ -872,38 +778,18 @@ app.get('/all-locations', (req, res) => {
 // DISPATCH & ASSIGNMENT
 // ══════════════════════════════════════════════════════════════════════════════
 app.post('/assign', async (req, res) => {
-  const {
-    unitId, ambulanceId,
-    patientName, patientPhone, address,
-    destination, notes, vehicleType, severity,
-    formId, answers,
-  } = req.body;
-
-  const id = unitId || ambulanceId;
-  const unit = units.get(id);
+  const { unitId, ambulanceId, patientName, patientPhone, address, destination, notes, vehicleType, severity, formId, answers } = req.body;
+  const id = unitId || ambulanceId, unit = units.get(id);
   if (!unit) return res.status(404).json({ error: `Unit ${id} not found` });
-  if (unit.status === 'busy')
-    return res.status(400).json({ error: `${unit.name} is already on an active incident` });
-
-  const incidentId = uuidv4();
-  let submissionId = null;
-
+  if (unit.status === 'busy') return res.status(400).json({ error: `${unit.name} is already on an active incident` });
+  const incidentId = uuidv4(); let submissionId = null;
   if (formId && answers && Object.keys(answers).length > 0) {
     try {
       const [rows] = await db.query('SELECT fields FROM forms WHERE id = ?', [formId]);
-      if (rows.length) {
-        const fields = typeof rows[0].fields === 'string' ? JSON.parse(rows[0].fields) : rows[0].fields;
-        const errors = validateAnswers(fields, answers);
-        if (errors.length) return res.status(400).json({ success: false, errors });
-      }
-      const [result] = await db.query(
-        'INSERT INTO form_submissions (form_id, incident_id, submitted_by, answers) VALUES (?, ?, ?, ?)',
-        [formId, incidentId, 'dispatcher', JSON.stringify(answers)]
-      );
+      if (rows.length) { const fields = typeof rows[0].fields === 'string' ? JSON.parse(rows[0].fields) : rows[0].fields, errors = validateAnswers(fields, answers); if (errors.length) return res.status(400).json({ success: false, errors }); }
+      const [result] = await db.query('INSERT INTO form_submissions (form_id, incident_id, submitted_by, answers) VALUES (?, ?, ?, ?)', [formId, incidentId, 'dispatcher', JSON.stringify(answers)]);
       submissionId = result.insertId;
-    } catch (dbErr) {
-      console.warn('DB submission save failed (continuing):', dbErr.message);
-    }
+    } catch (dbErr) { console.warn('DB submission save failed:', dbErr.message); }
   }
 
   const alertData = {
@@ -920,7 +806,7 @@ app.post('/assign', async (req, res) => {
     assignedAt: Date.now(),
     submissionId,
     agentTicketId: req.body.agentTicketId || '',
-    roomId:       req.body.roomId       || '',   // ← ADD THIS
+    roomId: req.body.roomId || '',   // ← ADD THIS
     matrixRoomId: req.body.matrixRoomId || '',   // ← ADD THIS
     reason: '',
   };
@@ -967,7 +853,7 @@ app.post('/send-alert', async (req, res) => {
     vehicleType: req.body.vehicleType || 'ambulance',
     severity: req.body.severity || 'high',
     agentTicketId: req.body.agentTicketId || '',
-    roomId:       req.body.roomId       || '',   // ← ADD THIS
+    roomId: req.body.roomId || '',   // ← ADD THIS
     matrixRoomId: req.body.matrixRoomId || '',   // ← ADD THIS
     reason: '',
   };
@@ -980,177 +866,88 @@ app.post('/send-alert', async (req, res) => {
 app.get('/my-alert', (req, res) => {
   const unitId = req.query.unitId || req.query.ambulanceId;
   if (!unitId) return res.status(400).json({ error: 'unitId required' });
-  const unit = units.get(unitId);
-  if (unit) unit.lastSeen = Date.now();
+  const unit = units.get(unitId); if (unit) unit.lastSeen = Date.now();
   res.json({ alert: assignments.get(unitId) || { id: null, status: 'waiting' } });
 });
 
 app.get('/status', (req, res) => res.json({ alert: currentAlert }));
 
 app.post('/accept-assignment', (req, res) => {
-  const unitId = req.body.unitId || req.body.ambulanceId;
-  const assign = assignments.get(unitId);
+  const unitId = req.body.unitId || req.body.ambulanceId, assign = assignments.get(unitId);
   if (!assign) return res.status(400).json({ error: 'No assignment' });
   if (assign.status === 'accepted') return res.status(400).json({ error: 'Already taken by another unit' });
   assign.status = 'accepted'; currentAlert.status = 'accepted';
-  for (const [id, a] of assignments.entries()) {
-    if (a.id === assign.id && id !== unitId) assignments.delete(id);
-  }
+  for (const [id, a] of assignments.entries()) { if (a.id === assign.id && id !== unitId) assignments.delete(id); }
   res.json({ success: true });
 });
 
-app.post('/accept', (req, res) => {
-  if (!currentAlert.id) return res.status(400).json({ error: 'No active alert' });
-  currentAlert.status = 'accepted'; ambulanceLocation.trail = [];
-  res.json({ success: true });
-});
+app.post('/accept', (req, res) => { if (!currentAlert.id) return res.status(400).json({ error: 'No active alert' }); currentAlert.status = 'accepted'; ambulanceLocation.trail = []; res.json({ success: true }); });
 
 app.post('/reject-assignment', (req, res) => {
-  const unitId = req.body.unitId || req.body.ambulanceId;
-  const reason = req.body.reason || 'manual';
-  const assign = assignments.get(unitId);
+  const unitId = req.body.unitId || req.body.ambulanceId, reason = req.body.reason || 'manual', assign = assignments.get(unitId);
   if (assign) { assign.status = 'rejected'; assign.reason = reason; }
-  const unit = units.get(unitId);
-  if (unit) { unit.status = 'available'; unit.assignedIncidentId = null; }
-  assignments.delete(unitId);
-  currentAlert.status = 'rejected'; currentAlert.reason = reason;
+  const unit = units.get(unitId); if (unit) { unit.status = 'available'; unit.assignedIncidentId = null; }
+  assignments.delete(unitId); currentAlert.status = 'rejected'; currentAlert.reason = reason;
   res.json({ success: true });
 });
 
-app.post('/reject', (req, res) => {
-  currentAlert.status = 'rejected'; currentAlert.reason = req.body.reason || 'manual';
-  res.json({ success: true });
-});
+app.post('/reject', (req, res) => { currentAlert.status = 'rejected'; currentAlert.reason = req.body.reason || 'manual'; res.json({ success: true }); });
 
 app.post('/complete-trip', (req, res) => {
-  const unitId = req.body.unitId || req.body.ambulanceId;
-  const unit = units.get(unitId);
+  const unitId = req.body.unitId || req.body.ambulanceId, unit = units.get(unitId);
   if (unit) { unit.status = 'available'; unit.assignedIncidentId = null; }
   assignments.delete(unitId);
-  // Mark this unit's trip as completed in its own trip state
-  if (unitId && unitTripState.has(unitId)) {
-    const prev = unitTripState.get(unitId);
-    unitTripState.set(unitId, { ...prev, tripStatus: 'completed' });
-  }
+  if (unitId && unitTripState.has(unitId)) unitTripState.set(unitId, { ...unitTripState.get(unitId), tripStatus: 'completed' });
   res.json({ success: true });
 });
 
-app.post('/update-dispatch-status', (req, res) => {
+// ══════════════════════════════════════════════════════════════════════════════
+// UPDATE DISPATCH STATUS — inserts ONE status-event row to DB on button press
+// ══════════════════════════════════════════════════════════════════════════════
+app.post('/update-dispatch-status', async (req, res) => {
+  const allowed = ['dispatched', 'accepted', 'en_route', 'on_action', 'arrived', 'completed', 'abandoned', 'idle'];
   const { tripStatus, unitId, ambulanceId } = req.body;
-
-  const allowed = [
-    'dispatched',
-    'accepted',
-    'en_route',
-    'on_action',
-    'arrived',
-    'completed',
-    'abandoned',
-    'idle'
-  ];
-
-  // 🚨 Validate status
-  if (!allowed.includes(tripStatus)) {
-    return res.status(400).json({ error: `Invalid: ${tripStatus}` });
-  }
-
-  // ✅ Get unitId correctly
+  if (!allowed.includes(tripStatus)) return res.status(400).json({ error: `Invalid: ${tripStatus}` });
   const uid = unitId || ambulanceId;
-
-  if (!uid) {
-    return res.status(400).json({ error: 'unitId is required' });
-  }
-
-  // ✅ Ensure unit exists in map
-  if (!unitTripState.has(uid)) {
-    console.log(`⚠️ Creating new trip state for ${uid}`);
-    unitTripState.set(uid, makeFreshTripState());
-  }
-
-  // ✅ Update ONLY this unit
+  if (!uid) return res.status(400).json({ error: 'unitId is required' });
+  if (!unitTripState.has(uid)) unitTripState.set(uid, makeFreshTripState());
   const prev = unitTripState.get(uid);
-
-  const updatedState = {
-    ...prev,
-    tripStatus,
-    timestamp: Date.now()
-  };
-
-  unitTripState.set(uid, updatedState);
-
+  unitTripState.set(uid, { ...prev, tripStatus, timestamp: Date.now() });
   console.log(`✅ ${uid} → ${tripStatus}`);
 
-  // ─────────────────────────────────────────────
-  // 🔥 AUTO COMPLETE LOGIC (VERY IMPORTANT)
-  // ─────────────────────────────────────────────
-
-  // Get all assigned units
-  const assignedUnits = Array.from(assignments.keys());
-
-  if (assignedUnits.length > 0) {
-    const allCompleted = assignedUnits.every(id => {
-      const st = unitTripState.get(id)?.tripStatus;
-      return st === 'completed';
-    });
-
-    if (allCompleted) {
-      console.log('🎉 All units completed → Ticket completed');
-      currentAlert.status = 'completed';
-    }
+  if (prev.latitude && prev.longitude) {
+    trackInsert({ unitId: uid, latitude: prev.latitude, longitude: prev.longitude, speed: prev.speed || 0, tripStatus }).catch(() => { });
   }
 
-  // Legacy fallback
+  const assignedUnits = Array.from(assignments.keys());
+  if (assignedUnits.length > 0 && assignedUnits.every(id => unitTripState.get(id)?.tripStatus === 'completed')) {
+    console.log('🎉 All units completed → Ticket completed'); currentAlert.status = 'completed';
+  }
   ambulanceLocation.tripStatus = tripStatus;
-
-  res.json({
-    success: true,
-    unitId: uid,
-    tripStatus
-  });
+  res.json({ success: true, unitId: uid, tripStatus });
 });
 
-app.get('/incidents', (req, res) => {
-  const list = Array.from(incidents.values()).sort((a, b) => (b.assignedAt || 0) - (a.assignedAt || 0));
-  res.json({ success: true, data: list });
-});
-
-app.post('/register-token', (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'No token' });
-  pushTokens.add(token);
-  res.json({ success: true, devices: pushTokens.size });
-});
+app.get('/incidents', (req, res) => res.json({ success: true, data: Array.from(incidents.values()).sort((a, b) => (b.assignedAt || 0) - (a.assignedAt || 0)) }));
+app.post('/register-token', (req, res) => { const { token } = req.body; if (!token) return res.status(400).json({ error: 'No token' }); pushTokens.add(token); res.json({ success: true, devices: pushTokens.size }); });
 
 app.get('/directions', async (req, res) => {
   const { originLat, originLng, destLat, destLng, mode } = req.query;
-  if (!originLat || !originLng || !destLat || !destLng)
-    return res.status(400).json({ error: 'Missing params' });
-  const tMode = mode || 'driving';
-  const traffic = tMode === 'driving' ? '&departure_time=now&traffic_model=best_guess' : '';
-  const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&mode=${tMode}&alternatives=true${traffic}&key=${GOOGLE_KEY}`;
-  try {
-    const r = await fetch(url);
-    const data = await r.json();
-    res.json(data);
-  } catch (err) { res.status(500).json({ error: 'Directions fetch failed' }); }
+  if (!originLat || !originLng || !destLat || !destLng) return res.status(400).json({ error: 'Missing params' });
+  const tMode = mode || 'driving', traffic = tMode === 'driving' ? '&departure_time=now&traffic_model=best_guess' : '';
+  try { const data = await fetch(`https://maps.googleapis.com/maps/api/directions/json?origin=${originLat},${originLng}&destination=${destLat},${destLng}&mode=${tMode}&alternatives=true${traffic}&key=${GOOGLE_KEY}`).then(r => r.json()); res.json(data); }
+  catch { res.status(500).json({ error: 'Directions fetch failed' }); }
 });
 
-app.get('/health', (req, res) => res.json({
-  status: 'ok', uptime: process.uptime(),
-  units: units.size, incidents: incidents.size,
-  unitTripStates: unitTripState.size,
-}));
-
-app.use((err, req, res, next) => {
-  console.error('❌ Unhandled error on', req.path, ':', err.message);
-  res.status(500).json({ success: false, error: err.message, data: [] });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime(), units: units.size, incidents: incidents.size, unitTripStates: unitTripState.size }));
+app.use((err, req, res, next) => { console.error('❌', req.path, err.message); res.status(500).json({ success: false, error: err.message, data: [] }); });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚨 Emergency Control System running → http://0.0.0.0:${PORT}`);
-  console.log(`📋 Forms          → GET  /forms/:unitType`);
-  console.log(`📝 Scene form     → GET  /forms/scene/assessment`);
-  console.log(`✅ Submit form    → POST /forms/:formId/submit`);
-  console.log(`🔧 Admin forms    → GET/POST/PUT /admin/forms`);
-  console.log(`📍 Per-unit loc   → GET  /unit-location/:unitId`);
+  console.log(`🚨 Emergency Control System v5.2 → http://0.0.0.0:${PORT}`);
+  console.log(`💓 Heartbeat (keep-alive, DB only on comeback) → POST /heartbeat`);
+  console.log(`📍 Live tracking (DB insert)                   → POST /track`);
+  console.log(`🟢 Registration online event                   → POST /register-unit`);
+  console.log(`📜 Trip history                                → GET  /track-history/:unitId`);
+  console.log(`📜 History by ticket                           → GET  /track-history/ticket/:ticketNo`);
+  console.log(`🔋 Unit status history (online/offline events) → GET  /unit-status-history/:unitId`);
+  console.log(`🔋 All units status history                    → GET  /all-status-history`);
 });

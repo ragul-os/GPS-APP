@@ -101,46 +101,25 @@ export function AuthProvider({ children }) {
   }
 
   // ── LOGIN ─────────────────────────────────────────────────────────────────
-  async function login(username, password, callbacks = {}) {
-    const { onChecking, onSuccess } = callbacks;
-    console.log('[Auth] login() for:', username);
+  async function login(sessionData, callbacks = {}) {
+  console.log('[Auth] login() for:', sessionData);
 
-    onChecking?.();
+  // ✅ DIRECTLY USE SESSION (NO matrixLogin again)
+  const newSession = {
+    username: sessionData.username,
+    userId: sessionData.userId,
+    accessToken: sessionData.accessToken,
+    deviceId: sessionData.deviceId,
+    displayname: sessionData.displayname,
+    unitType: sessionData.unitType,
+    unitId: sessionData.unitId,
+  };
 
-    let loginData;
-    try {
-      loginData = await matrixLogin(username, password);
-      console.log('[Auth] Login success:', loginData.user_id);
-    } catch (err) {
-      console.warn('[Auth] Login failed:', err.errcode, err.error, err.message || err);
+  await saveSession(newSession);
+  setSession(newSession);
 
-      if (err.errcode === 'M_FORBIDDEN' || err.errcode === 'M_USER_DOES_NOT_EXIST') {
-        const exists = await userExists(username);
-        if (exists) {
-          throw new Error('Incorrect password. Please try again.');
-        } else {
-          throw new Error('Account not found. Please sign up first.');
-        }
-      }
-      throw new Error(err.error || err.message || 'Login failed. Check your connection or server IP.');
-    }
-
-    // Force-join dispatch room on every login to ensure membership
-    await ensureInDispatchRoom(username);
-
-    const newSession = {
-      username,
-      userId:      loginData.user_id,
-      accessToken: loginData.access_token,
-      deviceId:    loginData.device_id,
-      displayname: username,
-    };
-    await saveSession(newSession);
-    setSession(newSession);
-    onSuccess?.();
-    console.log('[Auth] login complete, session saved');
-    return newSession;
-  }
+  return newSession;
+}
 
   // ── LOGOUT ────────────────────────────────────────────────────────────────
   async function logout() {

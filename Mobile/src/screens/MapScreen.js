@@ -116,7 +116,11 @@ const perpDist = (pos, poly) => {
 const trimFromCar = (poly, pos, minStartIdx = 0) => {
   if (!poly || poly.length < 2 || !pos) return poly ?? [];
   let minD = Infinity, idx = minStartIdx;
-  for (let i = minStartIdx; i < poly.length; i++) { const d = dist(pos, poly[i]); if (d < minD) { minD = d; idx = i; } }
+  const searchEnd = Math.min(poly.length, minStartIdx + 80);
+  for (let i = minStartIdx; i < searchEnd; i++) {
+    const d = dist(pos, poly[i]);
+    if (d < minD) { minD = d; idx = i; }
+  }
   const tail = poly.slice(idx);
   if (tail.length < 2) return [poly[poly.length - 1]];
   return [pos, ...tail];
@@ -127,17 +131,38 @@ const smoothPos = (prev, next, alpha = 0.45) => {
   return { latitude: prev.latitude * (1 - alpha) + next.latitude * alpha, longitude: prev.longitude * (1 - alpha) + next.longitude * alpha };
 };
 
+const snapToPolyline = (pos, poly) => {
+  if (!poly || poly.length < 2) return pos;
+  let minD = Infinity, best = pos;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const A = poly[i], B = poly[i + 1];
+    const ab2 = (B.latitude - A.latitude) ** 2 + (B.longitude - A.longitude) ** 2;
+    if (ab2 < 1e-12) continue;
+    const t = Math.max(0, Math.min(1,
+      ((pos.latitude - A.latitude) * (B.latitude - A.latitude) +
+        (pos.longitude - A.longitude) * (B.longitude - A.longitude)) / ab2
+    ));
+    const proj = {
+      latitude: A.latitude + t * (B.latitude - A.latitude),
+      longitude: A.longitude + t * (B.longitude - A.longitude),
+    };
+    const d = dist(pos, proj);
+    if (d < minD && d < 30) { minD = d; best = proj; }
+  }
+  return best;
+};
+
 const getManeuverIcon = (m = '', i = '') => {
   const mv = m.toLowerCase(), ins = i.toLowerCase();
   if (mv.includes('turn-left') || ins.includes('turn left')) return 'arrow-back';
   if (mv.includes('turn-right') || ins.includes('turn right')) return 'arrow-forward';
-  if (mv.includes('uturn') || ins.includes('u-turn')) return 'u-turn-left';
-  if (mv.includes('slight-left') || ins.includes('slight left')) return 'arrow-back';
-  if (mv.includes('slight-right') || ins.includes('slight right')) return 'arrow-forward';
+  if (mv.includes('uturn') || ins.includes('u-turn')) return 'return-up-back';
+  if (mv.includes('slight-left') || ins.includes('slight left')) return 'arrow-back-outline';
+  if (mv.includes('slight-right') || ins.includes('slight right')) return 'arrow-forward-outline';
   if (mv.includes('roundabout')) return 'refresh';
-  if (mv.includes('merge')) return 'merge-type';
+  if (mv.includes('merge')) return 'git-merge';
   if (ins.includes('destination') || ins.includes('arrive')) return 'flag';
-  return 'arrow-upward';
+  return 'arrow-up';
 };
 
 const trafficInfo = (durS, traffS) => {
@@ -157,33 +182,33 @@ const ping = (ambulanceId, coords, h, spd, distM, timeS, status, stepI, totalS, 
   console.log(`📡 GPS PING -> Sending for Ticket: ${ticketNo || 'N/A'}`);
   return fetch(`${WEBHOOK_URL}/webhook/abc1234`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
+    body: JSON.stringify({
       channel: 'gps',
       unit_id: ambulanceId,
       ticket_no: ticketNo || '',
-      latitude: coords.latitude, longitude: coords.longitude, 
-      heading: h || 0, speed: spd || 0, 
-      remainingDistM: distM || 0, remainingTimeS: timeS || 0, 
-      trip_status: status, stepIdx: stepI || 0, totalSteps: totalS || 0, distToDest: dDest || 0 
+      latitude: coords.latitude, longitude: coords.longitude,
+      heading: h || 0, speed: spd || 0,
+      remainingDistM: distM || 0, remainingTimeS: timeS || 0,
+      trip_status: status, stepIdx: stepI || 0, totalSteps: totalS || 0, distToDest: dDest || 0
     }),
   })
-  .then(r => console.log(`✅ PING SUCCESS: ${r.status}`))
-  .catch(e => console.error(`❌ PING FAILED: ${e.message}`));
+    .then(r => console.log(`✅ PING SUCCESS: ${r.status}`))
+    .catch(e => console.error(`❌ PING FAILED: ${e.message}`));
 };
 
 const notifyStatus = (unitId, status, ticketNo) => {
   console.log(`📣 STATUS UPDATE -> ${status} for Ticket: ${ticketNo || 'N/A'}`);
-  return fetch(`${WEBHOOK_URL}/webhook/abc1234`, { 
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, 
-    body: JSON.stringify({ 
+  return fetch(`${WEBHOOK_URL}/webhook/abc1234`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       channel: 'gps',
-      unit_id: unitId, 
+      unit_id: unitId,
       ticket_no: ticketNo || '',
-      trip_status: status 
-    }) 
+      trip_status: status
+    })
   })
-  .then(r => console.log(`✅ STATUS SUCCESS: ${r.status}`))
-  .catch(e => console.error(`❌ STATUS FAILED: ${e.message}`));
+    .then(r => console.log(`✅ STATUS SUCCESS: ${r.status}`))
+    .catch(e => console.error(`❌ STATUS FAILED: ${e.message}`));
 };
 
 async function fetchRoutesV2(originLat, originLng, destLat, destLng) {
@@ -198,7 +223,11 @@ async function fetchRoutesV2(originLat, originLng, destLat, destLng) {
     };
     const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': GOOGLE_MAPS_KEY, 'X-Goog-FieldMask': ['routes.distanceMeters', 'routes.duration', 'routes.staticDuration', 'routes.polyline.encodedPolyline', 'routes.travelAdvisory.speedReadingIntervals'].join(',') },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_MAPS_KEY,
+        'X-Goog-FieldMask': ['routes.distanceMeters', 'routes.duration', 'routes.staticDuration', 'routes.polyline.encodedPolyline', 'routes.travelAdvisory.speedReadingIntervals'].join(','),
+      },
       body: JSON.stringify(body),
     });
     const data = await res.json();
@@ -240,7 +269,7 @@ function buildColoredSegmentsFromV2(fullPath, intervals) {
 export default function MapScreen({ route: navRoute, navigation }) {
   const ambulanceId = navRoute?.params?.ambulanceId;
   const paramDest = navRoute?.params?.destination;
-  
+
   // 🔍 DEBUG: Log all parameters received
   console.log('📦 MAP_SCREEN_PARAMS:', JSON.stringify(navRoute?.params));
 
@@ -258,6 +287,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
   const [panelOpen, setPanelOpen] = useState(true);
   const [tMode, setTMode] = useState('driving');
   const [trimmed, setTrimmed] = useState([]);
+  const [trimmedColoredSegments, setTrimmedColoredSegments] = useState([]);
   const [remaining, setRemaining] = useState({ distM: 0, timeS: 0 });
   const [reRouting, setReRouting] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -267,8 +297,22 @@ export default function MapScreen({ route: navRoute, navigation }) {
   const [turnUrgency, setTurnUrgency] = useState(0);
   const [tripStatus, setTripStatus] = useState(navRoute?.params?.initialTripStatus || 'accepted');
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [navAltRoutes, setNavAltRoutes] = useState([]);
+  const [showNavAlts, setShowNavAlts] = useState(false);
 
+  // ── Mute / unmute TTS ──
+  const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
+
+  const { theme: T } = useTheme();
   const { session, logout } = useAuth();
+
+  // ── markerHeading: absolute world bearing (0=north, 90=east)
+  // This is passed INTO VehicleMarker as a prop — the SVG rotates itself.
+  // We store it separately from cameraHdgRef which drives the map camera.
+  const [markerHeading, setMarkerHeading] = useState(0);
+
+  const unitType = session?.unitType || navRoute?.params?.unitType || 'ambulance';
 
   const panelAnim = useRef(new Animated.Value(1)).current;
   const mapRef = useRef(null);
@@ -302,6 +346,46 @@ export default function MapScreen({ route: navRoute, navigation }) {
   const tripStatusRef = useRef(navRoute?.params?.initialTripStatus || 'accepted');
   const isCompletedRef = useRef(false);
   const selectedSummaryRef = useRef(null);
+  const lastSpokenStepRef = useRef(-1);
+  const spokenDistRef = useRef(null);
+  const trafficRefreshTimer = useRef(null);
+  const missedTurnCountRef = useRef(0);
+  const lastRerouteAnnouncedRef = useRef(0);
+  const offRoadInstantRef = useRef(0);
+  const lastPeriodicFetchRef = useRef(Date.now());
+  const trimmedColoredSegmentsRef = useRef([]);
+  const navAltDismissTimer = useRef(null);
+
+  const speak = (text, opts) => {
+    if (mutedRef.current) return;
+    Speech.speak(text, opts);
+  };
+
+  const handleMuteToggle = () => {
+    const next = !muted;
+    setMuted(next);
+    mutedRef.current = next;
+    if (next) {
+      Speech.stop();
+    } else {
+      const activeR = routesRef.current[selRef.current];
+      if (activeR && navRef.current === MODE.NAVIGATE) {
+        const currentStep = activeR.steps[stepIdxRef.current];
+        if (currentStep) {
+          const dTurn = distToTurnRef.current;
+          const distLabel =
+            dTurn < 50 ? ''
+              : dTurn < 150 ? 'In 100 metres, '
+                : dTurn < 350 ? 'In 200 metres, '
+                  : dTurn < 700 ? 'In 500 metres, '
+                    : `In ${(dTurn / 1000).toFixed(1)} kilometres, `;
+          lastSpokenStepRef.current = stepIdxRef.current;
+          spokenDistRef.current = null;
+          Speech.speak(`${distLabel}${currentStep.instruction}`, { language: 'en-IN', rate: 0.92 });
+        }
+      }
+    }
+  };
 
   useEffect(() => { tModeRef.current = tMode; }, [tMode]);
   useEffect(() => { navRef.current = navMode; }, [navMode]);
@@ -313,7 +397,12 @@ export default function MapScreen({ route: navRoute, navigation }) {
 
   useEffect(() => {
     const r = routesRef.current[selRef.current];
-    if (r && carRef.current) { routeProgressIdxRef.current = 0; setTrimmed(trimFromCar(r.roadPoly, carRef.current, 0)); }
+    if (r && carRef.current) {
+      routeProgressIdxRef.current = 0;
+      setTrimmed(trimFromCar(r.roadPoly, carRef.current, 0));
+      setTrimmedColoredSegments(r.coloredSegments || []);
+      trimmedColoredSegmentsRef.current = r.coloredSegments || [];
+    }
   }, [routes, selIdx]);
 
   useEffect(() => {
@@ -471,8 +560,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
           leg.steps.forEach((s) => {
             const stepPts = decode(s.polyline.points);
             if (stepPts.length < 2) return;
-            const stepDur = s.duration.value;
-            const stepRatio = (stepDur * trafficRatio) / stepDur;
+            const stepRatio = (s.duration.value * trafficRatio) / s.duration.value;
             let color = null;
             if (stepRatio >= 2.0) color = '#9b1c1c';
             else if (stepRatio >= 1.5) color = '#ea4335';
@@ -483,10 +571,8 @@ export default function MapScreen({ route: navRoute, navigation }) {
         }
         const steps = leg.steps.map(s => ({
           instruction: stripHtml(s.html_instructions),
-          distance: s.distance.text,
-          distanceM: s.distance.value,
-          duration: s.duration.text,
-          maneuver: s.maneuver || '',
+          distance: s.distance.text, distanceM: s.distance.value,
+          duration: s.duration.text, maneuver: s.maneuver || '',
           htmlInstruction: s.html_instructions,
           endLocation: s.end_location ? { latitude: s.end_location.lat, longitude: s.end_location.lng } : null,
           encodedPolyline: s.polyline.points,
@@ -509,7 +595,10 @@ export default function MapScreen({ route: navRoute, navigation }) {
       const nowPos = carRef.current || livePos;
       if (parsed[newSelIdx]) {
         routeProgressIdxRef.current = 0;
-        setTrimmed(trimFromCar(parsed[newSelIdx].roadPoly, nowPos, 0));
+        const trimmedPoly = trimFromCar(parsed[newSelIdx].roadPoly, nowPos, 0);
+        setTrimmed(trimmedPoly);
+        setTrimmedColoredSegments(parsed[newSelIdx].coloredSegments || []);
+        trimmedColoredSegmentsRef.current = parsed[newSelIdx].coloredSegments || [];
         if (navRef.current === MODE.OVERVIEW && mapRef.current) {
           setTimeout(() => mapRef.current?.fitToCoordinates(parsed[newSelIdx].roadPoly, { edgePadding: { top: 100, right: 40, bottom: 320, left: 40 }, animated: true }), 300);
         }
@@ -517,11 +606,18 @@ export default function MapScreen({ route: navRoute, navigation }) {
       setRoutes(parsed); setSelIdx(newSelIdx); selRef.current = newSelIdx;
       if (!isReRoute) { setStepIdx(0); stepIdxRef.current = 0; }
       lastFetchRef.current = nowPos; lastFetchPosRef.current = nowPos; onceFetched.current = true;
+      lastPeriodicFetchRef.current = Date.now();
       if (isReRoute) {
+        setStepIdx(0); stepIdxRef.current = 0;
         setWrongDir(false); wrongDirStart.current = null; offRoadCount.current = 0;
+        offRoadInstantRef.current = 0; missedTurnCountRef.current = 0;
         bearingSamplesRef.current = 0; routeProgressIdxRef.current = 0;
         setTurnUrgency(0); setDistToTurn(9999); distToTurnRef.current = 9999;
         selectedSummaryRef.current = null;
+        lastSpokenStepRef.current = -1; spokenDistRef.current = null;
+        if (navRef.current === MODE.NAVIGATE && parsed.length > 1) {
+          showAlternateRoutesDuringNav(parsed, newSelIdx);
+        }
       }
     } catch (e) { console.error('[Fetch] error:', e.message); }
     finally { fetchingRef.current = false; setReRouting(false); setLoading(false); }
@@ -599,38 +695,49 @@ export default function MapScreen({ route: navRoute, navigation }) {
   const nxtStep = activeR?.steps[stepIdx + 1];
   const totalSteps = activeR?.steps.length || 0;
   const isWalk = tMode === 'walking';
-  const URGENCY_COLORS = ['#1A73E8', '#F57C00', '#D32F2F'];
-  const turnColor = URGENCY_COLORS[turnUrgency] ?? '#1A73E8';
+  const URGENCY_COLORS = T.urgency;
+  const turnColor = URGENCY_COLORS[turnUrgency] ?? T.accent;
 
-  const distToTurnLabel =
-    distToTurn >= 9999 ? ''
-      : distToTurn < 15 ? 'Turn now!'
-        : distToTurn < 1000 ? `In ${Math.round(distToTurn / 10) * 10} m`
-          : `In ${(distToTurn / 1000).toFixed(1)} km`;
+  const distToTurnLabel = (() => {
+    const m = distToTurn;
+    if (m >= 9999) return '';
+    if (m < 15) return 'Turn now!';
+    if (m < 50) return `In ${Math.round(m / 5) * 5} m`;
+    if (m < 150) return 'In 100 m';
+    if (m < 300) return 'In 200 m';
+    if (m < 450) return 'In 400 m';
+    if (m < 750) return 'In 500 m';
+    if (m < 1200) return 'In 1 km';
+    if (m < 1700) return 'In 1.5 km';
+    return `In ${Math.round(m / 1000)} km`;
+  })();
 
   const remTime = remaining.timeS > 0 ? fmtTime(remaining.timeS) : activeR?.durationInTraffic ?? '';
   const remDist = remaining.distM > 0 ? fmtDist(remaining.distM) : activeR?.distance ?? '';
   const pillCfg = STATUS_PILL[tripStatus] || STATUS_PILL.dispatched;
 
-  // ── Layout constants ──────────────────────────────────────────────────────
-  const STATUS_BAR_H = insets.top + (Platform.OS === 'ios' ? 44 : 28);
-  // Height of the compact turn banner (no inset padding inside it anymore)
-  const TURN_BANNER_H = 76;
+  const STATUS_BAR_H = insets.top + (Platform.OS === 'ios' ? 50 : 40);
+  const TURN_BANNER_H = 64;
+  const NEXT_BAR_H = 48;
+
   const turnBannerVisible = navMode === MODE.NAVIGATE && !!curStep && !reRouting && !wrongDir && distToTurnLabel !== '';
-  // "Then" next-step bar sits right below whichever top element is showing
-  const belowBannerTop = STATUS_BAR_H + (turnBannerVisible ? TURN_BANNER_H : 0) + 8;
+  const nextBarVisible = navMode === MODE.NAVIGATE && !!nxtStep && !reRouting && !wrongDir;
+
+  const turnBannerTop = STATUS_BAR_H;
+  const nextBarTop = turnBannerTop + (turnBannerVisible ? TURN_BANNER_H : 0) + 4;
+  const muteButtonTop = nextBarTop + (nextBarVisible ? NEXT_BAR_H : 0) + 6;
 
   const dropdownOptions = [];
   if (tripStatus === 'en_route') {
-    dropdownOptions.push({ label: 'On Action', color: '#CE93D8', onPress: handleOnAction });
     dropdownOptions.push({ label: 'Arrived', color: '#15803D', onPress: handleMarkArrived });
+    dropdownOptions.push({ label: 'On Action', color: '#CE93D8', onPress: handleOnAction });
     dropdownOptions.push({ label: 'Completed', color: '#2E7D32', onPress: handleCompleted });
   }
   if (tripStatus === 'on_action') {
-    dropdownOptions.push({ label: 'Arrived', color: '#15803D', onPress: handleMarkArrived });
     dropdownOptions.push({ label: 'Completed', color: '#2E7D32', onPress: handleCompleted });
   }
   if (tripStatus === 'arrived') {
+    dropdownOptions.push({ label: 'On Action', color: '#CE93D8', onPress: handleOnAction });
     dropdownOptions.push({ label: 'Completed', color: '#2E7D32', onPress: handleCompleted });
   }
   if (tripStatus !== 'abandoned') {
@@ -665,6 +772,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
         onPress={onMapPress} onRegionChangeComplete={onCameraChange}
         initialRegion={{ ...carPos, latitudeDelta: 0.01, longitudeDelta: 0.01 }}
         mapPadding={{ top: 0, right: 0, bottom: navMode === MODE.OVERVIEW ? 300 : 110, left: 0 }}
+        customMapStyle={T.name === 'dark' ? DARK_MAP_STYLE : []}
       >
         {navMode === MODE.OVERVIEW && routes.filter((_, i) => i !== selIdx).map((r, i) => (
           <React.Fragment key={`alt-${i}`}>
@@ -673,8 +781,22 @@ export default function MapScreen({ route: navRoute, navigation }) {
           </React.Fragment>
         ))}
 
-        {!isWalk && activeR?.coloredSegments?.map((seg, segI) => (
-          <React.Fragment key={`seg-${segI}`}>
+        {navMode === MODE.NAVIGATE && navAltRoutes.map((r, i) => (
+          <React.Fragment key={`nav-alt-${i}`}>
+            <Polyline coordinates={r.roadPoly} strokeColor="#FFFFFF" strokeWidth={12} geodesic zIndex={4} lineCap="round" lineJoin="round" />
+            <Polyline coordinates={r.roadPoly} strokeColor="#A8C8F8" strokeWidth={6} geodesic zIndex={5} lineCap="round" lineJoin="round" />
+          </React.Fragment>
+        ))}
+
+        {!isWalk && navMode === MODE.NAVIGATE && trimmedColoredSegments.map((seg, segI) => (
+          <React.Fragment key={`nav-seg-${segI}`}>
+            <Polyline coordinates={seg.coords} strokeColor="#FFFFFF" strokeWidth={seg.isBase ? 14 : 12} zIndex={seg.isBase ? 6 : 10} lineCap="round" lineJoin="round" geodesic />
+            <Polyline coordinates={seg.coords} strokeColor={seg.color} strokeWidth={seg.isBase ? 8 : 7} zIndex={seg.isBase ? 7 : 11} lineCap="round" lineJoin="round" geodesic />
+          </React.Fragment>
+        ))}
+
+        {!isWalk && navMode === MODE.OVERVIEW && activeR?.coloredSegments?.map((seg, segI) => (
+          <React.Fragment key={`ov-seg-${segI}`}>
             <Polyline coordinates={seg.coords} strokeColor="#FFFFFF" strokeWidth={seg.isBase ? 14 : 12} zIndex={seg.isBase ? 6 : 10} lineCap="round" lineJoin="round" geodesic />
             <Polyline coordinates={seg.coords} strokeColor={seg.color} strokeWidth={seg.isBase ? 8 : 7} zIndex={seg.isBase ? 7 : 11} lineCap="round" lineJoin="round" geodesic />
           </React.Fragment>
@@ -687,29 +809,87 @@ export default function MapScreen({ route: navRoute, navigation }) {
           </>
         )}
 
-        {navMode === MODE.NAVIGATE && curStep?.endLocation && (
-          <Marker coordinate={curStep.endLocation} anchor={{ x: 0.5, y: 0.5 }} zIndex={10}>
-            <View style={s.turnDot} />
-          </Marker>
-        )}
+        {navMode === MODE.NAVIGATE && carRef.current && carPos &&
+          Math.abs(carRef.current.latitude - carPos.latitude) > 0.000005 && (
+            <Polyline coordinates={[carRef.current, carPos]} strokeColor="rgba(100,116,139,0.7)" strokeWidth={2} geodesic={false} zIndex={14} lineDashPattern={[4, 6]} />
+          )}
 
+        {/* ── VEHICLE MARKER ─────────────────────────────────────────────────
+              Key approach: NO flat/rotation on the Marker (unreliable Android).
+              Instead, heading is passed as a prop into VehicleMarker which
+              applies an SVG transform="rotate(heading, cx, cy)" to the arrow.
+              tracksViewChanges=false prevents per-frame re-render lag.
+              The key forces a remount every 2° of heading change.
+          ──────────────────────────────────────────────────────────────────── */}
+        {/* {carPos && (
+            <Marker
+              key={`vm-${Math.round(markerHeading / 2) * 2}`}
+              coordinate={carPos}
+              anchor={{ x: 0.5, y: 0.8 }}
+              zIndex={999}
+              tracksViewChanges={true}
+            >
+              <VehicleMarker heading={markerHeading} />
+            </Marker>
+          )} */}
+        {/* ── VEHICLE MARKER — Swiggy/Zomato style ─────────────────────────
+    Rules:
+    1. NO width/height on the wrapper View — let Image size define it
+    2. overflow: 'visible' on the wrapper  
+    3. anchor={{ x: 0.5, y: 0.5 }} — center anchor so rotation spins in place
+    4. tracksViewChanges: key-based remount every 3° change (performance)
+    5. Rotation via transform on the Image directly
+    6. NO borderRadius / backgroundColor on wrapper (causes clipping)
+──────────────────────────────────────────────────────────────────── */}
+        {/* ══════════════════════════════════════════════════════════════════
+    VEHICLE MARKER — OPTION A (PRIMARY): Ambulance PNG with rotation
+    Fix: tracksViewChanges must start TRUE then go false after render.
+    We use the key-remount trick so it re-renders on heading change.
+    The wrapper View must have explicit width/height = image size,
+    but overflow:'visible' so rotation doesn't clip.
+    CRITICAL on Android: never use tracksViewChanges=false initially.
+══════════════════════════════════════════════════════════════════ */}
+        {/* {carPos && (
+  <Marker
+    key={`vm-${Math.round(markerHeading / 3) * 3}`}
+    coordinate={carPos}
+    anchor={{ x: 0.5, y: 0.5 }}
+    zIndex={999}
+    tracksViewChanges={true}
+    flat={false}
+  >
+    <Image
+      source={require('../../assets/images/ambulance.png')}
+      style={{
+        width: 56,
+        height: 56,
+        resizeMode: 'contain',
+        transform: [{ rotate: `${markerHeading}deg` }],
+      }}
+    />
+  </Marker>
+)}
+ */}
+        {/* ══════════════════════════════════════════════════════════════════
+    VEHICLE MARKER — OPTION B (FALLBACK): Blue dot with white ring
+    Use this if ambulance PNG still doesn't show.
+    This uses the SVG VehicleMarker component already defined above.
+    Uncomment below and comment out OPTION A to switch.
+══════════════════════════════════════════════════════════════════ */}
+        {/* Car marker */}
         <Marker coordinate={carPos} anchor={{ x: 0.5, y: 0.5 }} flat rotation={0} tracksViewChanges={Platform.OS === 'android'} zIndex={15}>
           <View style={s.dotOuter}><View style={s.dotInner} /></View>
         </Marker>
-
-        <Marker coordinate={dest} zIndex={12}>
-          <View style={s.destPin}>
-            <Ionicons name="location" size={34} color="#EF4444" />
-          </View>
+        <Marker coordinate={dest} anchor={{ x: 0.5, y: 0.5 }} zIndex={12}>
+          <View style={s.destDot}><View style={s.destDotInner} /></View>
         </Marker>
       </MapView>
 
-      {/* ── Travel-mode selector (overview only) ── */}
       {navMode === MODE.OVERVIEW && (
         <View style={[s.modeBar, { top: insets.top + 10 }]}>
           {TRAVEL_MODES.map(tm => (
             <TouchableOpacity key={tm.key} onPress={() => setTMode(tm.key)}
-              style={[s.modeBtn, tMode === tm.key && s.modeBtnOn]}>
+              style={[s.modeBtn, tMode === tm.key && [s.modeBtnOn, { backgroundColor: T.accent }]]}>
               <Ionicons name={tm.icon} size={18} color={tMode === tm.key ? '#fff' : '#666'} />
               <Text style={[s.modeBtnLbl, tMode === tm.key && s.modeBtnLblOn]}>{tm.label}</Text>
             </TouchableOpacity>
@@ -731,7 +911,6 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
-      {/* ── Wrong-direction warning ── */}
       {navMode === MODE.NAVIGATE && wrongDir && !reRouting && (
         <View style={[s.wrongDirBanner, { paddingTop: insets.top + 12 }]}>
           <View style={s.wrongDirIconBox}>
@@ -747,52 +926,8 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </View>
       )}
 
-      {/* ── Turn-by-turn banner — sits BELOW the status bar ── */}
-      {navMode === MODE.NAVIGATE && curStep && !reRouting && !wrongDir && distToTurnLabel !== '' && (
-        <View style={[s.navBanner, { backgroundColor: turnColor, top: STATUS_BAR_H }]}>
-          <View style={[s.bnrManeuverBox, turnUrgency === 2 && s.bnrManeuverBoxNow]}>
-            <MaterialIcons
-              name={getManeuverIcon(curStep.maneuver, curStep.htmlInstruction || '')}
-              size={turnUrgency === 2 ? 28 : 22}
-              color="#fff"
-            />
-          </View>
-          <View style={s.bnrContent}>
-            <Text style={s.bnrCountdown}>{distToTurnLabel}</Text>
-            <Text style={s.bnrInstr} numberOfLines={2}>{curStep.instruction}</Text>
-            <Text style={s.bnrStepCount}>{stepIdx + 1} of {totalSteps}</Text>
-          </View>
-        </View>
-      )}
-
-      {/* ── "Then" next-step bar ── */}
-      {navMode === MODE.NAVIGATE && nxtStep && !reRouting && !wrongDir && (
-        <View style={[s.nextBar, { top: belowBannerTop }]}>
-          <Text style={s.nextLabel}>Then</Text>
-          <View style={s.nextIconBox}>
-            <MaterialIcons name={getManeuverIcon(nxtStep.maneuver, nxtStep.htmlInstruction || '')} size={16} color="#1A73E8" />
-          </View>
-          <Text style={s.nextInstr} numberOfLines={1}>{nxtStep.instruction}</Text>
-          <View style={s.nextDistPill}><Text style={s.nextDistTxt}>{nxtStep.distance}</Text></View>
-        </View>
-      )}
-
-      {navMode === MODE.OVERVIEW && activeR && (
-        <View style={[s.trafficBadge, { backgroundColor: activeR.traffic.color, top: insets.top + 54 }]}>
-          <Text style={s.trafficBadgeTxt}>{activeR.traffic.label}</Text>
-        </View>
-      )}
-
-      {navMode === MODE.OVERVIEW && (
-        <View style={[s.hint, { top: insets.top + 54 }]}>
-          <Feather name="map-pin" size={11} color="#fff" style={{ marginRight: 5 }} />
-          <Text style={s.hintTxt}>Tap map to set destination</Text>
-        </View>
-      )}
-
-      {/* ── Status bar (Arrived / En Route / etc.) — always on top ── */}
       {navMode === MODE.NAVIGATE && (
-        <View style={[s.statusBar, { paddingTop: insets.top + 8 }]}>
+        <View style={[s.statusBar, { paddingTop: insets.top + 6, paddingBottom: 6 }]}>
           <View style={[s.statusPill, { backgroundColor: pillCfg.bg, borderColor: pillCfg.border }]}>
             <View style={[s.statusDot, { backgroundColor: pillCfg.text }]} />
             <Text style={[s.statusPillTxt, { color: pillCfg.text }]}>{pillCfg.label}</Text>
@@ -802,6 +937,61 @@ export default function MapScreen({ route: navRoute, navigation }) {
               <Feather name="more-vertical" size={22} color="#fff" />
             </TouchableOpacity>
           )}
+        </View>
+      )}
+
+      {turnBannerVisible && (
+        <View style={[s.navBanner, { backgroundColor: turnColor, top: turnBannerTop }]}>
+          <View style={[s.bnrManeuverBox, turnUrgency === 2 && s.bnrManeuverBoxNow]}>
+            <Ionicons
+              name={getManeuverIcon(curStep.maneuver, curStep.htmlInstruction || '')}
+              size={turnUrgency === 2 ? 24 : 20}
+              color="#fff"
+            />
+          </View>
+          <View style={s.bnrContent}>
+            <Text style={s.bnrCountdown}>{distToTurnLabel}</Text>
+            <Text style={s.bnrInstr} numberOfLines={1}>{curStep.instruction}</Text>
+          </View>
+          <Text style={s.bnrStepCount}>{stepIdx + 1}/{totalSteps}</Text>
+        </View>
+      )}
+
+      {nextBarVisible && (
+        <View style={[s.nextBar, { top: nextBarTop }]}>
+          <Text style={s.nextLabel}>Then</Text>
+          <View style={s.nextIconBox}>
+            <Ionicons name={getManeuverIcon(nxtStep.maneuver, nxtStep.htmlInstruction || '')} size={14} color="#1A73E8" />
+          </View>
+          <Text style={s.nextInstr} numberOfLines={1}>{nxtStep.instruction}</Text>
+          <View style={s.nextDistPill}><Text style={s.nextDistTxt}>{nxtStep.distance}</Text></View>
+        </View>
+      )}
+
+      {navMode === MODE.NAVIGATE && (
+        <TouchableOpacity
+          style={[s.muteBtn, { top: muteButtonTop }]}
+          onPress={handleMuteToggle}
+          activeOpacity={0.8}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons
+            name={muted ? 'volume-mute' : 'volume-high'}
+            size={20}
+            color={muted ? '#94A3B8' : '#fff'}
+          />
+        </TouchableOpacity>
+      )}
+
+      {navMode === MODE.OVERVIEW && activeR && (
+        <View style={[s.trafficBadge, { backgroundColor: activeR.traffic.color, top: insets.top + 54 }]}>
+          <Text style={s.trafficBadgeTxt}>{activeR.traffic.label}</Text>
+        </View>
+      )}
+      {navMode === MODE.OVERVIEW && (
+        <View style={[s.hint, { top: insets.top + 54 }]}>
+          <Feather name="map-pin" size={11} color="#fff" style={{ marginRight: 5 }} />
+          <Text style={s.hintTxt}>Tap map to set destination</Text>
         </View>
       )}
 
@@ -821,7 +1011,6 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </Modal>
       )}
 
-      {/* ── Overview bottom panel ── */}
       {navMode === MODE.OVERVIEW && (
         <Animated.View style={[s.panel, { height: panelH }]}>
           <TouchableOpacity
@@ -847,7 +1036,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
             )}
           </TouchableOpacity>
           {panelOpen && activeR && (
-            <TouchableOpacity style={s.startBtn} onPress={startNav} activeOpacity={0.85}>
+            <TouchableOpacity style={[s.startBtn, { backgroundColor: T.accent, shadowColor: T.accent }]} onPress={startNav} activeOpacity={0.85}>
               <Feather name="navigation" size={18} color="#fff" style={{ marginRight: 10 }} />
               <Text style={s.startBtnTxt}>Start Navigation</Text>
             </TouchableOpacity>
@@ -863,10 +1052,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
                   const diffColor = isBest ? '#1E8E3E' : diffS > 300 ? '#E53935' : '#F9A825';
                   return (
                     <TouchableOpacity key={i}
-                      onPress={() => {
-                        setSelIdx(i); selRef.current = i; setStepIdx(0); stepIdxRef.current = 0;
-                        selectedSummaryRef.current = r.summary;
-                      }}
+                      onPress={() => { setSelIdx(i); selRef.current = i; setStepIdx(0); stepIdxRef.current = 0; selectedSummaryRef.current = r.summary; }}
                       style={[s.routeCard, i === selIdx && s.routeCardOn]}>
                       <View style={[s.routeBadge, { backgroundColor: diffColor + '22' }]}>
                         <Text style={[s.routeBadgeTxt, { color: diffColor }]}>{diffLabel}</Text>
@@ -887,7 +1073,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
                 {activeR.steps.map((step, i) => (
                   <View key={i} style={[s.stepRow, i === stepIdx && s.stepRowOn]}>
                     <View style={[s.stepIconBox, i === stepIdx && s.stepIconBoxOn]}>
-                      <MaterialIcons name={getManeuverIcon(step.maneuver, step.htmlInstruction || '')} size={18} color={i === stepIdx ? '#fff' : '#64748B'} />
+                      <Ionicons name={getManeuverIcon(step.maneuver, step.htmlInstruction || '')} size={18} color={i === stepIdx ? '#fff' : '#64748B'} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={s.stepTxt} numberOfLines={2}>{step.instruction}</Text>
@@ -901,13 +1087,12 @@ export default function MapScreen({ route: navRoute, navigation }) {
         </Animated.View>
       )}
 
-      {/* ── Navigate ETA bar ── */}
       {navMode === MODE.NAVIGATE && activeR && (
-        <View style={s.etaBar}>
+        <View style={[s.etaBar, { backgroundColor: T.mapSurface }]}>
           <View style={s.etaLeft}>
-            <Text style={s.etaTime}>{remTime}</Text>
+            <Text style={[s.etaTime, { color: T.mapText }]}>{remTime}</Text>
             <View style={s.etaSubRow}>
-              <Text style={s.etaDist}>{remDist}</Text>
+              <Text style={[s.etaDist, { color: T.textSecondary }]}>{remDist}</Text>
               <Text style={s.etaDivider}> · </Text>
               <Text style={s.etaArrival}>Arrives {fmtArrival(remaining.timeS > 0 ? remaining.timeS : activeR.trafficSeconds)}</Text>
             </View>
@@ -916,7 +1101,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
             <View style={[s.etaTrafficPill, { backgroundColor: activeR.traffic.light }]}>
               <Text style={[s.etaTrafficLbl, { color: activeR.traffic.color }]}>{activeR.traffic.label}</Text>
             </View>
-            <TouchableOpacity style={s.endBtn} onPress={stopNav} activeOpacity={0.85}>
+            <TouchableOpacity style={[s.endBtn, { backgroundColor: T.accent }]} onPress={stopNav} activeOpacity={0.85}>
               <Text style={s.endBtnTxt}>End</Text>
             </TouchableOpacity>
           </View>
@@ -934,8 +1119,6 @@ const s = StyleSheet.create({
 
   dotOuter: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(26,115,232,0.20)', alignItems: 'center', justifyContent: 'center' },
   dotInner: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#1A73E8', borderWidth: 3, borderColor: '#FFFFFF', elevation: 8, shadowColor: '#1A73E8', shadowOpacity: 0.5, shadowRadius: 4 },
-  destPin: { alignItems: 'center' },
-  turnDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#1A73E8', borderWidth: 2.5, borderColor: '#fff' },
 
   modeBar: {
     position: 'absolute', alignSelf: 'center', width: width * 0.9,
@@ -958,81 +1141,31 @@ const s = StyleSheet.create({
   recalcBanner: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#1A1A2E', paddingTop: 50, paddingBottom: 16, elevation: 14,
+    backgroundColor: '#1A1A2E', paddingTop: 50, paddingBottom: 16, elevation: 14, zIndex: 14,
   },
   recalcTxt: { color: '#fff', fontSize: 16, fontWeight: '700', letterSpacing: 0.3 },
 
   wrongDirBanner: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#D32F2F', paddingBottom: 18, paddingHorizontal: 20, elevation: 14,
+    backgroundColor: '#D32F2F', paddingBottom: 18, paddingHorizontal: 20, elevation: 14, zIndex: 14,
   },
   wrongDirIconBox: { width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', marginRight: 14 },
   wrongDirTitle: { fontSize: 20, fontWeight: '900', color: '#fff' },
   wrongDirSub: { fontSize: 13, color: 'rgba(255,255,255,0.80)', marginTop: 3 },
   wrongDirClose: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.22)', alignItems: 'center', justifyContent: 'center', marginLeft: 10 },
 
-  // ── Turn banner — top is set dynamically to STATUS_BAR_H so it never overlaps the status pill ──
-  navBanner: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 15,
-    paddingBottom: 8,
-    paddingHorizontal: 16,
-    elevation: 12,
-    zIndex: 12,
-  },
-  bnrManeuverBox: {
-    width: 50, height: 50, borderRadius: 25,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    alignItems: 'center', justifyContent: 'center',
-    marginRight: 12,
-    borderWidth: 2, borderColor: 'rgba(255,255,255,0.4)',
-  },
-  bnrManeuverBoxNow: {
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    borderWidth: 3, borderColor: '#fff',
-  },
-  bnrContent: { flex: 1 },
-  bnrCountdown: { fontSize: 18, fontWeight: '900', color: '#fff', letterSpacing: -0.3, marginBottom: 2 },
-  bnrInstr: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.92)', lineHeight: 18 },
-  bnrStepCount: { fontSize: 10, color: 'rgba(255,255,255,0.65)', marginTop: 2, fontWeight: '600' },
-
-  nextBar: {
-    position: 'absolute', left: 14, right: 14,
-    backgroundColor: 'rgba(255,255,255,0.97)', borderRadius: 16,
-    paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center',
-    elevation: 6, shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 8,
-  },
-  nextLabel: { fontSize: 11, fontWeight: '700', color: '#999', marginRight: 8, letterSpacing: 0.5 },
-  nextIconBox: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#E8F0FE', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
-  nextInstr: { flex: 1, fontSize: 13, fontWeight: '600', color: '#1A1A1A' },
-  nextDistPill: { backgroundColor: '#F0F0F0', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8 },
-  nextDistTxt: { fontSize: 11, fontWeight: '700', color: '#555' },
-
-  trafficBadge: { position: 'absolute', left: 14, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, elevation: 6 },
-  trafficBadgeTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  hint: { position: 'absolute', right: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.60)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, elevation: 5 },
-  hintTxt: { color: '#fff', fontSize: 11, fontWeight: '500' },
-
-  // ── Status bar — highest zIndex so it's always on top of the turn banner ──
   statusBar: {
     position: 'absolute', top: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingBottom: 8, paddingHorizontal: 16,
-    backgroundColor: 'rgba(0,0,0,0.72)',
-    zIndex: 20,
-    elevation: 20,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(0,0,0,0.72)', zIndex: 20, elevation: 20,
   },
-  statusPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, gap: 7 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, borderWidth: 1.5, gap: 7 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusPillTxt: { fontSize: 13, fontWeight: '700', letterSpacing: 0.5 },
 
-  dropdownTrigger: { position: 'absolute', right: 16, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  dropdownTrigger: { position: 'absolute', right: 16, width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   dropdownOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', paddingHorizontal: 16 },
   dropdownCard: { backgroundColor: '#fff', borderRadius: 18, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 14, elevation: 16 },
   dropdownTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A', padding: 16, paddingBottom: 10 },
@@ -1041,11 +1174,78 @@ const s = StyleSheet.create({
   dropdownItemBorder: { borderBottomWidth: 0.5, borderBottomColor: '#F1F5F9' },
   dropdownItemTxt: { fontSize: 15, fontWeight: '600' },
 
+  navBanner: {
+    position: 'absolute', left: 0, right: 0,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 14,
+    elevation: 13, zIndex: 13,
+  },
+  bnrManeuverBox: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 10,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.4)',
+    flexShrink: 0,
+  },
+  bnrManeuverBoxNow: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    borderWidth: 2, borderColor: '#fff',
+  },
+  bnrContent: { flex: 1 },
+  bnrCountdown: { fontSize: 16, fontWeight: '900', color: '#fff', letterSpacing: -0.2 },
+  bnrInstr: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.90)', marginTop: 1 },
+  bnrStepCount: { fontSize: 10, color: 'rgba(255,255,255,0.65)', fontWeight: '600', marginLeft: 6, flexShrink: 0 },
+
+  nextBar: {
+    position: 'absolute', left: 12, right: 12,
+    backgroundColor: 'rgba(255,255,255,0.97)', borderRadius: 12,
+    paddingHorizontal: 12, paddingVertical: 8,
+    flexDirection: 'row', alignItems: 'center',
+    elevation: 11, zIndex: 11,
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 6,
+  },
+  nextLabel: { fontSize: 10, fontWeight: '700', color: '#999', marginRight: 6, letterSpacing: 0.5 },
+  nextIconBox: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#E8F0FE', alignItems: 'center', justifyContent: 'center', marginRight: 6 },
+  nextInstr: { flex: 1, fontSize: 12, fontWeight: '600', color: '#1A1A1A' },
+  nextDistPill: { backgroundColor: '#F0F0F0', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2, marginLeft: 6 },
+  nextDistTxt: { fontSize: 10, fontWeight: '700', color: '#555' },
+
+  muteBtn: {
+    position: 'absolute', right: 14,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.60)',
+    alignItems: 'center', justifyContent: 'center',
+    elevation: 12, zIndex: 19,
+    shadowColor: '#000', shadowOpacity: 0.20, shadowRadius: 6,
+  },
+
+  trafficBadge: { position: 'absolute', left: 14, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, elevation: 6 },
+  trafficBadgeTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  hint: { position: 'absolute', right: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.60)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, elevation: 5 },
+  hintTxt: { color: '#fff', fontSize: 11, fontWeight: '500' },
+
+  navAltPanel: {
+    position: 'absolute', left: 14, right: 14,
+    backgroundColor: '#fff', borderRadius: 20,
+    paddingHorizontal: 16, paddingVertical: 14,
+    elevation: 18, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 14, zIndex: 18,
+  },
+  navAltHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
+  navAltHeaderTxt: { flex: 1, fontSize: 13, fontWeight: '800', color: '#0F172A', letterSpacing: 0.2 },
+  navAltItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, borderTopWidth: 0.5, borderTopColor: '#F1F5F9' },
+  navAltLeft: { flex: 1, marginRight: 8 },
+  navAltVia: { fontSize: 13, fontWeight: '600', color: '#1E293B', marginBottom: 2 },
+  navAltTime: { fontSize: 12, color: '#64748B' },
+  navAltBadge: { borderRadius: 10, paddingHorizontal: 9, paddingVertical: 4 },
+  navAltBadgeTxt: { fontSize: 11, fontWeight: '700' },
+
   panel: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, elevation: 20, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 16, overflow: 'hidden' },
   panelHandle: { paddingTop: 12, paddingHorizontal: 16, paddingBottom: 8 },
   handleBar: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1', marginBottom: 12 },
 
-  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   etaTxt: { fontSize: 26, fontWeight: '800', color: '#0F172A' },
   distTxt: { fontSize: 13, color: '#64748B', marginTop: 3 },
   addrTxt: { fontSize: 12, color: '#94A3B8', marginTop: 4 },
@@ -1084,4 +1284,7 @@ const s = StyleSheet.create({
   etaTrafficLbl: { fontSize: 12, fontWeight: '600' },
   endBtn: { backgroundColor: '#1A73E8', borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, elevation: 4 },
   endBtnTxt: { color: '#fff', fontWeight: '800', fontSize: 15 },
+
+  destDot: { width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(239,68,68,0.2)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#EF4444' },
+  destDotInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444' },
 });
