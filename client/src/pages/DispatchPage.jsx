@@ -512,6 +512,7 @@ export default function DispatchPage() {
   );
   const [selectedUnitIds, setSelectedUnitIds] = useState([]);
   const [unitList, setUnitList] = useState([]);
+  const [unitRefreshTick, setUnitRefreshTick] = useState(0);
   const [showResources, setShowResources] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [dispatching, setDispatching] = useState(false);
@@ -709,6 +710,7 @@ export default function DispatchPage() {
         notes: answers.f7 || '',
         destination: { latitude: pickedLat, longitude: pickedLng },
         vehicleType, severity, answers,
+        agentTicketId: agentTicket?.id || '',
         roomId: roomId || '',
         matrixRoomId: roomId || '',
       };
@@ -749,6 +751,8 @@ export default function DispatchPage() {
       addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
       setShowModal(false);
       setSelectedUnitIds([]);
+      // Force the unit list to re-fetch immediately so status changes to Busy
+      setUnitRefreshTick(t => t + 1);
 
     } catch (e) {
       addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
@@ -957,6 +961,7 @@ export default function DispatchPage() {
             selectedUnitIds={selectedUnitIds}
             onToggleUnit={handleToggleUnit}
             onUnitListChange={setUnitList}
+            refreshTrigger={unitRefreshTick}
           />
         </div>
       </div>

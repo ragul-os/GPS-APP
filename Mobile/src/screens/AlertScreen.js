@@ -27,7 +27,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AMBULANCE_TYPE, SERVER_URL } from '../config';
+import { AMBULANCE_TYPE, SERVER_URL, WEBHOOK_URL } from '../config';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
 import { joinRoom } from '../services/matrixService';
 import ChatRoomListScreen from './Chatroomlistscreen';
@@ -73,6 +73,8 @@ export default function AlertScreen() {
   const isActiveRef = useRef(true);
   const roomIdRef = useRef(null);
   const acceptingRef = useRef(false);
+  const inboxPollRef = useRef(null);     // Webhook inbox long-poll abort controller
+  const inboxCursorRef = useRef('0-0'); // Track last seen Redis entry ID
 
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
@@ -87,12 +89,15 @@ export default function AlertScreen() {
     if (!isRegistered) return;
     startPolling();
     startLocPoll();
+    startInboxPoll();   // 🌟 Start Webhook Gateway inbox polling
     startPulse();
     return () => {
       clearInterval(pollRef.current);
       clearInterval(locPollRef.current);
       clearInterval(heartbeatRef.current);
       stopCountdown();
+      // Stop inbox loop on unmount
+      if (inboxPollRef.current) inboxPollRef.current.abort();
     };
   }, [isRegistered]);
 
@@ -168,6 +173,69 @@ export default function AlertScreen() {
         setServerOnline(false);
       }
     }, POLL_INTERVAL_MS);
+  };
+
+  // 🌟 WEBHOOK GATEWAY INBOX: Long-poll the unit's private Redis inbox
+  const startInboxPoll = () => {
+    if (!session?.username) return;
+    const unitId = session.username;
+    console.log('[Inbox] Starting Webhook long-poll for unit:', unitId);
+
+    const pollLoop = async () => {
+      while (true) {
+        // Stop if screen unmounted (ref cleared)
+        if (!inboxPollRef.current) break;
+        try {
+          const cursor = inboxCursorRef.current || '0-0';
+          const url = `${WEBHOOK_URL}/webhook/gps?channel=unit-alerts&sessionId=${unitId}&conversationId=${unitId}&eventId=${cursor}`;
+          console.log('[Inbox] Polling:', url);
+
+          const ctrl = new AbortController();
+          inboxPollRef.current = ctrl;
+          const res = await fetch(url, { signal: ctrl.signal });
+          if (!res.ok) { await new Promise(r => setTimeout(r, 3000)); continue; }
+
+          const json = await res.json();
+          console.log('[Inbox] Response:', JSON.stringify(json));
+
+          // The Webhook returns { messages: [...] } or { eventPayload: [...] }
+          const msgs = json.messages || json.eventPayload || (json.payload ? [json] : []);
+          for (const m of msgs) {
+            // Update cursor so next poll only fetches new messages.
+            // Webhook sets eventId (not entryid) on the unwrapped payload object.
+            const cursorVal = m.eventId || m.entryid;
+            if (cursorVal) inboxCursorRef.current = cursorVal;
+
+            // The webhook already JSON-parses the Redis payload and returns the
+            // object directly in eventPayload — so m itself IS the payload.
+            // Fall back to m.payload in case the format is ever nested.
+            let payload = m.payload != null ? m.payload : m;
+            if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch {} }
+
+            if (payload?.type === 'NEW_ALERT' && payload?.alert) {
+              const alert = payload.alert;
+              console.log('[Inbox] 🚨 NEW_ALERT received:', alert.id);
+              if (
+                alert.id !== lastAlertId.current &&
+                statusRef.current === 'waiting' &&
+                isActiveRef.current
+              ) {
+                lastAlertId.current = alert.id;
+                receiveAlert(alert);
+              }
+            }
+          }
+        } catch (err) {
+          if (err.name === 'AbortError') break;
+          console.warn('[Inbox] Poll error:', err.message);
+          await new Promise(r => setTimeout(r, 5000));
+        }
+      }
+    };
+
+    // Bootstrap the ref so the loop condition works on first iteration
+    inboxPollRef.current = new AbortController();
+    pollLoop();
   };
 
   const startLocPoll = () => {
@@ -308,6 +376,7 @@ export default function AlertScreen() {
         destination: JSON.stringify(captured.destination),
         roomId: capturedRoomId || '',
         ambulanceId: session.username,
+        ticketNo: captured.agentTicketId || captured.id || '',
         initialTripStatus: 'accepted',
       },
     });
@@ -544,6 +613,7 @@ export default function AlertScreen() {
                             destination: JSON.stringify(json.alert.destination),
                             roomId: json.alert.roomId || '',
                             ambulanceId: session.username,
+                            ticketNo: json.alert.agentTicketId || json.alert.id || '',
                             initialTripStatus: tripStatus,
                           },
                         });

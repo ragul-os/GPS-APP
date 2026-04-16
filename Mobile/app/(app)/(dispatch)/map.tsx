@@ -20,6 +20,7 @@ export default function MapTab() {
     matrixToken:       string;
     roomId:            string;
     initialTripStatus: string;
+    ticketNo:          string;
   }>();
 
   console.log('[MapTab] params received:', JSON.stringify(params));
@@ -40,8 +41,9 @@ export default function MapTab() {
       notes:             params.notes              || '',
       ambulanceId:       params.ambulanceId        || '',
       matrixToken:       params.matrixToken        || '',
-      roomId:            params.roomId             || '',   // ← critical
+      roomId:            params.roomId             || '',
       initialTripStatus: params.initialTripStatus  || 'accepted',
+      ticketNo:          params.ticketNo           || '',
     },
   };
 

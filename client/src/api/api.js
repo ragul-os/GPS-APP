@@ -1,26 +1,43 @@
 import axios from 'axios';
-import { API_BASE_URL } from '../config/apiConfig';
+import { API_BASE_URL, WEBHOOK_BASE_URL } from '../config/apiConfig';
 
 const api = axios.create({ baseURL: API_BASE_URL });
 
-// Units
-export const getUnits        = ()             => api.get('/units');
-export const registerUnit    = (data)         => api.post('/register-unit', data);
-export const updateUnitLoc   = (data)         => api.post('/update-unit-location', data);
+// Units — REDIRECTED THROUGH GATEWAY
+export const getUnits = () => axios.get(`${WEBHOOK_BASE_URL}/webhook/gps`, { params: { action: 'getUnits' } });
+export const registerUnit    = (data) => axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, { alert_type: 'registration', unit_data: data, timestamp: Date.now() });
+export const updateUnitLoc   = (data) => axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, { alert_type: 'location_update', unit_data: data, timestamp: Date.now() });
 export const getNearestUnits = (lat, lng, type, limit = 10) =>
-  api.get('/nearest', { params: { lat, lng, type, limit } });
+  axios.get(`${WEBHOOK_BASE_URL}/webhook/gps`, { params: { action: 'getNearestUnits', lat, lng, type, limit } });
 
-// Alerts / dispatch
-export const sendAlert  = (data) => api.post('/send-alert', data);
-export const assignUnit = (data) => api.post('/assign', data);
-export const getStatus  = ()     => api.get('/status');
+// Alerts / dispatch — REDIRECTED THROUGH GATEWAY (Webhook Engine)
+export const sendAlert = (data) => axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  alert_type: 'dispatch',
+  ticket_data: data,
+  timestamp: Date.now()
+});
 
-// Location — NOW per-unit using /unit-location/:unitId
-// Falls back to /ambulance-location only if no unitId provided (legacy)
-export const getAmbulanceLocation = (unitId) =>
-  unitId
-    ? api.get(`/unit-location/${unitId}`)
-    : api.get('/ambulance-location');
+export const assignUnit = (data) => axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  alert_type: 'assignment',
+  unit_id: data.unitId,
+  ticket_data: data,
+  timestamp: Date.now()
+});
+export const getStatus = () => axios.get(`${WEBHOOK_BASE_URL}/webhook/gps`, { params: { action: 'getStatus' } });
+
+// Location — NOW Uses Webhook long-polling Redis streams!
+export const getAmbulanceLocation = (unitId, ticketNo = null, lastEventId = null) => {
+  if (!unitId) return api.get('/ambulance-location');
+  
+  return axios.get(`${WEBHOOK_BASE_URL}/webhook/abc1234`, {
+    params: {
+      channel: 'gps',
+      sessionId: unitId,
+      conversationId: ticketNo || unitId,
+      eventId: lastEventId || '0-0'
+    }
+  });
+};
 
 // Forms
 export const getForm       = (unitType) => api.get(`/forms/${unitType}`);

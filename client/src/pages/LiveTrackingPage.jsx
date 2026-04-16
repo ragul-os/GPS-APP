@@ -640,7 +640,7 @@ export default function LiveTrackingPage() {
   const navigate = useNavigate();
   const { id } = useParams();
   const location = useLocation();
-  const alertObj = location.state?.alert || JSON.parse(localStorage.getItem('alertHistory') || '[]').find(a => a.id === id) || null;
+  const alertObj = location.state?.alert || JSON.parse(localStorage.getItem('alertHistory') || '[]').find(a => a.id === id || a.agentTicketId === id) || null;
 
   const mapRef = useRef(null);
   const mapObj = useRef(null);
@@ -706,8 +706,8 @@ export default function LiveTrackingPage() {
   useEffect(() => {
     const all = getAgentTickets();
     const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
-    const ao = location.state?.alert || hist.find(a => a.id === id) || null;
-    const t = all.find(tk => (tk.alertIds || []).includes(id));
+    const ao = location.state?.alert || hist.find(a => a.id === id || a.agentTicketId === id) || null;
+    const t = all.find(tk => (tk.alertIds || []).includes(id) || tk.id === id);
 
     setAgentTicket(t || null);
     setTicketStatus(t?.status || ao?.status || 'dispatched');
@@ -947,12 +947,36 @@ export default function LiveTrackingPage() {
   // Main poll
   useEffect(() => {
     const myUid = activeUnitId;
+    let isMounted = true;
+    let activeRequest = null;
+    let lastEventId = '0-0'; // Start by fetching whole history or newest
+
     const poll = async () => {
-      if (activeUnitIdRef.current !== myUid) return;
+      if (!isMounted || activeUnitIdRef.current !== myUid) return;
       try {
-        const res = await getAmbulanceLocation(myUid);
-        if (activeUnitIdRef.current !== myUid) return;
-        const d = res.data, ts = d.tripStatus || 'idle';
+        const ticketNo = id || alertObj?.agentTicketId || alertObj?.id || agentTicket?.id || myUid;
+        activeRequest = getAmbulanceLocation(ticketNo, ticketNo, lastEventId);
+        const res = await activeRequest;
+        activeRequest = null;
+        if (!isMounted || activeUnitIdRef.current !== myUid) return;
+
+        let d;
+        if (res.data && res.data.eventPayload !== undefined) {
+          const payloads = res.data.eventPayload;
+          if (payloads && payloads.length > 0) {
+            d = payloads[payloads.length - 1]; // Use latest received event
+            lastEventId = d.eventId || lastEventId; // Advance cursor
+          } else {
+             // Timeout or no new events, poll again
+             setTimeout(poll, 100);
+             return;
+          }
+        } else {
+          // Fallback legacy behavior
+          d = res.data;
+        }
+
+        const ts = d.tripStatus || d.trip_status || 'idle';
         setUnitStatuses(prev => prev[myUid] === ts ? prev : { ...prev, [myUid]: ts });
         setTripStatus(ts);
         setStepInfo({ idx: parseInt(d.stepIdx) || 0, total: parseInt(d.totalSteps) || 0 });
@@ -983,7 +1007,11 @@ export default function LiveTrackingPage() {
             }
           }
         }
-        if (!d.latitude || !d.longitude) { setLive(false); return; }
+        if (!d.latitude || !d.longitude) { 
+          setLive(false); 
+          setTimeout(poll, 100);
+          return; 
+        }
         const lat = parseFloat(d.latitude), lng = parseFloat(d.longitude);
         setLive(true);
         setStats({ speed: parseFloat(d.speed) || 0, distM: parseInt(d.remainingDistM) || 0, timeS: parseInt(d.remainingTimeS) || 0, lat, lng });
@@ -991,11 +1019,26 @@ export default function LiveTrackingPage() {
         const now = Date.now();
         if (alertObj?.destination && now - routeAtRef.current > 45000) { routeAtRef.current = now; fetchRoute(lat, lng, myUid); }
         fetchNearby(lat, lng);
-      } catch (_) { if (activeUnitIdRef.current === myUid) setLive(false); }
+
+        // Instantly poll again after processing
+        setTimeout(poll, 100);
+      } catch (err) {
+        if (!isMounted || activeUnitIdRef.current !== myUid) return;
+        activeRequest = null;
+        // 408 is a long-polling timeout, just reconnect immediately
+        if (err.response && err.response.status === 408) {
+          setTimeout(poll, 100);
+        } else {
+          // Actual error, backoff for 3 seconds
+          setTimeout(poll, 3000);
+        }
+      }
     };
     poll();
-    const iv = setInterval(poll, 3000); // 3s — near-realtime but not flooding (was 1s)
-    return () => clearInterval(iv);
+    
+    return () => {
+      isMounted = false;
+    };
   }, [activeUnitId, updateVehicle, fetchRoute, fetchNearby, alertObj, addTLog]);
 
   // All-units poll (stable interval, reads via refs)

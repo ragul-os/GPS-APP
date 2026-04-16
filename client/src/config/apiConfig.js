@@ -12,6 +12,11 @@ export const API_BASE_URL = trimTrailingSlash(
   import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.24.19:5000'
 );
 
+/** Webhook Engine V3 */
+export const WEBHOOK_BASE_URL = trimTrailingSlash(
+  import.meta.env.VITE_WEBHOOK_BASE_URL ?? 'http://192.168.24.19:5001'
+);
+
 /** Synapse homeserver root (Client-Server API lives under /_matrix/...) */
 export const SYNAPSE_BASE_URL = trimTrailingSlash(
   import.meta.env.VITE_SYNAPSE_BASE_URL ?? 'http://192.168.24.19:8008'

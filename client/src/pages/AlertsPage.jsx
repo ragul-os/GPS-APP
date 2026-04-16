@@ -226,7 +226,10 @@ export default function AlertsPage() {
 
             if (viewMode === 'list') {
               return (
-                <div key={a.id} style={s.listItem} onClick={() => navigate(`/live/${a.id}`, { state: { alert: a } })}>
+                <div key={a.id} style={s.listItem} onClick={() => {
+                  const tid = a.agentTicketId || a.id;
+                  navigate(`/live/${tid}`, { state: { alert: a } });
+                }}>
                   <div style={{ ...s.listBar, background: cfg.barColor }} />
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
                     <div style={{ width: 32, height: 32, borderRadius: 8, background: `${cfg.barColor}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>{cfg.icon}</div>
@@ -260,7 +263,10 @@ export default function AlertsPage() {
               <div
                 key={a.id}
                 style={s.ticket}
-                onClick={() => navigate(`/live/${a.id}`, { state: { alert: a } })}
+                onClick={() => {
+                  const tid = a.agentTicketId || a.id;
+                  navigate(`/live/${tid}`, { state: { alert: a } });
+                }}
               >
                 {/* Left color bar */}
                 <div style={{ ...s.ticketBar, background: cfg.barColor }} />

@@ -54,10 +54,11 @@ export default function UnitList({
   selectedUnitIds = [],
   onToggleUnit,
   onUnitListChange,
+  refreshTrigger,   // increment to force an immediate refresh
 }) {
   const [units,     setUnits]     = useState([]);
   const [mockUnits, setMockUnits] = useState({});
- 
+
 
   /* ── Fetch & merge ── */
   const fetchAll = useCallback(async () => {
@@ -99,6 +100,11 @@ export default function UnitList({
     const iv = setInterval(fetchAll, 15000); // 15s — unit list changes slowly
     return () => clearInterval(iv);
   }, [fetchAll]);
+
+  // Force-refresh whenever parent increments refreshTrigger (e.g. after dispatch)
+  useEffect(() => {
+    if (refreshTrigger) fetchAll();
+  }, [refreshTrigger, fetchAll]);
 
   /* ── Mock helpers ── */
   const toggleMock = async (def) => {

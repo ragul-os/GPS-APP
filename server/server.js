@@ -19,15 +19,20 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const mysql = require('mysql2/promise');
 const { v4: uuidv4 } = require('uuid');
+const { connect: connectNats, StringCodec } = require('nats');
+const { Pool: PgPool } = require('pg');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
-const PORT = 5000;
-const GOOGLE_KEY = 'AIzaSyAVz9omOzS8B29CEi50AkrNPMPn3JXhbcg';
+const PORT = process.env.PORT || 5000;
+const GOOGLE_KEY = process.env.GOOGLE_MAP_API_KEY || 'AIzaSyAVz9omOzS8B29CEi50AkrNPMPn3JXhbcg';
 const HEARTBEAT_TIMEOUT_MS = 30000;
 
 app.use(cors({ origin: '*' }));
@@ -37,11 +42,11 @@ app.use(bodyParser.json());
 // DATABASE
 // ══════════════════════════════════════════════════════════════════════════════
 const db = mysql.createPool({
-  host: 'localhost',
-  port: 3306,
-  user: 'root',
-  password: 'Admin@123',
-  database: 'emergency_db',
+  host: process.env.MYSQL_HOST || 'localhost',
+  port: parseInt(process.env.MYSQL_PORT || '3306'),
+  user: process.env.MYSQL_USER || 'root',
+  password: process.env.MYSQL_PASSWORD || 'Admin@123',
+  database: process.env.MYSQL_DB || 'emergency_db',
   waitForConnections: true,
   connectionLimit: 10,
 });
@@ -54,6 +59,28 @@ const db = mysql.createPool({
     console.warn('⚠️  MySQL not connected:', err.message);
   }
 })();
+
+// PostgreSQL Pool for NATS location updates
+const pgPool = new PgPool({
+  user: process.env.POSTGRES_USER || 'postgres',
+  host: process.env.POSTGRES_HOST || '192.168.9.30',
+  database: process.env.POSTGRES_DB || 'synapse',
+  password: process.env.POSTGRES_PASSWORD || 'Admin@123',
+  port: parseInt(process.env.POSTGRES_PORT || '5432'),
+});
+
+(async () => {
+  try {
+    await pgPool.query('SELECT 1');
+    console.log('✅ PostgreSQL connected → synapse');
+  } catch (err) {
+    console.warn('⚠️  PostgreSQL not connected:', err.message);
+  }
+})();
+
+// NATS Integration
+const sc = StringCodec();
+let nc = null;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // IN-MEMORY STATE
@@ -105,6 +132,253 @@ setInterval(() => {
     }
   }
 }, 15000);
+
+// Initialize NATS Subscriber
+(async () => {
+  try {
+    const natsUrl = process.env.NATS_URL || 'nats://192.168.9.56:4222';
+    const natsOptions = { servers: natsUrl };
+
+    let tlsEnabled = false;
+    try {
+      const certsDir = path.join(__dirname, 'certs');
+      if (fs.existsSync(certsDir)) {
+        const caFiles = ['ca.crt', 'ca-cert.crt'];
+        const cas = [];
+        caFiles.forEach(f => {
+          const p = path.join(certsDir, f);
+          if (fs.existsSync(p)) cas.push(fs.readFileSync(p, 'utf8'));
+        });
+
+        const certPath = path.join(certsDir, 'server.crt');
+        const keyPath = path.join(certsDir, 'server.key');
+
+        if (cas.length > 0 && fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+          natsOptions.tls = {
+            ca: cas,
+            cert: fs.readFileSync(certPath, 'utf8'),
+            key: fs.readFileSync(keyPath, 'utf8'),
+            rejectUnauthorized: false
+          };
+          tlsEnabled = true;
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not load NATS TLS certificates:', e.message);
+    }
+
+    try {
+      nc = await connectNats(natsOptions);
+      console.log(`✅ NATS connected → ${natsUrl}${tlsEnabled ? ' (TLS)' : ' (Plain)'}`);
+    } catch (tlsErr) {
+      // If TLS failed, attempt plain text fallback
+      if (tlsEnabled) {
+         console.warn('⚠️  NATS TLS connection failed. Attempting plain connection...');
+         delete natsOptions.tls;
+         nc = await connectNats(natsOptions);
+         console.log(`✅ NATS connected → ${natsUrl} (Plain fallback)`);
+      } else {
+         throw tlsErr;
+      }
+    }
+
+    const sub = nc.subscribe('gps.stream.req');
+    (async () => {
+      for await (const msg of sub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data));
+          if (!data.unit_id && !data.ticket_no && !data.unitId) continue;
+          
+          const unitId = data.unit_id || data.unitId || data.ambulanceId;
+          const ticketNo = data.ticket_no || data.ticketNo || '';
+          console.log(`📥 NATS RECV [gps.stream.req] -> Unit: ${unitId}, Ticket: ${ticketNo}`);
+          
+          let lat = parseFloat(data.latitude);
+          let lng = parseFloat(data.longitude);
+          const speed = parseFloat(data.speed) || 0;
+          const tripStatus = data.trip_status || data.tripStatus || 'en_route';
+          const heading = parseFloat(data.heading) || 0;
+          
+          if (isNaN(lat) || isNaN(lng)) continue;
+
+          // Store in PostgreSQL
+          await pgPool.query(
+            `INSERT INTO public.unit_locations (
+              "timestamp", unit_id, unit_type, user_name, latitude, longitude, unit_status, device_status, ticket_no, trip_status, speed, location_info, remarks
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+            [
+              data.timestamp || new Date().toISOString(),
+              unitId,
+              data.unit_type || 'ambulance',
+              data.user_name || 'matrixuser',
+              lat, lng,
+              data.unit_status || 'busy',
+              data.device_status || 'online',
+              ticketNo,
+              tripStatus,
+              speed,
+              JSON.stringify(data.location_info || {}),
+              data.remarks || ''
+            ]
+          );
+
+          // Update In-Memory State
+          const unit = units.get(unitId);
+          if (unit) {
+            unit.lastSeen = Date.now();
+            unit.location = { latitude: lat, longitude: lng, heading, speed, updatedAt: Date.now() };
+          }
+
+          const prevState = unitTripState.get(unitId) || makeFreshTripState();
+          const point = {
+            latitude: lat,
+            longitude: lng,
+            heading,
+            speed,
+            remainingDistM: data.remainingDistM || 0,
+            remainingTimeS: data.remainingTimeS || 0,
+            tripStatus: prevState.tripStatus === 'completed' ? 'completed' : tripStatus,
+            stepIdx: data.stepIdx || 0,
+            totalSteps: data.totalSteps || 0,
+            distToDest: data.distToDest || 0,
+            timestamp: Date.now(),
+          };
+
+          if (unitId) {
+            unitTripState.set(unitId, {
+              ...prevState,
+              ...point,
+              trail: [...(prevState.trail || []).slice(-149), point],
+            });
+          }
+
+          ambulanceLocation = { ...point, trail: [...ambulanceLocation.trail.slice(-149), point] };
+
+          // Publish response to NATS (which gets written to Redis by bridge)
+          nc.publish('gps.stream.res', sc.encode(JSON.stringify({
+            unit_id: unitId,
+            ticket_no: ticketNo,
+            ...point
+          })));
+          
+        } catch (e) {
+          console.error('❌ Error processing gps.stream.req:', e.message);
+        }
+      }
+    })().then();
+
+    // 🌟 THE GATEWAY FIX: Listen for system alerts from Webhook Engine
+    const systemSub = nc.subscribe('webhook.gps.system_alert');
+    (async () => {
+      for await (const msg of systemSub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data));
+          if (data.alert_type === 'dispatch' || data.alert_type === 'assignment') {
+            const { unit_id, ticket_data } = data;
+            const targetUnit = unit_id || ticket_data?.unitId || 'matrixuser';
+            
+            console.log(`📡 [NATS DISPATCH] Received from Webhook for Unit: ${targetUnit}`);
+            
+            // 1. Sync internal state (Memory)
+            if (!units.has(targetUnit)) {
+               units.set(targetUnit, { id: targetUnit, name: targetUnit, status: 'online', type: ticket_data?.vehicleType || 'ambulance', lastSeen: Date.now() });
+            }
+            const unit = units.get(targetUnit);
+
+            const alertId = ticket_data.id || uuidv4();
+            const alertObj = { 
+              ...ticket_data, 
+              id: alertId, 
+              status: 'pending', 
+              assignedAt: Date.now(),
+              unitId: targetUnit,
+              unitName: unit.name
+            };
+            
+            assignments.set(targetUnit, alertObj);
+            incidents.set(alertId, alertObj);
+            unit.status = 'busy';
+            unit.assignedIncidentId = alertId;
+            unitTripState.set(targetUnit, makeFreshTripState({ tripStatus: 'dispatched' }));
+
+            // 2. Persistent Storage (MySQL)
+            try {
+              // We attempt a generic insert into an incidents table
+              await db.query(
+                'INSERT INTO incidents (id, agent_ticket_id, patient_name, address, status, unit_id) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status=VALUES(status)',
+                [alertId, ticket_data.agentTicketId || '', ticket_data.patientName || '', ticket_data.address || '', 'pending', targetUnit]
+              ).catch(e => console.warn('DB Sync Warning:', e.message));
+            } catch (dbErr) {
+              console.warn('⚠️ MySQL Alert Save Failed:', dbErr.message);
+            }
+            
+            // 3. Publish back to NATS Unit Inbox for the Webhook Bridge to pick up
+            const inboxSubject = `unit.inbox.${targetUnit}`;
+            nc.publish(inboxSubject, sc.encode(JSON.stringify({
+              type: 'NEW_ALERT',
+              alert: alertObj,
+              timestamp: Date.now()
+            })));
+
+            console.log(`✅ [NATS DISPATCH] Successfully handled and routed to ${inboxSubject}`);
+          }
+        } catch (err) {
+          console.error('❌ Error in system_alert NATS handler:', err.message);
+        }
+      }
+    })();
+
+    // 🔍 SYSTEM QUERY RESPONDER: Answer questions from the Webhook Engine
+    const querySub = nc.subscribe('system.query.>');
+    (async () => {
+      for await (const msg of querySub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data));
+          const { replyTo } = data;
+          if (!replyTo) continue;
+
+          if (msg.subject.endsWith('.getUnits')) {
+            console.log(`🙋 [NATS QUERY] Providing Unit List to ${replyTo}`);
+            const now = Date.now();
+            const list = Array.from(units.values()).map(u => ({
+              ...u,
+              isOnline: now - u.lastSeen < HEARTBEAT_TIMEOUT_MS,
+              secondsAgo: Math.floor((now - u.lastSeen) / 1000),
+              distanceM: null,
+            }));
+            nc.publish(replyTo, sc.encode(JSON.stringify({ success: true, data: list, total: list.length })));
+          } else if (msg.subject.endsWith('.getStatus')) {
+            console.log(`🙋 [NATS QUERY] Providing System Status to ${replyTo}`);
+            nc.publish(replyTo, sc.encode(JSON.stringify({ alert: currentAlert })));
+          } else if (msg.subject.endsWith('.getNearestUnits')) {
+            console.log(`🙋 [NATS QUERY] Providing Nearest Units to ${replyTo}`);
+            // Simple filter for nearest (re-implementing the REST logic)
+            const { lat, lng, type } = data.params || {};
+            const unitsArray = Array.from(units.values())
+              .filter(u => u.status !== 'offline')
+              .filter(u => !type || u.type === type)
+              .map(u => ({
+                ...u,
+                distance: Math.sqrt(Math.pow((u.location?.latitude || 0) - lat, 2) + Math.pow((u.location?.longitude || 0) - lng, 2))
+              }))
+              .sort((a, b) => a.distance - b.distance)
+              .slice(0, 10);
+            nc.publish(replyTo, sc.encode(JSON.stringify({ success: true, data: unitsArray })));
+          } else if (data.alert_type === 'registration') {
+            handleRegister({ body: data.unit_data }, { json: (r) => console.log('✅ NATS Registration Done') });
+          } else if (data.alert_type === 'location_update') {
+            handleLocationUpdate({ body: data.unit_data }, { json: (r) => {} });
+          }
+        } catch (err) {
+          console.error('❌ Error handling NATS query:', err.message);
+        }
+      }
+    })();
+
+  } catch (err) {
+    console.warn('⚠️  NATS connection failed:', err.message);
+  }
+})();
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -645,6 +919,7 @@ app.post('/assign', async (req, res) => {
     severity: severity || (answers?.f5 ?? answers?.f7 ?? 'high'),
     assignedAt: Date.now(),
     submissionId,
+    agentTicketId: req.body.agentTicketId || '',
     roomId:       req.body.roomId       || '',   // ← ADD THIS
     matrixRoomId: req.body.matrixRoomId || '',   // ← ADD THIS
     reason: '',
@@ -663,6 +938,20 @@ app.post('/assign', async (req, res) => {
   console.log(`🚨 Assigned ${unit.name} → incident ${incidentId.slice(0, 8)}`);
   if (unit.pushToken) await sendPushToToken(unit.pushToken, alertData);
 
+  // Publish to NATS unit inbox so the webhook app's bridge writes it to Redis.
+  // This covers the case where the dispatch came in via direct HTTP to /assign
+  // rather than through the NATS system_alert path.
+  if (nc) {
+    try {
+      nc.publish(`unit.inbox.${id}`, sc.encode(JSON.stringify({
+        type: 'NEW_ALERT', alert: alertData, timestamp: Date.now()
+      })));
+      console.log(`📨 [NATS] Published unit.inbox.${id}`);
+    } catch (natsErr) {
+      console.warn('⚠️  NATS unit.inbox publish failed:', natsErr.message);
+    }
+  }
+
   res.json({ success: true, id: incidentId, unitName: unit.name, submissionId });
 });
 
@@ -677,6 +966,7 @@ app.post('/send-alert', async (req, res) => {
     notes: req.body.notes || '',
     vehicleType: req.body.vehicleType || 'ambulance',
     severity: req.body.severity || 'high',
+    agentTicketId: req.body.agentTicketId || '',
     roomId:       req.body.roomId       || '',   // ← ADD THIS
     matrixRoomId: req.body.matrixRoomId || '',   // ← ADD THIS
     reason: '',

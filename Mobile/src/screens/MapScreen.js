@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GOOGLE_MAPS_KEY, SERVER_URL } from '../config';
+import { GOOGLE_MAPS_KEY, SERVER_URL, WEBHOOK_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
 
 const { width } = Dimensions.get('window');
@@ -153,14 +153,38 @@ const fmtDist = (m) => m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round
 const fmtTime = (s) => { if (s <= 0) return '0 min'; const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h === 0 ? `${m} min` : m === 0 ? `${h} hr` : `${h} hr ${m} min`; };
 const fmtArrival = (remSeconds) => { const d = new Date(Date.now() + remSeconds * 1000); let h = d.getHours(), m = d.getMinutes(); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return h + ':' + m.toString().padStart(2, '0') + ' ' + ap; };
 
-const ping = (ambulanceId, coords, h, spd, distM, timeS, status, stepI, totalS, dDest) =>
-  fetch(`${SERVER_URL}/update-unit-location`, {
+const ping = (ambulanceId, coords, h, spd, distM, timeS, status, stepI, totalS, dDest, ticketNo) => {
+  console.log(`📡 GPS PING -> Sending for Ticket: ${ticketNo || 'N/A'}`);
+  return fetch(`${WEBHOOK_URL}/webhook/abc1234`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ unitId: ambulanceId, latitude: coords.latitude, longitude: coords.longitude, heading: h || 0, speed: spd || 0, remainingDistM: distM || 0, remainingTimeS: timeS || 0, tripStatus: status, stepIdx: stepI || 0, totalSteps: totalS || 0, distToDest: dDest || 0 }),
-  }).catch(() => { });
+    body: JSON.stringify({ 
+      channel: 'gps',
+      unit_id: ambulanceId,
+      ticket_no: ticketNo || '',
+      latitude: coords.latitude, longitude: coords.longitude, 
+      heading: h || 0, speed: spd || 0, 
+      remainingDistM: distM || 0, remainingTimeS: timeS || 0, 
+      trip_status: status, stepIdx: stepI || 0, totalSteps: totalS || 0, distToDest: dDest || 0 
+    }),
+  })
+  .then(r => console.log(`✅ PING SUCCESS: ${r.status}`))
+  .catch(e => console.error(`❌ PING FAILED: ${e.message}`));
+};
 
-const notifyStatus = (unitId, status) =>
-  fetch(`${SERVER_URL}/update-dispatch-status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unitId, tripStatus: status }) });
+const notifyStatus = (unitId, status, ticketNo) => {
+  console.log(`📣 STATUS UPDATE -> ${status} for Ticket: ${ticketNo || 'N/A'}`);
+  return fetch(`${WEBHOOK_URL}/webhook/abc1234`, { 
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+    body: JSON.stringify({ 
+      channel: 'gps',
+      unit_id: unitId, 
+      ticket_no: ticketNo || '',
+      trip_status: status 
+    }) 
+  })
+  .then(r => console.log(`✅ STATUS SUCCESS: ${r.status}`))
+  .catch(e => console.error(`❌ STATUS FAILED: ${e.message}`));
+};
 
 async function fetchRoutesV2(originLat, originLng, destLat, destLng) {
   try {
@@ -216,6 +240,11 @@ function buildColoredSegmentsFromV2(fullPath, intervals) {
 export default function MapScreen({ route: navRoute, navigation }) {
   const ambulanceId = navRoute?.params?.ambulanceId;
   const paramDest = navRoute?.params?.destination;
+  
+  // 🔍 DEBUG: Log all parameters received
+  console.log('📦 MAP_SCREEN_PARAMS:', JSON.stringify(navRoute?.params));
+
+  const ticketNo = navRoute?.params?.ticketNo || navRoute?.params?.incidentId || navRoute?.params?.ticket_no || '';
   const defDest = paramDest || { latitude: 11.0168, longitude: 76.9558 };
   const insets = useSafeAreaInsets();
 
@@ -353,7 +382,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
             if (!isCompletedRef.current && (currentSt === 'en_route' || currentSt === 'on_action')) {
               const dToDest = dist(pos, destRef.current);
               if (dToDest < 50) {
-                tripStatusRef.current = 'arrived'; setTripStatus('arrived'); notifyStatus(ambulanceId, 'arrived');
+                tripStatusRef.current = 'arrived'; setTripStatus('arrived'); notifyStatus(ambulanceId, 'arrived', ticketNo);
               }
             }
             if (dFromPrev > 3 && bearingSamplesRef.current >= 3) {
@@ -407,7 +436,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
 
   const startPing = () => {
     pingTimer.current = setInterval(() => {
-      if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, tripStatusRef.current, stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+      if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, tripStatusRef.current, stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0, ticketNo);
     }, 1000);
   };
 
@@ -509,7 +538,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
     setPanelOpen(false); setRemaining({ distM: 0, timeS: 0 });
     setWrongDir(false); wrongDirStart.current = null; offRoadCount.current = 0;
     routeProgressIdxRef.current = 0; setTurnUrgency(0); setDistToTurn(9999); distToTurnRef.current = 9999;
-    tripStatusRef.current = 'en_route'; setTripStatus('en_route'); notifyStatus(ambulanceId, 'en_route');
+    tripStatusRef.current = 'en_route'; setTripStatus('en_route'); notifyStatus(ambulanceId, 'en_route', ticketNo);
     const seedRoute = routesRef.current[selRef.current];
     if (seedRoute?.roadPoly?.length >= 2) {
       const initialBear = bearing(seedRoute.roadPoly[0], seedRoute.roadPoly[1]);
@@ -528,14 +557,14 @@ export default function MapScreen({ route: navRoute, navigation }) {
   };
 
   const handleOnAction = () => {
-    setDropdownOpen(false); tripStatusRef.current = 'on_action'; setTripStatus('on_action'); notifyStatus(ambulanceId, 'on_action');
+    setDropdownOpen(false); tripStatusRef.current = 'on_action'; setTripStatus('on_action'); notifyStatus(ambulanceId, 'on_action', ticketNo);
   };
   const handleMarkArrived = () => {
-    setDropdownOpen(false); tripStatusRef.current = 'arrived'; setTripStatus('arrived'); notifyStatus(ambulanceId, 'arrived');
+    setDropdownOpen(false); tripStatusRef.current = 'arrived'; setTripStatus('arrived'); notifyStatus(ambulanceId, 'arrived', ticketNo);
   };
   const handleCompleted = () => {
-    setDropdownOpen(false); tripStatusRef.current = 'completed'; setTripStatus('completed'); isCompletedRef.current = true; notifyStatus(ambulanceId, 'completed');
-    if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+    setDropdownOpen(false); tripStatusRef.current = 'completed'; setTripStatus('completed'); isCompletedRef.current = true; notifyStatus(ambulanceId, 'completed', ticketNo);
+    if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0, ticketNo);
   };
   const handleAbandon = () => {
     setDropdownOpen(false);
@@ -543,16 +572,16 @@ export default function MapScreen({ route: navRoute, navigation }) {
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Yes, Abandon', style: 'destructive', onPress: () => {
-          tripStatusRef.current = 'abandoned'; setTripStatus('abandoned'); notifyStatus(ambulanceId, 'abandoned');
-          if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'abandoned', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+          tripStatusRef.current = 'abandoned'; setTripStatus('abandoned'); notifyStatus(ambulanceId, 'abandoned', ticketNo);
+          if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'abandoned', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0, ticketNo);
           stopAll(); navigation.navigate('Alert');
         }
       },
     ]);
   };
   const stopNav = () => {
-    tripStatusRef.current = 'completed'; notifyStatus(ambulanceId, 'completed');
-    if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0);
+    tripStatusRef.current = 'completed'; notifyStatus(ambulanceId, 'completed', ticketNo);
+    if (carRef.current) ping(ambulanceId, carRef.current, movBearingRef.current, speedRef.current, remainingRef.current.distM, remainingRef.current.timeS, 'completed', stepIdxRef.current, routesRef.current[selRef.current]?.steps?.length || 0, carRef.current ? dist(carRef.current, destRef.current) : 0, ticketNo);
     stopAll(); navigation.navigate('Alert');
   };
   const onMapPress = (e) => {
