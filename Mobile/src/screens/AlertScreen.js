@@ -38,6 +38,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // unitType and unitId now come from session (set at login) ──────────────────
 import { SERVER_URL } from '../config';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { joinRoom } from '../services/matrixService';
 import ChatRoomListScreen from './Chatroomlistscreen';
 import { Platform } from 'react-native';
@@ -71,6 +72,7 @@ export default function AlertScreen() {
   const insets = useSafeAreaInsets();
 
   const { session, logout, setActiveRoomId } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   // ── CHANGE: derive unitId and unitType from session ────────────────────────
   // session.unitId   = e.g. "AMB-A3F9K2" (generated at login, stored in AsyncStorage)
@@ -78,6 +80,15 @@ export default function AlertScreen() {
   // We fall back to session.username so old sessions still work gracefully.
   const unitId   = session?.unitId   || session?.username;
   const unitType = session?.unitType || 'ambulance';
+  // Icon and color based on unit type selected at login
+  const UNIT_DISPLAY = {
+    ambulance: { icon: 'ambulance',  color: '#1E40AF' },
+    police:    { icon: 'shield-car', color: '#1D4ED8' },
+    fire:      { icon: 'fire-truck', color: '#F97316' },
+    rescue:    { icon: 'lifebuoy',   color: '#16A34A' },
+    hazmat:    { icon: 'biohazard',  color: '#7C3AED' },
+  };
+  const unitDisplay = UNIT_DISPLAY[unitType] || UNIT_DISPLAY.ambulance;
 
   const pulseAnim     = useRef(new Animated.Value(1)).current;
   const slideAnim     = useRef(new Animated.Value(300)).current;
@@ -96,6 +107,7 @@ export default function AlertScreen() {
   useEffect(() => { roomIdRef.current = roomId; },   [roomId]);
 
   useEffect(() => {
+    console.log("🔥 SESSION UNIT TYPE:", session?.unitType);
     if (!session?.username || isRegistered) return;
     registerAmbulance();
   }, [session?.username, isRegistered]);
@@ -371,34 +383,26 @@ export default function AlertScreen() {
     );
   };
 
-  // ── Original TabBar ───────────────────────────────────────────────────────
+  // ── TabBar — colors driven by global theme ────────────────────────────────
   const TabBar = () => (
-    <View style={[styles.tabBar, { paddingBottom: insets.bottom || 16 }]}>
+    <View style={[styles.tabBar, { paddingBottom: insets.bottom || 16, backgroundColor: theme.surface, borderTopColor: theme.border }]}>
       <TouchableOpacity
-        style={[styles.tabBtn, activeTab === TAB_STANDBY && styles.tabBtnActive]}
+        style={[styles.tabBtn, activeTab === TAB_STANDBY && [styles.tabBtnActive, { backgroundColor: theme.accentBg }]]}
         onPress={() => setActiveTab(TAB_STANDBY)}
         activeOpacity={0.8}
       >
-        <MaterialCommunityIcons
-          name="ambulance"
-          size={22}
-          color={activeTab === TAB_STANDBY ? '#1E40AF' : '#94A3B8'}
-        />
-        <Text style={[styles.tabLabel, activeTab === TAB_STANDBY && styles.tabLabelActive]}>Standby</Text>
-        {activeTab === TAB_STANDBY && <View style={styles.tabUnderline} />}
+        <MaterialCommunityIcons name="ambulance" size={22} color={activeTab === TAB_STANDBY ? theme.accent : theme.textSecondary} />
+        <Text style={[styles.tabLabel, { color: theme.textSecondary }, activeTab === TAB_STANDBY && { color: theme.accent }]}>Standby</Text>
+        {activeTab === TAB_STANDBY && <View style={[styles.tabUnderline, { backgroundColor: theme.accent }]} />}
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.tabBtn, activeTab === TAB_CHAT && styles.tabBtnActive]}
+        style={[styles.tabBtn, activeTab === TAB_CHAT && [styles.tabBtnActive, { backgroundColor: theme.accentBg }]]}
         onPress={() => setActiveTab(TAB_CHAT)}
         activeOpacity={0.8}
       >
-        <Ionicons
-          name="chatbubbles"
-          size={22}
-          color={activeTab === TAB_CHAT ? '#1E40AF' : '#94A3B8'}
-        />
-        <Text style={[styles.tabLabel, activeTab === TAB_CHAT && styles.tabLabelActive]}>Chats</Text>
-        {activeTab === TAB_CHAT && <View style={styles.tabUnderline} />}
+        <Ionicons name="chatbubbles" size={22} color={activeTab === TAB_CHAT ? theme.accent : theme.textSecondary} />
+        <Text style={[styles.tabLabel, { color: theme.textSecondary }, activeTab === TAB_CHAT && { color: theme.accent }]}>Chats</Text>
+        {activeTab === TAB_CHAT && <View style={[styles.tabUnderline, { backgroundColor: theme.accent }]} />}
       </TouchableOpacity>
     </View>
   );
@@ -487,7 +491,7 @@ export default function AlertScreen() {
             <Ionicons name="close" size={32} color="#DC2626" />
             <Text style={styles.rejectText}>Reject</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.acceptBtn} onPress={handleAccept} activeOpacity={0.85}>
+          <TouchableOpacity style={[styles.acceptBtn, { backgroundColor: theme.accent, shadowColor: theme.accent }]} onPress={handleAccept} activeOpacity={0.85}>
             <Ionicons name="checkmark" size={32} color="#fff" />
             <Text style={styles.acceptText}>Accept</Text>
           </TouchableOpacity>
@@ -502,12 +506,24 @@ export default function AlertScreen() {
   );
 
   return (
-    <View style={styles.flex}>
-      <View style={styles.waitingContainer}>
+    <View style={[styles.flex, { backgroundColor: theme.bg }]}>
+      <View style={[styles.waitingContainer, { backgroundColor: theme.bg }]}>
         <View style={[styles.topBarAbsolute, { top: insets.top + 8 }]}>
+
+          {/* ── Theme toggle pill ─────────────────────────────────────── */}
+          <TouchableOpacity
+            onPress={toggleTheme}
+            style={[styles.themeToggleBtn, { backgroundColor: theme.accent + '18', borderColor: theme.accent }]}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={{ fontSize: 14 }}>{theme.name === 'dark' ? '☀️' : '🌙'}</Text>
+            <Text style={[styles.themeToggleLbl, { color: theme.accent }]}>{theme.label}</Text>
+          </TouchableOpacity>
+
           <StatusPill ts={tripStatus} />
           <TouchableOpacity onPress={logout} style={styles.logoutBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Feather name="log-out" size={18} color="#94A3B8" />
+            <Feather name="log-out" size={18} color={theme.textSecondary} />
           </TouchableOpacity>
         </View>
 
@@ -515,11 +531,12 @@ export default function AlertScreen() {
           <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulseAnim }] }]} />
         )}
 
-        <View style={styles.ambulanceIconCircle}>
-          <MaterialCommunityIcons name="ambulance" size={56} color="#1E40AF" />
+        <View style={[styles.ambulanceIconCircle,{borderColor: unitDisplay.color+'40', shadowColor: unitDisplay.color,}]}>
+          <MaterialCommunityIcons name={unitDisplay.icon} size={56} color={unitDisplay.color} />
+
         </View>
-        <Text style={styles.waitingTitle}>Ready for Dispatch</Text>
-        <Text style={styles.waitingSubtitle}>
+        <Text style={[styles.waitingTitle, { color: theme.textPrimary }]}>Ready for Dispatch</Text>
+        <Text style={[styles.waitingSubtitle, { color: theme.textSecondary }]}>
           {isActive ? 'Waiting for emergency alert…' : 'Notifications paused'}
         </Text>
 
@@ -539,8 +556,7 @@ export default function AlertScreen() {
         </View>
 
         {/* ── Unit ID display ─────────────────────────────────────────────── */}
-        <UnitIdBadge />
-
+       
         <TouchableOpacity
           style={[styles.toggleBtn, isActive ? styles.toggleBtnActive : styles.toggleBtnInactive]}
           onPress={toggleActive}
@@ -795,4 +811,13 @@ const styles = StyleSheet.create({
     alignItems: 'center', borderWidth: 1.5, borderColor: '#CBD5E1',
   },
   clearTripBtnTxt: { color: '#64748B', fontWeight: '700', fontSize: 14 },
+
+  // ── Theme toggle pill (in the top bar) ────────────────────────────────────
+  themeToggleBtn: {
+    position: 'absolute', left: 20,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1.5,
+  },
+  themeToggleLbl: { fontSize: 12, fontWeight: '700', letterSpacing: 0.3 },
 });

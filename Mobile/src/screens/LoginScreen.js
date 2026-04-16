@@ -41,6 +41,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import {
   createSynapseUser,
   matrixLogin,
@@ -76,6 +77,7 @@ const STEPS = {
 
 export default function LoginScreen() {
   const { login } = useAuth();
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
 
   // ── Form state ──────────────────────────────────────────────────────────────
@@ -179,9 +181,9 @@ export default function LoginScreen() {
         activeOpacity={1}
         onPress={() => setShowPicker(false)}
       >
-        <View style={styles.pickerSheet}>
-          <View style={styles.pickerHandle} />
-          <Text style={styles.pickerTitle}>Select Unit Type</Text>
+        <View style={[styles.pickerSheet, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <View style={[styles.pickerHandle, { backgroundColor: theme.border }]} />
+          <Text style={[styles.pickerTitle, { color: theme.textPrimary }]}>Select Unit Type</Text>
 
           {UNIT_TYPES.map(unit => {
             const isSelected = unit.value === unitType;
@@ -191,6 +193,7 @@ export default function LoginScreen() {
                 key={unit.value}
                 style={[
                   styles.pickerOption,
+                  { borderColor: theme.border, backgroundColor: theme.surfaceAlt },
                   isSelected && { backgroundColor: color + '15', borderColor: color },
                 ]}
                 onPress={() => {
@@ -221,7 +224,7 @@ export default function LoginScreen() {
   // ────────────────────────────────────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
-      style={styles.flex}
+      style={[styles.flex, { backgroundColor: theme.bg }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <UnitTypePicker />
@@ -239,16 +242,16 @@ export default function LoginScreen() {
           <View style={[styles.iconCircle, { backgroundColor: accentColor, shadowColor: accentColor }]}>
             <MaterialCommunityIcons name={selectedUnit?.icon || 'ambulance'} size={40} color="#FFFFFF" />
           </View>
-          <Text style={styles.headerTitle}>EMERGENCY{'\n'}CONTROL SYSTEM</Text>
-          <Text style={styles.headerSub}>Driver Access Portal</Text>
+          <Text style={[styles.headerTitle, { color: theme.textPrimary }]}>EMERGENCY{'\n'}CONTROL SYSTEM</Text>
+          <Text style={[styles.headerSub, { color: theme.textSecondary }]}>Driver Access Portal</Text>
         </View>
 
         {/* ── Card ────────────────────────────────────────────────────────── */}
-        <View style={styles.card}>
+        <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <View style={[styles.cardStripAccent, { backgroundColor: accentColor }]} />
 
-          <Text style={styles.cardTitle}>DRIVER LOGIN</Text>
-          <Text style={styles.cardSub}>Enter your credentials to go online</Text>
+          <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>DRIVER LOGIN</Text>
+          <Text style={[styles.cardSub, { color: theme.textSecondary }]}>Enter your credentials to go online</Text>
 
           {/* Status banner */}
           {statusMsg ? (
@@ -284,13 +287,13 @@ export default function LoginScreen() {
           </TouchableOpacity>
 
           {/* ── Username ──────────────────────────────────────────────────── */}
-          <Text style={styles.label}>USERNAME <Text style={{ color: accentColor }}>*</Text></Text>
-          <View style={[styles.inputWrap, { borderColor: '#334155' }]}>
-            <Feather name="user" size={17} color="#64748B" style={styles.inputIcon} />
+          <Text style={[styles.label, { color: theme.textSecondary }]}>USERNAME <Text style={{ color: accentColor }}>*</Text></Text>
+          <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.inputBg }]}>
+            <Feather name="user" size={17} color={theme.textSecondary} style={styles.inputIcon} />
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: theme.textPrimary }]}
               placeholder="Enter your username"
-              placeholderTextColor="#475569"
+              placeholderTextColor={theme.textMuted}
               value={username}
               onChangeText={setUsername}
               autoCapitalize="none"
@@ -300,13 +303,13 @@ export default function LoginScreen() {
           </View>
 
           {/* ── Password ──────────────────────────────────────────────────── */}
-          <Text style={styles.label}>PASSWORD <Text style={{ color: accentColor }}>*</Text></Text>
-          <View style={[styles.inputWrap, { borderColor: '#334155' }]}>
-            <Feather name="lock" size={17} color="#64748B" style={styles.inputIcon} />
+          <Text style={[styles.label, { color: theme.textSecondary }]}>PASSWORD <Text style={{ color: accentColor }}>*</Text></Text>
+          <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.inputBg }]}>
+            <Feather name="lock" size={17} color={theme.textSecondary} style={styles.inputIcon} />
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: theme.textPrimary }]}
               placeholder="Enter your password"
-              placeholderTextColor="#475569"
+              placeholderTextColor={theme.textMuted}
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPass}

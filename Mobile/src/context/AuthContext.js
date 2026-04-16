@@ -111,6 +111,8 @@ export function AuthProvider({ children }) {
     accessToken: sessionData.accessToken,
     deviceId: sessionData.deviceId,
     displayname: sessionData.displayname,
+    unitType: sessionData.unitType,
+    unitId: sessionData.unitId,
   };
 
   await saveSession(newSession);

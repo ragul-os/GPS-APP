@@ -1,37 +1,31 @@
 /**
  * ChatScreen.js
  *
- * ✅ NEW ADDITIONS vs original:
- *  1. handleRecordVideo()      — opens system camera in video mode (long press → record)
- *  2. VideoNoteModal component — circular in-app recorder (like WhatsApp video note)
- *  3. handleVideoNoteSend()    — uploads & sends video note
- *  4. Circular bubble renderer — videos with body starting "vidnote:" show as circles
- *  5. Two new ATTACH_ITEMS     — "Record" (red) and "Video Note" (purple)
- *  6. Detailed console.log()   — every action logged for debugging
- *
- * NEW IMPORTS NEEDED (run these if not already installed):
- *   npx expo install expo-camera
- *   npx expo install react-native-svg
+ * CHANGES vs previous version:
+ *  1. ❌ REMOVED  VideoNoteModal + vidnote attach item + handleVideoNoteSend
+ *  2. 📷 CAMERA   — now shows a choice modal (Photo vs Video) before launching
+ *  3. 🎬 VIDEO    — AuthVideo now opens a fullscreen modal with seek/progress bar + X close
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IMPORTS  (✅ NEW lines marked)
+// IMPORTS
 // ─────────────────────────────────────────────────────────────────────────────
 import Slider from '@react-native-community/slider';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Video as AVVideo } from 'expo-av';
+import { Video as AVVideo, ResizeMode } from 'expo-av';
 import {
   useAudioPlayer,
   useAudioRecorder,
   RecordingPresets,
   requestRecordingPermissionsAsync,
 } from 'expo-audio';
-import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera'; // ✅ NEW
-import Svg, { Circle } from 'react-native-svg'; // ✅ NEW  (for progress ring)
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
 import * as Location from 'expo-location';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
 import MapView, { Marker } from 'react-native-maps';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -49,9 +43,11 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  StatusBar,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { SERVER_URL } from '../config';
 import {
   getRoomMessages,
@@ -74,10 +70,63 @@ import {
 } from '../services/matrixService';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DOWNLOAD HELPER
+// Saves images/videos to the camera-roll; opens share sheet for audio/docs.
+// ─────────────────────────────────────────────────────────────────────────────
+async function downloadMedia(uri, accessToken, filename, mediaType) {
+  try {
+    // ── 1. Permission (write-only = only request gallery-save, NOT audio read) ─
+    if (mediaType === 'image' || mediaType === 'video') {
+      const { status } = await MediaLibrary.requestPermissionsAsync(true /* writeOnly */);
+      if (status !== 'granted') {
+        Alert.alert('Permission required', 'Allow photo library access to save files to your device.');
+        return;
+      }
+    }
+
+    // ── 2. Build a safe local filename ─────────────────────────────────────
+    const fallbackExt =
+      mediaType === 'image' ? 'jpg'
+      : mediaType === 'video' ? 'mp4'
+      : mediaType === 'audio' ? 'm4a'
+      : 'bin';
+    const safeName = (filename || `download_${Date.now()}.${fallbackExt}`)
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    const localUri = `${FileSystem.cacheDirectory}${safeName}`;
+
+    // ── 3. Download with auth headers ──────────────────────────────────────
+    const { uri: localPath, status: httpStatus } = await FileSystem.downloadAsync(
+      uri, localUri,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (httpStatus !== 200) {
+      Alert.alert('Download failed', 'Server returned an error. Please try again.');
+      return;
+    }
+
+    // ── 4. Save / share ────────────────────────────────────────────────────
+    if (mediaType === 'image' || mediaType === 'video') {
+      await MediaLibrary.saveToLibraryAsync(localPath);
+      Alert.alert('Saved ✓', `${mediaType === 'image' ? 'Photo' : 'Video'} saved to your gallery.`);
+    } else {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(localPath);
+      } else {
+        Alert.alert('Downloaded ✓', 'File saved to device.');
+      }
+    }
+  } catch (err) {
+    console.error('[downloadMedia]', err);
+    Alert.alert('Download failed', err.message || 'An unexpected error occurred.');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader = false }) {
   const { session } = useAuth();
+  const { theme } = useTheme();
 
   const roomId = (propRoomId && propRoomId.trim() !== '') ? propRoomId : DISPATCH_ROOM_ID;
   const isDispatchRoom = roomId === DISPATCH_ROOM_ID;
@@ -109,8 +158,8 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
 
   const [panel, setPanel] = useState('none');
 
-  // ✅ NEW — video note modal state
-  const [showVideoNote, setShowVideoNote] = useState(false);
+  // ── NEW: camera-mode-choice modal ──────────────────────────────────────────
+  const [showCameraChoiceModal, setShowCameraChoiceModal] = useState(false);
 
   const flatRef = useRef(null);
   const syncActive = useRef(true);
@@ -371,9 +420,16 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     }
   }
 
-  // ─── Camera photo ─────────────────────────────────────────────────────────
-  async function handleCamera() {
+  // ─────────────────────────────────────────────────────────────────────────
+  // CAMERA — shows a choice modal (Photo / Video) before launching system camera
+  // ─────────────────────────────────────────────────────────────────────────
+  function handleCamera() {
     closePanel();
+    setShowCameraChoiceModal(true);
+  }
+
+  async function handleCameraPhoto() {
+    setShowCameraChoiceModal(false);
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Allow camera access.'); return; }
@@ -384,6 +440,32 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       const filename = `photo_${Date.now()}.jpg`;
       const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'image/jpeg', filename);
       await sendImageMessage(session.accessToken, roomId, mxcUri, filename, asset.width, asset.height);
+    } catch (err) {
+      Alert.alert('Upload Failed', err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleCameraVideo() {
+    setShowCameraChoiceModal(false);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) { Alert.alert('Permission needed', 'Allow camera access.'); return; }
+      console.log('📹 [CameraVideo] Launching camera in video mode...');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        videoMaxDuration: 120,
+        allowsEditing: true,
+        quality: 0.7,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      setUploading(true);
+      const filename = `video_${Date.now()}.mp4`;
+      const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'video/mp4', filename);
+      await sendVideoMessage(session.accessToken, roomId, mxcUri, filename);
+      console.log('📹 [CameraVideo] ✅ Video sent');
     } catch (err) {
       Alert.alert('Upload Failed', err.message);
     } finally {
@@ -408,97 +490,6 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
       const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'video/mp4', filename);
       await sendVideoMessage(session.accessToken, roomId, mxcUri, filename);
     } catch (err) {
-      Alert.alert('Upload Failed', err.message);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // ✅ NEW — handleRecordVideo
-  // Opens the SYSTEM CAMERA in video mode (like WhatsApp camera → hold record)
-  // allowsEditing:true gives the user a preview/trim screen before sending
-  // ─────────────────────────────────────────────────────────────────────────
-  async function handleRecordVideo() {
-    console.log('📹 [RecordVideo] Opening system camera in video mode...');
-    closePanel();
-    try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) {
-        console.warn('📹 [RecordVideo] Camera permission denied');
-        Alert.alert('Permission needed', 'Allow camera access.');
-        return;
-      }
-
-      console.log('📹 [RecordVideo] Launching camera...');
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        videoMaxDuration: 120,    // 2 minutes max
-        allowsEditing: true,      // shows trim/preview screen before sending
-        quality: 0.7,
-      });
-
-      if (result.canceled) {
-        console.log('📹 [RecordVideo] User cancelled');
-        return;
-      }
-      if (!result.assets?.[0]) {
-        console.warn('📹 [RecordVideo] No asset returned');
-        return;
-      }
-
-      const asset = result.assets[0];
-      console.log('📹 [RecordVideo] Got video asset:', {
-        uri: asset.uri,
-        duration: asset.duration,
-        fileSize: asset.fileSize,
-      });
-
-      setUploading(true);
-      const filename = `video_${Date.now()}.mp4`;
-      console.log('📹 [RecordVideo] Uploading as:', filename);
-
-      const mxcUri = await uploadMedia(session.accessToken, asset.uri, 'video/mp4', filename);
-      console.log('📹 [RecordVideo] Upload done, mxcUri:', mxcUri);
-
-      await sendVideoMessage(session.accessToken, roomId, mxcUri, filename);
-      console.log('📹 [RecordVideo] ✅ Video sent successfully');
-    } catch (err) {
-      console.error('📹 [RecordVideo] ❌ Error:', err.message);
-      Alert.alert('Upload Failed', err.message);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // ✅ NEW — handleVideoNoteSend
-  // Called by VideoNoteModal when the user stops recording.
-  // Uploads the video and sends it with "vidnote:" prefix so the bubble
-  // knows to render it as a circle.
-  // ─────────────────────────────────────────────────────────────────────────
-  async function handleVideoNoteSend(uri) {
-    console.log('🔵 [VideoNote] Received recorded URI:', uri);
-    setShowVideoNote(false);
-
-    if (!uri) {
-      console.warn('🔵 [VideoNote] No URI received, aborting');
-      return;
-    }
-
-    try {
-      setUploading(true);
-      const filename = `vnote_${Date.now()}.mp4`;
-      console.log('🔵 [VideoNote] Uploading as:', filename);
-
-      const mxcUri = await uploadMedia(session.accessToken, uri, 'video/mp4', filename);
-      console.log('🔵 [VideoNote] Upload done, mxcUri:', mxcUri);
-
-      // "vidnote:" prefix tells the bubble renderer to show a circle
-      await sendVideoMessage(session.accessToken, roomId, mxcUri, `vidnote:${filename}`);
-      console.log('🔵 [VideoNote] ✅ Video note sent successfully');
-    } catch (err) {
-      console.error('🔵 [VideoNote] ❌ Error:', err.message);
       Alert.alert('Upload Failed', err.message);
     } finally {
       setUploading(false);
@@ -628,41 +619,27 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     return 'file';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // ✅ CHANGED — ATTACH_ITEMS
-  // Added 'video_cam' (Record Video via system camera)
-  // Added 'vidnote'   (Video Note — circular in-app recorder)
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─── ATTACH_ITEMS  (Video Note removed) ───────────────────────────────────
   const ATTACH_ITEMS = [
-    { key: 'camera',    icon: 'camera',    label: 'Camera',     color: '#1E40AF', bg: '#DBEAFE' },
-    { key: 'video_cam', icon: 'video',     label: 'Record',     color: '#EF4444', bg: '#FEE2E2' }, // ✅ NEW
-    { key: 'vidnote',   icon: 'aperture',  label: 'Video Note', color: '#8B5CF6', bg: '#EDE9FE' }, // ✅ NEW
-    { key: 'gallery',   icon: 'image',     label: 'Gallery',    color: '#3B82F6', bg: '#EFF6FF' },
-    { key: 'video',     icon: 'film',      label: 'Video',      color: '#6366F1', bg: '#E0E7FF' },
-    { key: 'document',  icon: 'paperclip', label: 'Document',   color: '#6366F1', bg: '#E0E7FF' },
-    { key: 'location',  icon: 'map-pin',   label: 'Location',   color: '#10B981', bg: '#D1FAE5' },
-    { key: 'emoji',     icon: 'smile',     label: 'Emoji',      color: '#F59E0B', bg: '#FEF3C7' },
+    { key: 'camera',   icon: 'camera',    label: 'Camera',   color: '#1E40AF', bg: '#DBEAFE' },
+    { key: 'gallery',  icon: 'image',     label: 'Gallery',  color: '#3B82F6', bg: '#EFF6FF' },
+    { key: 'video',    icon: 'film',      label: 'Video',    color: '#6366F1', bg: '#E0E7FF' },
+    { key: 'document', icon: 'paperclip', label: 'Document', color: '#6366F1', bg: '#E0E7FF' },
+    { key: 'location', icon: 'map-pin',   label: 'Location', color: '#10B981', bg: '#D1FAE5' },
+    { key: 'emoji',    icon: 'smile',     label: 'Emoji',    color: '#F59E0B', bg: '#FEF3C7' },
   ];
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // ✅ CHANGED — attachHandlers
-  // Added handlers for 'video_cam' and 'vidnote'
-  // ─────────────────────────────────────────────────────────────────────────
   const attachHandlers = {
-    camera:    handleCamera,
-    video_cam: handleRecordVideo,                              // ✅ NEW
-    vidnote:   () => { closePanel(); setShowVideoNote(true); }, // ✅ NEW
-    gallery:   handlePickImage,
-    video:     handlePickVideo,
-    document:  handlePickFile,
-    location:  () => { closePanel(); setShowLocationModal(true); },
-    emoji:     () => { closePanel(); setShowEmojiPicker(true); },
+    camera:   handleCamera,          // opens choice modal
+    gallery:  handlePickImage,
+    video:    handlePickVideo,
+    document: handlePickFile,
+    location: () => { closePanel(); setShowLocationModal(true); },
+    emoji:    () => { closePanel(); setShowEmojiPicker(true); },
   };
 
   // ─────────────────────────────────────────────────────────────────────────
   // renderMessage
-  // ✅ CHANGED — m.video block now checks for "vidnote:" prefix
-  //             to show a circular bubble instead of the normal video player
   // ─────────────────────────────────────────────────────────────────────────
   const renderMessage = ({ item: msg, index }) => {
     const time = new Date(msg.ts).toLocaleTimeString('en-US', {
@@ -675,8 +652,8 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
     const msgReactions = reactions[msg.id];
     const isHighlighted = highlightedMsgId === msg.id;
 
-    // ✅ NEW — detect video note by body prefix
-    const isVideoNote = msg.msgtype === 'm.video' && msg.body?.startsWith('vidnote:');
+    // ── Media messages fill the bubble edge-to-edge (no inner padding) ─────
+    const isMediaMsg = (msg.msgtype === 'm.image' || msg.msgtype === 'm.video') && !!msg.mediaUrl;
 
     return (
       <View style={[styles.msgRow, msg.isMe && styles.msgRowMe]}>
@@ -698,80 +675,84 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
           style={[
             styles.bubble,
             msg.isMe ? styles.bubbleMe : styles.bubbleThem,
+            isMediaMsg && styles.bubbleMedia,      // removes inner padding, clips corners
             isHighlighted && styles.bubbleHighlighted,
-            // ✅ NEW — transparent bg for video note so circle looks clean
-            isVideoNote && styles.bubbleVideoNote,
           ]}
         >
+          {/* Sender name — padded even inside media bubbles */}
           {!msg.isMe && showMeta && (
-            <Text style={styles.senderName}>{msg.senderName}</Text>
+            <Text style={[styles.senderName, isMediaMsg && styles.senderNameMedia]}>
+              {msg.senderName}
+            </Text>
           )}
 
+          {/* Reply quote — padded inside media bubbles */}
           {replyMsg && (
-            <TouchableOpacity
-              style={[styles.replyBubble, msg.isMe && styles.replyBubbleMe]}
-              onPress={() => {
-                const idx = messages.findIndex(m => m.id === msg.replyToId);
-                if (idx !== -1) {
-                  flatRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-                  highlightMessage(msg.replyToId);
-                }
-              }}
-            >
-              <Text style={[styles.replySender, msg.isMe && styles.replySenderMe]}>{replyMsg.senderName}</Text>
-              <Text style={[styles.replyBody, msg.isMe && styles.replyBodyMe]} numberOfLines={1}>{replyMsg.body}</Text>
-            </TouchableOpacity>
+            <View style={isMediaMsg && styles.mediaPad}>
+              <TouchableOpacity
+                style={[styles.replyBubble, msg.isMe && styles.replyBubbleMe]}
+                onPress={() => {
+                  const idx = messages.findIndex(m => m.id === msg.replyToId);
+                  if (idx !== -1) {
+                    flatRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+                    highlightMessage(msg.replyToId);
+                  }
+                }}
+              >
+                <Text style={[styles.replySender, msg.isMe && styles.replySenderMe]}>{replyMsg.senderName}</Text>
+                <Text style={[styles.replyBody, msg.isMe && styles.replyBodyMe]} numberOfLines={1}>{replyMsg.body}</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           {msg.msgtype === 'm.text' && (
             <Text style={[styles.msgText, msg.isMe && styles.msgTextMe]}>{msg.body}</Text>
           )}
 
+          {/* Image fills the full bubble — download button overlaid top-right */}
           {msg.msgtype === 'm.image' && msg.mediaUrl && (
-            <TouchableOpacity
-              onPress={() => setFullImage(msg.mediaUrl)}
-              onLongPress={() => { setSelectedMessage(msg); setShowActionMenu(true); }}
-              activeOpacity={0.9}
-            >
-              <AuthImage
-                uri={msg.mediaUrl}
-                accessToken={session.accessToken}
-                style={styles.msgImage}
-                caption={msg.body !== 'image' ? msg.body : null}
-              />
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity
+                onPress={() => setFullImage(msg.mediaUrl)}
+                onLongPress={() => { setSelectedMessage(msg); setShowActionMenu(true); }}
+                activeOpacity={0.9}
+              >
+                <AuthImage
+                  uri={msg.mediaUrl}
+                  accessToken={session.accessToken}
+                  style={styles.msgImage}
+                  caption={msg.body !== 'image' ? msg.body : null}
+                />
+              </TouchableOpacity>
+              {/* ↓ Download to gallery */}
+              <TouchableOpacity
+                style={styles.mediaDownloadBtn}
+                onPress={() => downloadMedia(msg.mediaUrl, session.accessToken, msg.body, 'image')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="download-outline" size={15} color="#fff" />
+              </TouchableOpacity>
+            </View>
           )}
 
-          {/* ─────────────────────────────────────────────────────────────
-              ✅ CHANGED — m.video rendering
-              If body starts with "vidnote:" → show circular bubble
-              Otherwise → show normal rectangular video player
-          ──────────────────────────────────────────────────────────────── */}
+          {/* Video fills the full bubble — download button overlaid top-right */}
           {msg.msgtype === 'm.video' && msg.mediaUrl && (
-            isVideoNote ? (
-              // ✅ NEW — Circular video note bubble
-              <View style={circleVideoStyles.wrap}>
-                <AVVideo
-                  source={{
-                    uri: msg.mediaUrl,
-                    headers: { Authorization: `Bearer ${session.accessToken}` },
-                  }}
-                  useNativeControls
-                  resizeMode="cover"
-                  style={circleVideoStyles.video}
-                />
-                {/* Small label below circle */}
-                <Text style={circleVideoStyles.label}>Video note</Text>
-              </View>
-            ) : (
-              // Normal video player (unchanged)
+            <View style={{ position: 'relative' }}>
               <AuthVideo
                 uri={msg.mediaUrl}
                 accessToken={session.accessToken}
                 filename={msg.body}
                 isMe={msg.isMe}
               />
-            )
+              {/* ↓ Download to gallery */}
+              <TouchableOpacity
+                style={styles.mediaDownloadBtn}
+                onPress={() => downloadMedia(msg.mediaUrl, session.accessToken, msg.body, 'video')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="download-outline" size={15} color="#fff" />
+              </TouchableOpacity>
+            </View>
           )}
 
           {msg.msgtype === 'm.audio' && msg.mediaUrl && (
@@ -783,6 +764,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
               onFinish={() => setPlayingId(null)}
               isMe={msg.isMe}
               duration={msg.duration}
+              onDownload={() => downloadMedia(msg.mediaUrl, session.accessToken, msg.body, 'audio')}
             />
           )}
 
@@ -799,6 +781,16 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
                   {msg.mimeType?.split('/').pop()?.toUpperCase() || 'FILE'} · {fmtFileSize(msg.fileSize)}
                 </Text>
               </View>
+              {/* Download document */}
+              {msg.mediaUrl && (
+                <TouchableOpacity
+                  onPress={() => downloadMedia(msg.mediaUrl, session.accessToken, msg.filename || msg.body, 'file')}
+                  style={styles.fileDownloadBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="download-outline" size={22} color={msg.isMe ? '#DBEAFE' : '#1E40AF'} />
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -834,7 +826,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
             </View>
           )}
 
-          <View style={styles.msgFooter}>
+          <View style={[styles.msgFooter, isMediaMsg && styles.msgFooterMedia]}>
             {msgReactions && (
               <View style={styles.reactionRow}>
                 {Object.entries(msgReactions).map(([emoji, users]) => (
@@ -916,7 +908,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
-      style={styles.flex}
+      style={[styles.flex, { backgroundColor: theme.bg }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={0}
     >
@@ -1125,18 +1117,63 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
         </View>
       )}
 
-      {/* ───────────────────────────────────────────────────────────────────
-          ✅ NEW — VideoNoteModal
-          Place this INSIDE the KeyboardAvoidingView, alongside other Modals
-      ──────────────────────────────────────────────────────────────────── */}
-      <VideoNoteModal
-        visible={showVideoNote}
-        onClose={() => {
-          console.log('🔵 [VideoNote] Modal closed without sending');
-          setShowVideoNote(false);
-        }}
-        onSend={handleVideoNoteSend}
-      />
+      {/* ── Camera choice modal (Photo vs Video) ───────────────────────────── */}
+      <Modal
+        visible={showCameraChoiceModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCameraChoiceModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuOverlay}
+          activeOpacity={1}
+          onPress={() => setShowCameraChoiceModal(false)}
+        >
+          <View style={cameraChoiceStyles.card}>
+            <View style={cameraChoiceStyles.handle} />
+            <Text style={cameraChoiceStyles.title}>Open Camera</Text>
+            <Text style={cameraChoiceStyles.subtitle}>What would you like to capture?</Text>
+
+            <View style={cameraChoiceStyles.row}>
+              {/* Photo option */}
+              <TouchableOpacity
+                style={cameraChoiceStyles.option}
+                onPress={handleCameraPhoto}
+                activeOpacity={0.8}
+              >
+                <View style={[cameraChoiceStyles.optionIcon, { backgroundColor: '#DBEAFE' }]}>
+                  <Feather name="camera" size={28} color="#1E40AF" />
+                </View>
+                <Text style={cameraChoiceStyles.optionLabel}>Photo</Text>
+                <Text style={cameraChoiceStyles.optionSub}>Take a picture</Text>
+              </TouchableOpacity>
+
+              {/* Divider */}
+              <View style={cameraChoiceStyles.divider} />
+
+              {/* Video option */}
+              <TouchableOpacity
+                style={cameraChoiceStyles.option}
+                onPress={handleCameraVideo}
+                activeOpacity={0.8}
+              >
+                <View style={[cameraChoiceStyles.optionIcon, { backgroundColor: '#FEE2E2' }]}>
+                  <Feather name="video" size={28} color="#EF4444" />
+                </View>
+                <Text style={cameraChoiceStyles.optionLabel}>Video</Text>
+                <Text style={cameraChoiceStyles.optionSub}>Record a clip</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={cameraChoiceStyles.cancelBtn}
+              onPress={() => setShowCameraChoiceModal(false)}
+            >
+              <Text style={cameraChoiceStyles.cancelTxt}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Location modal */}
       <Modal visible={showLocationModal} transparent animationType="fade" onRequestClose={() => setShowLocationModal(false)}>
@@ -1357,195 +1394,7 @@ export default function ChatScreen({ roomId: propRoomId, roomLabel, hideHeader =
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ✅ NEW — VideoNoteModal
-// A circular in-app camera recorder. Works exactly like WhatsApp video notes:
-//   • Shows circular live preview
-//   • Tap record button to start
-//   • Tap again (or release) to stop & send
-//   • Red progress ring counts up to 60 seconds
-//
-// WHERE TO PLACE THIS: At the bottom of the file, after the ChatScreen export,
-// alongside AuthImage / AuthVideo / AuthAudio components.
-// ─────────────────────────────────────────────────────────────────────────────
-function VideoNoteModal({ visible, onClose, onSend }) {
-  const [camPerm, requestCamPerm] = useCameraPermissions();
-  const [micPerm, requestMicPerm] = useMicrophonePermissions();
-  const [isRecording, setIsRecording] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const cameraRef = useRef(null);
-  const timerRef = useRef(null);
-  const MAX_DURATION = 60; // seconds
-  const CIRCLE_SIZE = 220;
-  const RADIUS = (CIRCLE_SIZE - 8) / 2;
-  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-
-  // Request permissions when modal opens
-  useEffect(() => {
-    if (visible) {
-      console.log('🔵 [VideoNoteModal] Opened — requesting permissions...');
-      requestCamPerm().then(r => console.log('🔵 [VideoNoteModal] Camera perm:', r.status));
-      requestMicPerm().then(r => console.log('🔵 [VideoNoteModal] Mic perm:', r.status));
-      setProgress(0);
-      setIsRecording(false);
-    }
-    return () => {
-      clearInterval(timerRef.current);
-    };
-  }, [visible]);
-
-  async function startRecording() {
-    if (!cameraRef.current) {
-      console.warn('🔵 [VideoNoteModal] Camera ref not ready');
-      return;
-    }
-    if (!camPerm?.granted || !micPerm?.granted) {
-      console.warn('🔵 [VideoNoteModal] Permissions not granted');
-      Alert.alert('Permission needed', 'Allow camera and microphone access.');
-      return;
-    }
-
-    console.log('🔵 [VideoNoteModal] Starting recording...');
-    setIsRecording(true);
-    setProgress(0);
-
-    let elapsed = 0;
-    timerRef.current = setInterval(() => {
-      elapsed += 0.1;
-      const p = elapsed / MAX_DURATION;
-      setProgress(p);
-      if (elapsed >= MAX_DURATION) {
-        console.log('🔵 [VideoNoteModal] Max duration reached, stopping...');
-        stopRecording();
-      }
-    }, 100);
-
-    try {
-      // recordAsync resolves when stopRecording() is called
-      const video = await cameraRef.current.recordAsync({ maxDuration: MAX_DURATION });
-      console.log('🔵 [VideoNoteModal] Recording done. URI:', video?.uri);
-      if (video?.uri) {
-        onSend(video.uri);
-      }
-    } catch (err) {
-      console.error('🔵 [VideoNoteModal] recordAsync error:', err.message);
-      // Don't show alert — user may have just cancelled
-    }
-  }
-
-  async function stopRecording() {
-    console.log('🔵 [VideoNoteModal] stopRecording called');
-    clearInterval(timerRef.current);
-    setIsRecording(false);
-    try {
-      cameraRef.current?.stopRecording();
-    } catch (err) {
-      console.warn('🔵 [VideoNoteModal] stopRecording error:', err.message);
-    }
-    onClose();
-  }
-
-  if (!visible) return null;
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={vidNoteStyles.overlay}>
-        <View style={vidNoteStyles.container}>
-
-          {/* ── Circular camera preview with progress ring ── */}
-          <View style={vidNoteStyles.circleWrap}>
-            {camPerm?.granted && micPerm?.granted ? (
-              <CameraView
-                ref={cameraRef}
-                style={vidNoteStyles.camera}
-                facing="front"
-                mode="video"
-              />
-            ) : (
-              <View style={[vidNoteStyles.camera, vidNoteStyles.permPlaceholder]}>
-                <Ionicons name="camera-outline" size={32} color="#94A3B8" />
-                <Text style={vidNoteStyles.permText}>Camera permission needed</Text>
-              </View>
-            )}
-
-            {/* Progress ring using react-native-svg */}
-            {isRecording && (
-              <Svg
-                style={StyleSheet.absoluteFill}
-                width={CIRCLE_SIZE}
-                height={CIRCLE_SIZE}
-              >
-                {/* Background ring */}
-                <Circle
-                  cx={CIRCLE_SIZE / 2}
-                  cy={CIRCLE_SIZE / 2}
-                  r={RADIUS}
-                  stroke="rgba(255,255,255,0.2)"
-                  strokeWidth={4}
-                  fill="none"
-                />
-                {/* Progress ring */}
-                <Circle
-                  cx={CIRCLE_SIZE / 2}
-                  cy={CIRCLE_SIZE / 2}
-                  r={RADIUS}
-                  stroke="#EF4444"
-                  strokeWidth={4}
-                  fill="none"
-                  strokeDasharray={CIRCUMFERENCE}
-                  strokeDashoffset={CIRCUMFERENCE * (1 - progress)}
-                  strokeLinecap="round"
-                  transform={`rotate(-90 ${CIRCLE_SIZE / 2} ${CIRCLE_SIZE / 2})`}
-                />
-              </Svg>
-            )}
-
-            {/* Recording indicator dot */}
-            {isRecording && (
-              <View style={vidNoteStyles.recIndicator}>
-                <View style={vidNoteStyles.recDotSmall} />
-              </View>
-            )}
-          </View>
-
-          {/* Duration text */}
-          {isRecording && (
-            <Text style={vidNoteStyles.durationText}>
-              {Math.min(Math.round(progress * MAX_DURATION), MAX_DURATION)}s / {MAX_DURATION}s
-            </Text>
-          )}
-
-          {/* Record / Stop button */}
-          <TouchableOpacity
-            style={[
-              vidNoteStyles.recordBtn,
-              isRecording && vidNoteStyles.recordBtnActive,
-            ]}
-            onPress={isRecording ? stopRecording : startRecording}
-            activeOpacity={0.8}
-          >
-            {isRecording
-              ? <View style={vidNoteStyles.stopIcon} />
-              : <View style={vidNoteStyles.recDot} />
-            }
-          </TouchableOpacity>
-
-          <Text style={vidNoteStyles.hint}>
-            {isRecording ? 'Tap to stop & send' : 'Tap to record'}
-          </Text>
-
-          {/* Cancel button */}
-          <TouchableOpacity onPress={onClose} style={vidNoteStyles.cancelBtn}>
-            <Ionicons name="close" size={22} color="#94A3B8" />
-            <Text style={vidNoteStyles.cancelTxt}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTH COMPONENTS (unchanged from original)
+// AuthImage (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 function AuthImage({ uri, accessToken, style, resizeMode = 'cover' }) {
   if (!uri) return (
@@ -1564,21 +1413,159 @@ function AuthImage({ uri, accessToken, style, resizeMode = 'cover' }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthVideo
+// NEW: thumbnail in chat bubble → tap → fullscreen modal with seek bar + X close
+// ─────────────────────────────────────────────────────────────────────────────
 function AuthVideo({ uri, accessToken, filename, isMe }) {
+  const [showFullscreen, setShowFullscreen] = useState(false);
+  const [status, setStatus] = useState({});
+  const [isSeeking, setIsSeeking] = useState(false);
+  const playerRef    = useRef(null);
+  const fullPlayerRef = useRef(null);
+
+  const positionMs = status?.positionMillis || 0;
+  const durationMs = status?.durationMillis || 1;
+  const isPlaying  = status?.isPlaying || false;
+
+  function fmtMs(ms) {
+    const s = Math.floor((ms || 0) / 1000);
+    return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+  }
+
+  // ── WhatsApp-style toggle: replay from start when video has ended ──────────
+  async function togglePlay() {
+    if (!fullPlayerRef.current) return;
+    if (isPlaying) {
+      await fullPlayerRef.current.pauseAsync();
+    } else {
+      // If video is at (or near) the end, rewind first — just like WhatsApp
+      if (positionMs >= durationMs - 500) {
+        await fullPlayerRef.current.setPositionAsync(0);
+      }
+      await fullPlayerRef.current.playAsync();
+    }
+  }
+
+  async function handleSeek(val) {
+    if (!fullPlayerRef.current) return;
+    await fullPlayerRef.current.setPositionAsync(val);
+  }
+
+  async function onClose() {
+    try { await fullPlayerRef.current?.pauseAsync(); } catch (_) {}
+    setShowFullscreen(false);
+  }
+
+  // ── Status update: reset position to 0 when video finishes ────────────────
+  function handleStatusUpdate(s) {
+    if (isSeeking) return;
+    setStatus(s);
+    // didJustFinish → seek back to start so replay works from beginning
+    if (s.didJustFinish) {
+      fullPlayerRef.current?.setPositionAsync(0).catch(() => {});
+    }
+  }
+
   return (
-    <View style={[videoStyles.container, isMe && videoStyles.containerMe]}>
-      <AVVideo
-        source={{ uri, headers: { Authorization: `Bearer ${accessToken}` } }}
-        useNativeControls
-        resizeMode="contain"
-        isLooping={false}
-        style={videoStyles.video}
-      />
-    </View>
+    <>
+      {/* ── In-chat thumbnail bubble ── */}
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => setShowFullscreen(true)}
+        style={[videoStyles.container, isMe && videoStyles.containerMe]}
+      >
+        {/* Small inline preview (muted, no controls) */}
+        <AVVideo
+          ref={playerRef}
+          source={{ uri, headers: { Authorization: `Bearer ${accessToken}` } }}
+          resizeMode={ResizeMode.COVER}
+          isMuted
+          shouldPlay={false}
+          style={videoStyles.video}
+        />
+        {/* Play icon overlay */}
+        <View style={videoStyles.playOverlay}>
+          <View style={videoStyles.playCircle}>
+            <Ionicons name="play" size={22} color="#fff" />
+          </View>
+        </View>
+        {/* Filename label */}
+        {filename && filename !== 'video' && (
+          <Text style={[videoStyles.videoLabel, isMe && { color: 'rgba(219,234,254,0.8)' }]} numberOfLines={1}>
+            {filename}
+          </Text>
+        )}
+      </TouchableOpacity>
+
+      {/* ── Fullscreen video player modal ── */}
+      <Modal
+        visible={showFullscreen}
+        transparent={false}
+        animationType="fade"
+        onRequestClose={onClose}
+        statusBarTranslucent
+      >
+        <View style={fsVideoStyles.bg}>
+          <StatusBar barStyle="light-content" backgroundColor="#000" />
+
+          {/* ── X close button (top-left) ── */}
+          <TouchableOpacity style={fsVideoStyles.closeBtn} onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <View style={fsVideoStyles.closeBtnInner}>
+              <Ionicons name="close" size={24} color="#fff" />
+            </View>
+          </TouchableOpacity>
+
+          {/* ── Video ── */}
+          <AVVideo
+            ref={fullPlayerRef}
+            source={{ uri, headers: { Authorization: `Bearer ${accessToken}` } }}
+            resizeMode={ResizeMode.CONTAIN}
+            shouldPlay
+            onPlaybackStatusUpdate={handleStatusUpdate}
+            style={fsVideoStyles.video}
+          />
+
+          {/* ── Controls overlay (bottom) ── */}
+          <View style={fsVideoStyles.controls}>
+
+            {/* Seek / progress bar */}
+            <Slider
+              style={fsVideoStyles.slider}
+              minimumValue={0}
+              maximumValue={durationMs}
+              value={positionMs}
+              onSlidingStart={() => setIsSeeking(true)}
+              onSlidingComplete={async (val) => {
+                await handleSeek(val);
+                setIsSeeking(false);
+              }}
+              minimumTrackTintColor="#fff"
+              maximumTrackTintColor="rgba(255,255,255,0.35)"
+              thumbTintColor="#fff"
+            />
+
+            {/* Time row */}
+            <View style={fsVideoStyles.timeRow}>
+              <Text style={fsVideoStyles.timeTxt}>{fmtMs(positionMs)}</Text>
+              <Text style={fsVideoStyles.timeTxt}>{fmtMs(durationMs)}</Text>
+            </View>
+
+            {/* Play / Pause */}
+            <TouchableOpacity style={fsVideoStyles.playBtn} onPress={togglePlay}>
+              <Ionicons name={isPlaying ? 'pause' : 'play'} size={32} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
-function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, duration: initialDuration }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthAudio (unchanged)
+// ─────────────────────────────────────────────────────────────────────────────
+function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, duration: initialDuration, onDownload }) {
   const player = useAudioPlayer({
     uri,
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -1587,20 +1574,39 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
   const [isSeeking, setIsSeeking] = useState(false);
   const [loadedDuration, setLoadedDuration] = useState(initialDuration || 0);
 
+  // Tracks whether audio just finished — used to seek-before-play on next press.
+  // We do NOT seekTo(0) inside playToEnd because onFinish() immediately triggers
+  // player.pause() via the parent, creating a race that leaves the player at the end.
+  const justFinished = useRef(false);
+
   useEffect(() => {
     if (player.duration > 0 && !loadedDuration) setLoadedDuration(player.duration);
   }, [player.duration]);
 
+  // ── Play / pause effect ────────────────────────────────────────────────────
   useEffect(() => {
-    if (isPlaying) player.play();
-    else player.pause();
+    if (isPlaying) {
+      if (justFinished.current) {
+        // Replay from start: seek first, then play
+        justFinished.current = false;
+        player.seekTo(0);
+      }
+      player.play();
+    } else {
+      player.pause();
+    }
   }, [isPlaying, player]);
 
+  // ── Finish + progress polling ──────────────────────────────────────────────
   useEffect(() => {
-    const unsubFinish = player.addListener('playToEnd', () => { onFinish(); setPos(0); });
+    const unsubFinish = player.addListener('playToEnd', () => {
+      justFinished.current = true;   // remember we finished; seek on next play press
+      setPos(0);                     // reset slider to start visually
+      onFinish();                    // tell parent → sets isPlaying=false → pause() called
+    });
     const interval = setInterval(() => {
       if (!isSeeking && isPlaying) setPos(player.currentTime);
-    }, 500);
+    }, 250);
     return () => { unsubFinish.remove(); clearInterval(interval); };
   }, [player, onFinish, isPlaying, isSeeking]);
 
@@ -1635,6 +1641,16 @@ function AuthAudio({ uri, accessToken, isPlaying, onToggle, onFinish, isMe, dura
             thumbTintColor={isMe ? '#fff' : '#1E40AF'}
           />
         </View>
+        {/* Download audio */}
+        {onDownload && (
+          <TouchableOpacity
+            onPress={onDownload}
+            style={styles.audioDownloadBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="download-outline" size={18} color={isMe ? 'rgba(219,234,254,0.85)' : '#1E40AF'} />
+          </TouchableOpacity>
+        )}
       </View>
       <View style={styles.audioMetaRow}>
         <Text style={[styles.audioTimeTxt, isMe && styles.audioTimeTxtMe]}>
@@ -1655,100 +1671,188 @@ function getInitials(name = '') {
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLES
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── In-chat video bubble styles ───────────────────────────────────────────────
 const videoStyles = StyleSheet.create({
-  container: { width: 260, overflow: 'hidden', borderRadius: 12, backgroundColor: '#DBEAFE', marginBottom: 2 },
-  containerMe: { backgroundColor: 'rgba(255,255,255,0.1)' },
+  container: {
+    width: 260,
+    overflow: 'hidden',
+    borderRadius: 0,          // parent bubble handles corner radius via overflow:hidden
+    backgroundColor: 'transparent',
+    marginBottom: 0,
+  },
+  containerMe: { backgroundColor: 'transparent' },
   video: { width: 260, height: 195 },
+  playOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  playCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.7)',
+  },
+  videoLabel: {
+    position: 'absolute',
+    bottom: 6,
+    left: 8,
+    right: 8,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.85)',
+    fontWeight: '600',
+  },
 });
 
-// ✅ NEW — Circular video note bubble styles
-const circleVideoStyles = StyleSheet.create({
-  wrap: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    overflow: 'hidden',
-    backgroundColor: '#0F172A',
+// ── Fullscreen video player styles ───────────────────────────────────────────
+const fsVideoStyles = StyleSheet.create({
+  bg: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 54 : 32,
+    left: 18,
+    zIndex: 20,
+  },
+  closeBtnInner: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  video: {
+    width: '100%',
+    height: '100%',
+  },
+  controls: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 38 : 22,
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+  },
+  timeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -6,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  timeTxt: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  playBtn: {
+    alignSelf: 'center',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.35)',
     marginBottom: 4,
   },
-  video: { width: 160, height: 160 },
-  label: {
-    fontSize: 11,
-    color: '#94A3B8',
-    textAlign: 'center',
-    marginTop: 4,
-  },
 });
 
-// ✅ NEW — VideoNoteModal styles
-const vidNoteStyles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.82)',
-    alignItems: 'center',
-    justifyContent: 'center',
+// ── Camera choice modal styles ────────────────────────────────────────────────
+const cameraChoiceStyles = StyleSheet.create({
+  card: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 28,
   },
-  container: { alignItems: 'center', gap: 18 },
-  circleWrap: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    overflow: 'hidden',
-    backgroundColor: '#1E293B',
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CBD5E1',
+    marginBottom: 20,
   },
-  camera: { width: 220, height: 220 },
-  permPlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 4,
   },
-  permText: { color: '#94A3B8', fontSize: 12, textAlign: 'center', paddingHorizontal: 20 },
-  recIndicator: {
-    position: 'absolute',
-    top: 14,
-    right: 14,
+  subtitle: {
+    fontSize: 13,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginBottom: 28,
+  },
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    gap: 0,
+    marginBottom: 24,
   },
-  recDotSmall: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#EF4444',
+  option: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 10,
   },
-  durationText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: -8,
-  },
-  recordBtn: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: '#fff',
+  optionIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#EF4444',
   },
-  recordBtnActive: { backgroundColor: '#FEE2E2' },
-  recDot: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#EF4444',
+  optionLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
   },
-  stopIcon: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
-    backgroundColor: '#EF4444',
+  optionSub: {
+    fontSize: 12,
+    color: '#94A3B8',
   },
-  hint: { color: 'rgba(255,255,255,0.7)', fontSize: 13 },
-  cancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10 },
-  cancelTxt: { color: '#94A3B8', fontSize: 14 },
+  divider: {
+    width: 1,
+    height: 80,
+    backgroundColor: '#E2E8F0',
+    marginHorizontal: 16,
+  },
+  cancelBtn: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+  },
+  cancelTxt: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748B',
+  },
 });
 
 const styles = StyleSheet.create({
@@ -1777,18 +1881,41 @@ const styles = StyleSheet.create({
   avatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center' },
   avatarTxt: { color: '#1E40AF', fontSize: 13, fontWeight: '700' },
 
-  bubble: { maxWidth: '76%', borderRadius: 18, paddingHorizontal: 13, paddingTop: 9, paddingBottom: 7 },
+  bubble: { maxWidth: '76%', borderRadius: 18, paddingHorizontal: 13, paddingTop: 9, paddingBottom: 7, overflow: 'hidden' },
   bubbleThem: { backgroundColor: '#fff', borderBottomLeftRadius: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   bubbleMe: { backgroundColor: '#1E40AF', borderBottomRightRadius: 4, marginRight: 4 },
   bubbleHighlighted: { backgroundColor: '#FEF9C3', borderColor: '#FDE047', borderWidth: 1 },
-  // ✅ NEW — transparent background for video note bubble
-  bubbleVideoNote: { backgroundColor: 'transparent', paddingHorizontal: 4, paddingVertical: 4 },
+  // Media bubbles: no inner padding — bubble's overflow:hidden clips the image/video to the rounded corners
+  bubbleMedia: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
 
   senderName: { fontSize: 11, color: '#1E40AF', fontWeight: '700', marginBottom: 4 },
+  senderNameMedia: { paddingHorizontal: 13, paddingTop: 9, marginBottom: 4 },  // restore padding for sender name inside media bubble
+  mediaPad: { paddingHorizontal: 13 },   // used for reply quote inside media bubble
   msgText: { fontSize: 15, color: '#0F172A', lineHeight: 21 },
   msgTextMe: { color: '#EFF6FF' },
-  msgImage: { width: 260, height: 195, borderRadius: 12, marginBottom: 4 },
+  msgImage: { width: 260, height: 195, borderRadius: 0, marginBottom: 0 },  // bubble handles radius via overflow:hidden
+
+  // ── Download buttons ───────────────────────────────────────────────────────
+  // Overlaid top-right corner on image/video
+  mediaDownloadBtn: {
+    position: 'absolute', top: 8, right: 8,
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.50)',
+    alignItems: 'center', justifyContent: 'center',
+    zIndex: 10,
+  },
+  // Inline at the end of the audio seek row
+  audioDownloadBtn: {
+    paddingLeft: 6, paddingRight: 2,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  // Inline at the far-right of the file card
+  fileDownloadBtn: {
+    paddingLeft: 8,
+    alignItems: 'center', justifyContent: 'center',
+  },
   msgFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 4 },
+  msgFooterMedia: { paddingHorizontal: 10, paddingBottom: 6, marginTop: 0 },  // footer padding inside media bubble
   msgTime: { fontSize: 10, color: '#94A3B8' },
   msgTimeMe: { color: 'rgba(219,234,254,0.7)' },
 
