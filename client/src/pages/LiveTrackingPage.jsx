@@ -961,11 +961,11 @@ export default function LiveTrackingPage() {
         if (!isMounted || activeUnitIdRef.current !== myUid) return;
 
         let d;
-        if (res.data && res.data.eventPayload !== undefined) {
-          const payloads = res.data.eventPayload;
+        if (res.data && (res.data.eventPayload !== undefined || res.data.channel !== undefined)) {
+          const payloads = res.data.eventPayload || res.data.channel;
           if (payloads && payloads.length > 0) {
             d = payloads[payloads.length - 1]; // Use latest received event
-            lastEventId = d.eventId || lastEventId; // Advance cursor
+            lastEventId = d.eventId || lastEventId || d.timestamp; // Advance cursor
           } else {
              // Timeout or no new events, poll again
              setTimeout(poll, 100);
@@ -974,6 +974,11 @@ export default function LiveTrackingPage() {
         } else {
           // Fallback legacy behavior
           d = res.data;
+        }
+
+        if (!d || typeof d !== 'object') {
+          setTimeout(poll, 100);
+          return;
         }
 
         const ts = d.tripStatus || d.trip_status || 'idle';
@@ -1219,6 +1224,14 @@ export default function LiveTrackingPage() {
           unitTypes={unitTypes} onUnitClick={handleMiniMapUnitClick} activeUnitId={activeUnitId}
         />
 
+        <div
+          ref={mapRef}
+          style={{
+            ...s.map,
+            visibility: live ? 'visible' : 'hidden',
+          }}
+        />
+
         {!live && (
           <div style={s.noLocMsg}>
             <div style={{ fontSize: 52, opacity: .18 }}>{cfg.icon}</div>
@@ -1226,7 +1239,6 @@ export default function LiveTrackingPage() {
             <div style={{ fontSize: 11, opacity: .6, maxWidth: 240, textAlign: 'center' }}>Live position appears once the unit is moving</div>
           </div>
         )}
-        <div ref={mapRef} style={{ ...s.map, display: live ? 'block' : 'none' }} />
       </div>
 
       <div style={s.side}>

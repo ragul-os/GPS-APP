@@ -9,7 +9,7 @@ function trimTrailingSlash(url) {
 
 /** REST backend (Express / dispatch API) */
 export const API_BASE_URL = trimTrailingSlash(
-  import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.2.52:5000'
+  import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.24.19:5000'
 );
 
 /** Webhook Engine V3 */
@@ -19,7 +19,7 @@ export const WEBHOOK_BASE_URL = trimTrailingSlash(
 
 /** Synapse homeserver root (Client-Server API lives under /_matrix/...) */
 export const SYNAPSE_BASE_URL = trimTrailingSlash(
-  import.meta.env.VITE_SYNAPSE_BASE_URL ?? 'http://192.168.2.52:8008'
+  import.meta.env.VITE_SYNAPSE_BASE_URL ?? 'http://192.168.24.19:8008'
 );
 
 /**

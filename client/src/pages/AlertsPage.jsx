@@ -223,10 +223,11 @@ export default function AlertsPage() {
             const statusToUse = liveStatusMap[a.id] || a.status;
             const stCfg = STATUS_CFG[statusToUse] || STATUS_CFG.pending;
             const sevColor = SEV_COLORS[a.severity] || '#8B949E';
+            const itemKey = a.id || a.agentTicketId || Math.random().toString();
 
             if (viewMode === 'list') {
               return (
-                <div key={a.id} style={s.listItem} onClick={() => {
+                <div key={itemKey} style={s.listItem} onClick={() => {
                   const tid = a.agentTicketId || a.id;
                   navigate(`/live/${tid}`, { state: { alert: a } });
                 }}>
@@ -261,7 +262,7 @@ export default function AlertsPage() {
 
             return (
               <div
-                key={a.id}
+                key={itemKey}
                 style={s.ticket}
                 onClick={() => {
                   const tid = a.agentTicketId || a.id;

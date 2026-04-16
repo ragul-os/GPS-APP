@@ -6,6 +6,7 @@ import {
   Alert,
   Animated,
   Dimensions,
+  Image,
   Modal,
   Platform,
   ScrollView,
@@ -14,10 +15,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as Speech from 'expo-speech';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GOOGLE_MAPS_KEY, SERVER_URL, WEBHOOK_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 
 const { width } = Dimensions.get('window');
 const MODE = { OVERVIEW: 'overview', NAVIGATE: 'navigate' };
@@ -28,6 +31,40 @@ const TRAVEL_MODES = [
   { key: 'bicycling', label: 'Cycle', icon: 'bicycle' },
   { key: 'transit', label: 'Transit', icon: 'bus' },
 ];
+
+const DARK_MAP_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
+  { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6b9a76' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#9ca5b3' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#746855' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#1f2835' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#f3d19c' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
+  { featureType: 'transit.station', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#515c6d' }] },
+  { featureType: 'water', elementType: 'labels.text.stroke', stylers: [{ color: '#17263c' }] },
+];
+
+const VehicleMarker = ({ heading = 0 }) => (
+  <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{
+      width: 30, height: 30, borderRadius: 15,
+      backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center',
+      shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, elevation: 5,
+      transform: [{ rotate: `${heading}deg` }]
+    }}>
+      <Ionicons name="navigate" size={20} color="#1A73E8" />
+    </View>
+  </View>
+);
 
 const STATUS_PILL = {
   dispatched: { label: 'Dispatched', bg: '#1A1A2E', text: '#82B4FF', border: '#82B4FF44' },

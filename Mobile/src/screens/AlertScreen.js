@@ -58,6 +58,20 @@ const TAB_STANDBY = 'standby';
 const TAB_CHAT = 'chat';
 
 export default function AlertScreen() {
+  const { theme, toggleTheme } = useTheme();
+  const { session, logout, setActiveRoomId } = useAuth();
+  
+  const unitId = session?.unitId || session?.username;
+  const unitType = session?.unitType || 'ambulance';
+
+  const unitDisplay = {
+    ambulance: { icon: 'ambulance', color: '#DC2626' },
+    police: { icon: 'shield-car', color: '#1E40AF' },
+    fire: { icon: 'fire-truck', color: '#EA580C' },
+    tow: { icon: 'truck-flatbed', color: '#6366F1' },
+    paramedic: { icon: 'medical-bag', color: '#10B981' },
+  }[unitType] || { icon: 'ambulance', color: '#DC2626' };
+
   const [activeTab, setActiveTab] = useState(TAB_STANDBY);
   const [status, setStatus] = useState('waiting');
   const [alertData, setAlertData] = useState(null);
@@ -68,8 +82,6 @@ export default function AlertScreen() {
   const [tripStatus, setTripStatus] = useState('idle');
   const [isRegistered, setIsRegistered] = useState(false);
   const insets = useSafeAreaInsets();
-
-  const { session, logout, setActiveRoomId } = useAuth();
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const slideAnim = useRef(new Animated.Value(300)).current;
@@ -199,8 +211,7 @@ export default function AlertScreen() {
 
   // 🌟 WEBHOOK GATEWAY INBOX: Long-poll the unit's private Redis inbox
   const startInboxPoll = () => {
-    if (!session?.username) return;
-    const unitId = session.username;
+    if (!unitId) return;
     console.log('[Inbox] Starting Webhook long-poll for unit:', unitId);
 
     const pollLoop = async () => {
