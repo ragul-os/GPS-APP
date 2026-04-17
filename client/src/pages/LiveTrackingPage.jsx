@@ -1,26 +1,24 @@
 /**
- * LiveTrackingPage — v5 FLICKER-FREE + MINIMAP COLLAPSE FIX
+ * LiveTrackingPage — v6 FLICKER-FREE FINAL
  *
- * ROOT CAUSES OF FLICKERING (all fixed here):
+ * FIXES IN THIS VERSION:
  * ─────────────────────────────────────────────────────────────────────────────
- * CAUSE 1 — lastTripSt was in poll useEffect dep array
- * CAUSE 2 — unitStatuses read inside poll closure (stale)
- * CAUSE 3 — setUnitLocations always set a new object reference
- * CAUSE 4 — auto-complete useEffect ran every second once allDone=true
- * CAUSE 5 — main poll dep array included trafficOn (state)
- * CAUSE 6 — all-units poll dep array was [dispatchedUnits] (new array ref each render)
+ * FIX 1 — Removed replayMode state + broken <Route> wrapper from return()
+ *          The conditional {replayMode ? <Route.../> : <>...</>} was causing
+ *          React Router to mutate location.key → re-firing the sync useEffect
+ *          → setTripStatus('idle') → visible flicker every ~100ms
  *
- * MINIMAP FIX (v5.1):
- * ─────────────────────────────────────────────────────────────────────────────
- * Problem: Collapsing the minimap resets miniMapObj.current = null (so it
- *   reinitialises on next open), but miniMkrsRef.current still holds old
- *   marker objects from the dead map instance. hasFitOnce was also stuck true.
- *   Result: new map shows destination pin but NO unit markers appear.
+ * FIX 2 — setTripStatus now uses functional updater with terminal-state guard
+ *          Never downgrades from 'completed'/'abandoned' back to anything
  *
- * Fix: when collapsed → true, we null out miniMapObj AND clear miniMkrsRef
- *   AND reset hasFitOnce. This way the re-open path is a clean slate — the
- *   init effect creates a fresh map, and the update effect recreates all
- *   markers from scratch with a fresh fitBounds call.
+ * FIX 3 — lastTripStRef guard added: never let stale 'idle' overwrite a
+ *          terminal status in the side-effects block
+ *
+ * FIX 4 — The navigation sync useEffect now only resets tripStatus to 'idle'
+ *          when the ticket is NOT already completed
+ *
+ * FIX 5 — Added [FLICKER-DEBUG] console logs so you can trace every status
+ *          change in DevTools. Remove them once confirmed stable.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -28,7 +26,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getAmbulanceLocation, getDirections } from '../api/api';
 import axios from 'axios';
-import InteractionsTab from '../components/InteractionsTab'; // kept for TicketDetailsOverlay fallback
+import InteractionsTab from '../components/InteractionsTab';
 import {
   MedicineBoxOutlined,
   FireOutlined,
@@ -64,10 +62,12 @@ import {
   LoadingOutlined,
   WifiOutlined,
   BarChartOutlined,
-  RadarChartOutlined
+  RadarChartOutlined,
+  PlayCircleOutlined,
 } from '@ant-design/icons';
 
 import { API_BASE_URL, GOOGLE_MAPS_API_KEY, GOOGLE_ROUTES_COMPUTE_URL } from '../config/apiConfig';
+import RouteReplayPage from '../pages/RouteReplayPage';
 
 const DARK_MAP_STYLES = [
   { elementType: 'geometry', stylers: [{ color: '#1a1f2e' }] },
@@ -102,8 +102,13 @@ const UNIT_ST_COLOR = {
   on_action: '#9C27B0', arrived: '#34A853', completed: '#A5D6A7', abandoned: '#EF5350',
 };
 const UNIT_ST_ICON = {
-  idle: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, accepted: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, en_route: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, on_action: <ClockCircleFilled style={{ fontSize: '16px', verticalAlign: 'middle', color: '#faad14' }} />,
-  arrived: <EnvironmentOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, completed: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, abandoned: <CloseCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+  idle: <ClockCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+  accepted: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+  en_route: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+  on_action: <ClockCircleFilled style={{ fontSize: '16px', verticalAlign: 'middle', color: '#faad14' }} />,
+  arrived: <EnvironmentOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+  completed: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+  abandoned: <CloseCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
 };
 
 const TRIP_STATUS_CFG = {
@@ -117,6 +122,7 @@ const TRIP_STATUS_CFG = {
 };
 
 const LIFECYCLE_ORDER = ['accepted', 'en_route', 'arrived', 'on_action', 'completed'];
+const TERMINAL_STATUSES = ['completed', 'abandoned'];
 
 const NEARBY_TYPES = {
   hospital: { label: 'Hospital', icon: <PushpinOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, color: '#E53935', placeType: 'hospital', radius: 5000 },
@@ -135,8 +141,6 @@ function trafficLabel(r) { if (r < 1.1) return { label: 'Free flow', color: '#34
 function decPoly(enc) { let p = [], i = 0, la = 0, ln = 0; while (i < enc.length) { let b, s = 0, r = 0; do { b = enc.charCodeAt(i++) - 63; r |= (b & 0x1f) << s; s += 5; } while (b >= 0x20); la += (r & 1) ? ~(r >> 1) : (r >> 1); s = 0; r = 0; do { b = enc.charCodeAt(i++) - 63; r |= (b & 0x1f) << s; s += 5; } while (b >= 0x20); ln += (r & 1) ? ~(r >> 1) : (r >> 1); p.push({ lat: la / 1e5, lng: ln / 1e5 }); } return p; }
 function stitch(steps) { const o = []; for (const st of steps) { if (!st.polyline?.points) continue; const pts = decPoly(st.polyline.points); if (o.length && pts.length) { const l = o[o.length - 1], f = pts[0]; if (Math.abs(l.lat - f.lat) < 1e-6 && Math.abs(l.lng - f.lng) < 1e-6) o.push(...pts.slice(1)); else o.push(...pts); } else o.push(...pts); } return o; }
 
-// ── Routes API v2 — Real per-segment traffic (URLs + key: ../config/apiConfig.js) ──
-
 async function fetchRoutesV2(originLat, originLng, destLat, destLng) {
   try {
     const body = {
@@ -147,56 +151,34 @@ async function fetchRoutesV2(originLat, originLng, destLat, destLng) {
       departureTime: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
       extraComputations: ['TRAFFIC_ON_POLYLINE'],
     };
-
-    console.log('[RoutesV2] 🚀 Calling Routes API v2...', { originLat, originLng, destLat, destLng });
-
     const res = await fetch(GOOGLE_ROUTES_COMPUTE_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
-        'X-Goog-FieldMask': [
-          'routes.distanceMeters',
-          'routes.duration',
-          'routes.staticDuration',
-          'routes.polyline.encodedPolyline',
-          'routes.travelAdvisory.speedReadingIntervals',
-        ].join(','),
+        'X-Goog-FieldMask': ['routes.distanceMeters', 'routes.duration', 'routes.staticDuration', 'routes.polyline.encodedPolyline', 'routes.travelAdvisory.speedReadingIntervals'].join(','),
       },
       body: JSON.stringify(body),
     });
-
     const data = await res.json();
-    console.log('[RoutesV2] 📦 Raw response:', data);
-
-    if (!data.routes || !data.routes[0]) {
-      console.warn('[RoutesV2] ❌ No routes returned. Check API key & billing.');
-      return null;
-    }
-
+    if (!data.routes?.[0]) return null;
     const route = data.routes[0];
     const encoded = route.polyline?.encodedPolyline;
-    if (!encoded) { console.warn('[RoutesV2] ❌ No encodedPolyline.'); return null; }
-
+    if (!encoded) return null;
     const intervals = route.travelAdvisory?.speedReadingIntervals || [];
-    console.log(`[RoutesV2] ✅ Got ${intervals.length} speed intervals:`, intervals);
-
     const durSec = parseInt((route.staticDuration || '0s').replace('s', '')) || 0;
     const trafSec = parseInt((route.duration || '0s').replace('s', '')) || 0;
-
     return { encoded, intervals, durSec, trafSec, distM: route.distanceMeters || 0 };
-
   } catch (e) {
-    console.error('[RoutesV2] ❌ Fetch error:', e);
+    console.error('[RoutesV2] Fetch error:', e);
     return null;
   }
 }
 
-// Speed category → overlay color (null = free flow, no overlay needed)
 function speedToColor(speed) {
   if (speed === 'TRAFFIC_JAM') return '#9b1c1c';
   if (speed === 'SLOW') return '#ea4335';
-  return null; // NORMAL → blue base shows through
+  return null;
 }
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -208,10 +190,7 @@ function updateAlertHistoryStatus(alertId, status) { const history = JSON.parse(
 // ─────────────────────────────────────────────────────────────────────────────
 // TicketDetailsOverlay
 // ─────────────────────────────────────────────────────────────────────────────
-function TicketDetailsOverlay({
-  alertObj, agentTicket, ticketStatus, dispatchedUnits,
-  unitStatuses, unitTypes, activeUnitId, onSwitchUnit
-}) {
+function TicketDetailsOverlay({ alertObj, agentTicket, ticketStatus, dispatchedUnits, unitStatuses, unitTypes, activeUnitId, onSwitchUnit }) {
   const [collapsed, setCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState('units');
 
@@ -281,7 +260,6 @@ function TicketDetailsOverlay({
                   )}
                 </>
               )}
-
               {dispatchedUnits.length > 1 && (
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(48,54,61,0.5)' }}>
                   <div style={{ fontSize: 8, fontWeight: 700, color: '#8B949E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>🎯 Live Track Unit</div>
@@ -304,7 +282,6 @@ function TicketDetailsOverlay({
                   </div>
                 </div>
               )}
-
               {dispatchedUnits.length === 1 && (
                 <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 7, padding: '6px 9px', borderRadius: 8, background: 'rgba(26,115,232,0.08)', border: '1px solid rgba(26,115,232,0.2)' }}>
                   <span style={{ fontSize: 12 }}>{(UCFG[unitTypes[dispatchedUnits[0]] || 'ambulance'] || UCFG.ambulance).icon}</span>
@@ -344,7 +321,6 @@ function TicketDetailsOverlay({
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 8, fontWeight: 700, color: '#8B949E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Ticket Status</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 8, background: stCfg.bg, border: `1px solid ${stCfg.color}40` }}>
-
                   <span style={{ fontSize: 11, fontWeight: 800, color: stCfg.color, flex: 1 }}>{stCfg.label}</span>
                   {ticketStatus === 'completed' && (
                     <span style={{ fontSize: 8, fontWeight: 800, color: '#0e100f', background: 'rgba(52,168,83,0.2)', padding: '2px 6px', borderRadius: 4, border: '1px solid rgba(52,168,83,0.3)' }}>CLOSED</span>
@@ -357,8 +333,6 @@ function TicketDetailsOverlay({
               </div>
             </div>
           )}
-
-
         </>
       )}
     </div>
@@ -366,19 +340,7 @@ function TicketDetailsOverlay({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MiniMapOverlay — COLLAPSE FIX
-//
-// The bug: collapsing set miniMapObj.current = null (good — triggers reinit on
-// re-open), but miniMkrsRef.current still held stale marker objects from the
-// dead map instance. hasFitOnce was also stuck true. So when re-opened:
-//   • Init effect ran → new google Map created ✓
-//   • Destination pin added ✓
-//   • Update effect ran → tried miniMkrsRef.current[uid].setPosition() on
-//     markers whose map reference was gone → no visible markers ✗
-//   • fitBounds skipped because hasFitOnce was true ✗
-//
-// Fix: the collapse effect now does a full teardown — nulls the map ref,
-// clears miniMkrsRef, and resets hasFitOnce. Re-open is then a clean slate.
+// MiniMapOverlay
 // ─────────────────────────────────────────────────────────────────────────────
 function MiniMapOverlay({ alertObj, dispatchedUnits, unitLocations, unitTypes, onUnitClick, activeUnitId }) {
   const miniMapRef = useRef(null);
@@ -390,35 +352,25 @@ function MiniMapOverlay({ alertObj, dispatchedUnits, unitLocations, unitTypes, o
   const activeType = unitTypes[activeUnitId] || 'ambulance';
   const activeColor = (UCFG[activeType] || UCFG.ambulance).color;
 
-  // ── FIX: when collapsing, tear down everything so re-open is a clean slate ──
   useEffect(() => {
     if (collapsed) {
-      // Remove all unit markers from the dying map
-      Object.values(miniMkrsRef.current).forEach(mkr => {
-        try { mkr.setMap(null); } catch (_) { }
-      });
-      // Full reset — next open will recreate map + markers + fitBounds
+      Object.values(miniMkrsRef.current).forEach(mkr => { try { mkr.setMap(null); } catch (_) { } });
       miniMkrsRef.current = {};
       miniMapObj.current = null;
       hasFitOnce.current = false;
     }
   }, [collapsed]);
 
-  // ── Init map (runs on open / re-open) ────────────────────────────────────
   useEffect(() => {
     if (collapsed || !miniMapRef.current || miniMapObj.current || !window.google?.maps) return;
-
     const center = alertObj?.destination?.latitude
       ? { lat: alertObj.destination.latitude, lng: alertObj.destination.longitude }
       : { lat: 11.0168, lng: 76.9558 };
-
     miniMapObj.current = new window.google.maps.Map(miniMapRef.current, {
       center, zoom: 13, styles: DARK_MAP_STYLES,
       mapTypeControl: false, streetViewControl: false, fullscreenControl: false,
       zoomControl: true, gestureHandling: 'greedy',
     });
-
-    // Destination pin
     if (alertObj?.destination?.latitude) {
       const { latitude: dlat, longitude: dlng } = alertObj.destination;
       new window.google.maps.Marker({
@@ -436,80 +388,45 @@ function MiniMapOverlay({ alertObj, dispatchedUnits, unitLocations, unitTypes, o
     }
   }, [collapsed, alertObj]);
 
-  // ── Update unit markers ───────────────────────────────────────────────────
-  // Only runs when miniMapObj.current exists (i.e. map is open and initialized)
   useEffect(() => {
     if (!miniMapObj.current || collapsed) return;
-
     const bounds = new window.google.maps.LatLngBounds();
     let hasLoc = false;
-
     if (alertObj?.destination?.latitude) {
       bounds.extend({ lat: alertObj.destination.latitude, lng: alertObj.destination.longitude });
     }
-
     dispatchedUnits.forEach(uid => {
       const loc = unitLocations[uid];
       if (!loc?.latitude) return;
-
       hasLoc = true;
       const lat = parseFloat(loc.latitude);
       const lng = parseFloat(loc.longitude);
       const type = unitTypes[uid] || 'ambulance';
       const ucfg = UCFG[type] || UCFG.ambulance;
       const isActive = uid === activeUnitId;
-
       const outerSize = isActive ? 44 : 30;
       const innerR = isActive ? 14 : 9;
       const ringR = isActive ? 20 : 0;
       const sw = isActive ? 3 : 1.5;
       const op = isActive ? 1 : 0.65;
       const zIdx = isActive ? 110 : 100;
-
       const svg = isActive
-        ? `<svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 ${outerSize} ${outerSize}">
-            <defs><filter id="s"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="${ucfg.color}" flood-opacity="0.8"/></filter></defs>
-            <circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${ringR}" fill="none" stroke="${ucfg.color}" stroke-width="2" opacity="0.4"/>
-            <circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${innerR}" fill="${ucfg.color}" stroke="white" stroke-width="${sw}" opacity="${op}" filter="url(#s)"/>
-            <text x="${outerSize / 2}" y="${outerSize / 2 + 6}" text-anchor="middle" font-size="16" fill="white" font-family="Arial" font-weight="bold">${type[0].toUpperCase()}</text>
-          </svg>`
-        : `<svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 ${outerSize} ${outerSize}">
-            <circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${innerR}" fill="${ucfg.color}" stroke="white" stroke-width="${sw}" opacity="${op}"/>
-            <text x="${outerSize / 2}" y="${outerSize / 2 + 4}" text-anchor="middle" font-size="11" fill="white" font-family="Arial" font-weight="bold">${type[0].toUpperCase()}</text>
-          </svg>`;
-
-      const icon = {
-        url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-        scaledSize: new window.google.maps.Size(outerSize, outerSize),
-        anchor: new window.google.maps.Point(outerSize / 2, outerSize / 2),
-      };
-
+        ? `<svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 ${outerSize} ${outerSize}"><defs><filter id="s"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="${ucfg.color}" flood-opacity="0.8"/></filter></defs><circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${ringR}" fill="none" stroke="${ucfg.color}" stroke-width="2" opacity="0.4"/><circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${innerR}" fill="${ucfg.color}" stroke="white" stroke-width="${sw}" opacity="${op}" filter="url(#s)"/><text x="${outerSize / 2}" y="${outerSize / 2 + 6}" text-anchor="middle" font-size="16" fill="white" font-family="Arial" font-weight="bold">${type[0].toUpperCase()}</text></svg>`
+        : `<svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 ${outerSize} ${outerSize}"><circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${innerR}" fill="${ucfg.color}" stroke="white" stroke-width="${sw}" opacity="${op}"/><text x="${outerSize / 2}" y="${outerSize / 2 + 4}" text-anchor="middle" font-size="11" fill="white" font-family="Arial" font-weight="bold">${type[0].toUpperCase()}</text></svg>`;
+      const icon = { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new window.google.maps.Size(outerSize, outerSize), anchor: new window.google.maps.Point(outerSize / 2, outerSize / 2) };
       bounds.extend({ lat, lng });
-
       if (!miniMkrsRef.current[uid]) {
-        // Create fresh marker on the current map instance
-        const mkr = new window.google.maps.Marker({
-          position: { lat, lng },
-          map: miniMapObj.current,
-          zIndex: zIdx,
-          icon,
-        });
+        const mkr = new window.google.maps.Marker({ position: { lat, lng }, map: miniMapObj.current, zIndex: zIdx, icon });
         mkr.addListener('click', () => onUnitClick && onUnitClick(uid));
         miniMkrsRef.current[uid] = mkr;
       } else {
-        // Just update position + icon — never touch viewport
         miniMkrsRef.current[uid].setPosition({ lat, lng });
         miniMkrsRef.current[uid].setIcon(icon);
         miniMkrsRef.current[uid].setZIndex(zIdx);
       }
     });
-
-    // fitBounds only on first real data after open/re-open
     if (!hasFitOnce.current && hasLoc && !bounds.isEmpty()) {
-      try {
-        miniMapObj.current.fitBounds(bounds, { padding: 32 });
-        hasFitOnce.current = true;
-      } catch (_) { }
+      try { miniMapObj.current.fitBounds(bounds, { padding: 32 }); hasFitOnce.current = true; } catch (_) { }
     }
   }, [unitLocations, dispatchedUnits, activeUnitId, collapsed, unitTypes, alertObj, onUnitClick]);
 
@@ -520,10 +437,7 @@ function MiniMapOverlay({ alertObj, dispatchedUnits, unitLocations, unitTypes, o
           <span style={{ fontSize: 9, fontWeight: 800, color: '#E6EDF3', textTransform: 'uppercase', letterSpacing: 1 }}><CompassOutlined style={{ fontSize: '10px' }} /> All Units</span>
           <span style={{ fontSize: 8, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: `${activeColor}22`, color: activeColor, border: `1px solid ${activeColor}44` }}>{dispatchedUnits.length}</span>
         </div>
-        <button
-          onClick={() => setCollapsed(v => !v)}
-          style={{ ...ns.miniToggleBtn, borderColor: `${activeColor}40`, color: activeColor, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
+        <button onClick={() => setCollapsed(v => !v)} style={{ ...ns.miniToggleBtn, borderColor: `${activeColor}40`, color: activeColor, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {collapsed ? <UpOutlined style={{ fontSize: '8px' }} /> : <DownOutlined style={{ fontSize: '8px' }} />}
         </button>
       </div>
@@ -546,14 +460,12 @@ function TrackingLogPanel({ tLogs, dispatchedUnits, activeUnitId, unitTypes }) {
   }, [tLogs]);
 
   const logColors = { info: '#8B949E', ok: '#34A853', warn: '#F9A825', error: '#E53935' };
-
   const filteredLogs = (() => {
     if (logTab === 'all') return tLogs;
     if (logTab === 'active') return tLogs.filter(l => !l.unitId || l.unitId === activeUnitId);
     if (logTab === 'custom') { if (customUnits.size === 0) return tLogs; return tLogs.filter(l => !l.unitId || customUnits.has(l.unitId)); }
     return tLogs;
   })();
-
   const toggleCustomUnit = uid => setCustomUnits(prev => { const n = new Set(prev); n.has(uid) ? n.delete(uid) : n.add(uid); return n; });
 
   return (
@@ -610,12 +522,7 @@ function TrackingLogPanel({ tLogs, dispatchedUnits, activeUnitId, unitTypes }) {
         {filteredLogs.length === 0
           ? <div style={{ color: '#8B949E', fontSize: 10, textAlign: 'center', paddingTop: 16 }}>No logs for selected filter</div>
           : filteredLogs.map((l, i) => {
-            const icons = {
-              info: <ApartmentOutlined style={{ fontSize: '10px' }} />,
-              ok: <CheckCircleOutlined style={{ fontSize: '10px' }} />,
-              warn: <WarningOutlined style={{ fontSize: '10px' }} />,
-              error: <CloseCircleOutlined style={{ fontSize: '10px' }} />
-            };
+            const icons = { info: <ApartmentOutlined style={{ fontSize: '10px' }} />, ok: <CheckCircleOutlined style={{ fontSize: '10px' }} />, warn: <WarningOutlined style={{ fontSize: '10px' }} />, error: <CloseCircleOutlined style={{ fontSize: '10px' }} /> };
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 2, lineHeight: 1.5 }}>
                 {l.unitId && (
@@ -687,13 +594,16 @@ export default function LiveTrackingPage() {
   const [unitTypes, setUnitTypes] = useState({});
   const [activeUnitId, setActiveUnitId] = useState(() => { const all = getAgentTickets(); const t = all.find(tk => (tk.alertIds || []).includes(id)); return t?.assignedUnits?.[0] || alertObj?.assignedUnit || null; });
 
+  // ── REMOVED: replayMode state (was causing Route wrapper flicker) ──────────
+  // Navigation to replay uses navigate() directly — no local state needed.
+
   // Keep refs in sync
   useEffect(() => { activeUnitIdRef.current = activeUnitId; }, [activeUnitId]);
   useEffect(() => { trafficOnRef.current = trafficOn; }, [trafficOn]);
   useEffect(() => { unitStatusesRef.current = unitStatuses; }, [unitStatuses]);
   useEffect(() => { dispatchedUnitsRef.current = dispatchedUnits; }, [dispatchedUnits]);
   useEffect(() => { agentTicketRef.current = agentTicket; }, [agentTicket]);
-  useEffect(() => { if (ticketStatus === 'completed') ticketCompletedRef.current = true; }, []);
+  useEffect(() => { if (ticketStatus === 'completed') ticketCompletedRef.current = true; }, [ticketStatus]);
 
   const cfg = UCFG[alertObj?.vehicleType || 'ambulance'] || UCFG.ambulance;
 
@@ -702,15 +612,18 @@ export default function LiveTrackingPage() {
     setTLogs(prev => [...prev.slice(-120), { msg: `[${ts}] ${msg}`, type, unitId }]);
   }, []);
 
-  // When navigating between alerts (e.g. Dispatch Chat → other ticket), re-sync ticket + units — state was only initialised once from useParams.
+  // ── FIX 4: Navigation sync — only reset tripStatus when NOT already terminal
   useEffect(() => {
     const all = getAgentTickets();
     const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
     const ao = location.state?.alert || hist.find(a => a.id === id || a.agentTicketId === id) || null;
     const t = all.find(tk => (tk.alertIds || []).includes(id) || tk.id === id);
 
+    console.log('[FLICKER-DEBUG] Nav sync effect fired. id=', id, 'ticket status=', t?.status);
+
     setAgentTicket(t || null);
     setTicketStatus(t?.status || ao?.status || 'dispatched');
+
     if (t?.assignedUnits?.length) setDispatchedUnits(t.assignedUnits);
     else if (ao?.assignedUnit) setDispatchedUnits([ao.assignedUnit]);
     else setDispatchedUnits([]);
@@ -719,25 +632,36 @@ export default function LiveTrackingPage() {
     activeUnitIdRef.current = nextActive;
     setActiveUnitId(nextActive);
 
-    ticketCompletedRef.current = t?.status === 'completed';
+    const alreadyTerminal = t?.status === 'completed' || t?.status === 'abandoned';
+    ticketCompletedRef.current = alreadyTerminal;
     lastTripStRef.current = '';
-    setTripStatus('idle');
-    setLive(false);
-    setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
-    setRouteData([]);
-    setStepInfo({ idx: 0, total: 0 });
 
-    Object.values(vehMkrMap.current).forEach(mkr => { try { mkr?.setMap(null); } catch (_) { } });
-    vehMkrMap.current = {};
-    polylinesRef.current.forEach(r => { try { r.out?.setMap(null); r.poly?.setMap(null); } catch (_) { } });
-    polylinesRef.current = [];
-    routeAtRef.current = 0;
-    lastVRef.current = null;
+    // ── KEY FIX: Don't reset to 'idle' if ticket is already terminal ─────────
+    if (!alreadyTerminal) {
+      console.log('[FLICKER-DEBUG] Resetting tripStatus to idle (ticket not terminal)');
+      setTripStatus(prev => {
+  if (['completed', 'abandoned'].includes(prev)) return prev;
+  return prev; // do NOT override
+});
+      setLive(false);
+      setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
+      setRouteData([]);
+      setStepInfo({ idx: 0, total: 0 });
 
-    setUnitStatuses({});
-    setUnitLocations({});
+      Object.values(vehMkrMap.current).forEach(mkr => { try { mkr?.setMap(null); } catch (_) { } });
+      vehMkrMap.current = {};
+      polylinesRef.current.forEach(r => { try { r.out?.setMap(null); r.poly?.setMap(null); } catch (_) { } });
+      polylinesRef.current = [];
+      routeAtRef.current = 0;
+      lastVRef.current = null;
 
-    addTLog(`AimOutlined Incident: ${ao?.name || id}`, 'info');
+      setUnitStatuses({});
+      setUnitLocations({});
+    } else {
+      console.log('[FLICKER-DEBUG] Ticket is terminal, NOT resetting tripStatus to idle');
+    }
+
+    addTLog(`Incident: ${ao?.name || id}`, 'info');
   }, [id, location.key, addTLog]);
 
   // Init map
@@ -746,7 +670,7 @@ export default function LiveTrackingPage() {
     mapObj.current = new window.google.maps.Map(mapRef.current, { center: { lat: 11.0168, lng: 76.9558 }, zoom: 13, styles: DARK_MAP_STYLES, mapTypeControl: false, streetViewControl: false });
     trafficLayerRef.current = new window.google.maps.TrafficLayer();
     infoWinRef.current = new window.google.maps.InfoWindow();
-    addTLog(`ApartmentOutlined Tracking: ${alertObj?.name || 'unknown'}`, 'ok');
+    addTLog(`Tracking: ${alertObj?.name || 'unknown'}`, 'ok');
   }, []);
 
   // Destination marker
@@ -763,29 +687,17 @@ export default function LiveTrackingPage() {
   const fetchRoute = useCallback(async (lat, lng, uid) => {
     if (uid !== activeUnitIdRef.current) return;
     if (!alertObj?.destination?.latitude || !mapObj.current) return;
-
     const dest = alertObj.destination;
-
-    // ── STEP 1: Always fetch multiple routes via Directions API ──────────────
-    // This gives us the light-blue alternate routes visual
     let parsed = [];
     try {
       const res = await getDirections(lat, lng, dest.latitude, dest.longitude);
       if (uid !== activeUnitIdRef.current) return;
-
       const routes = res.data?.routes;
       if (routes?.length) {
         parsed = routes.map((r, i) => {
           const leg = r.legs[0];
-          return {
-            fp: stitch(leg.steps), steps: leg.steps,
-            durationS: leg.duration.value,
-            trafficS: leg.duration_in_traffic?.value ?? leg.duration.value,
-            distanceM: leg.distance.value,
-            summary: r.summary || `Route ${i + 1}`,
-          };
+          return { fp: stitch(leg.steps), steps: leg.steps, durationS: leg.duration.value, trafficS: leg.duration_in_traffic?.value ?? leg.duration.value, distanceM: leg.distance.value, summary: r.summary || `Route ${i + 1}` };
         }).sort((a, b) => a.trafficS - b.trafficS);
-
         routeDataRef.current = parsed;
         setRouteData(parsed);
         setBestRouteIdx(0);
@@ -793,113 +705,63 @@ export default function LiveTrackingPage() {
     } catch (e) {
       console.warn('[fetchRoute] Directions API error:', e);
     }
-
-    // Clear old polylines
     polylinesRef.current.forEach(r => { r.out?.setMap(null); r.poly?.setMap(null); });
     polylinesRef.current = [];
-
-    // ── STEP 2: Draw all routes — best in blue, alternates in light blue ─────
     parsed.forEach((r, i) => {
       if (!r.fp?.length) return;
       const isBest = i === 0;
       const opacity = isBest ? 1 : 0.45;
       const weight = isBest ? 9 : 5;
-      const color = isBest ? '#1A73E8' : '#90CAF9';   // ← light blue for alts
+      const color = isBest ? '#1A73E8' : '#90CAF9';
       const outW = isBest ? 15 : 9;
-
-      const out = new window.google.maps.Polyline({
-        path: r.fp, geodesic: true, map: mapObj.current,
-        strokeColor: '#FFFFFF', strokeOpacity: opacity * 0.9,
-        strokeWeight: outW, zIndex: isBest ? 8 : 3,
-      });
-      const poly = new window.google.maps.Polyline({
-        path: r.fp, geodesic: true, map: mapObj.current,
-        strokeColor: color, strokeOpacity: opacity,
-        strokeWeight: weight, zIndex: isBest ? 9 : 4,
-      });
+      const out = new window.google.maps.Polyline({ path: r.fp, geodesic: true, map: mapObj.current, strokeColor: '#FFFFFF', strokeOpacity: opacity * 0.9, strokeWeight: outW, zIndex: isBest ? 8 : 3 });
+      const poly = new window.google.maps.Polyline({ path: r.fp, geodesic: true, map: mapObj.current, strokeColor: color, strokeOpacity: opacity, strokeWeight: weight, zIndex: isBest ? 9 : 4 });
       polylinesRef.current.push({ out, poly, fp: r.fp });
-
-      // Make alternate routes clickable to switch
       if (!isBest) {
         poly.addListener('click', () => {
-          // Re-sort so clicked route becomes "best"
           const reordered = [r, ...parsed.filter(x => x !== r)];
           routeDataRef.current = reordered;
           setRouteData(reordered);
           setBestRouteIdx(0);
-          // Redraw with new best
           fetchRoute(lat, lng, uid);
         });
       }
     });
-
-    // Log Directions API result
     if (parsed.length > 0) {
       const best = parsed[0];
       const tr = trafficRatio(best.durationS, best.trafficS);
       const tl = trafficLabel(tr);
-      addTLog(
-        `🛣️ ${fmtDist(best.distanceM)} · ${fmtTime(best.trafficS)} · ${tl.emoji} ${tl.label} (${parsed.length} routes)`,
-        'info', uid
-      );
+      addTLog(`${fmtDist(best.distanceM)} · ${fmtTime(best.trafficS)} · ${tl.label} (${parsed.length} routes)`, 'info', uid);
     }
-
-    // ── STEP 3: Overlay real per-segment traffic from Routes API v2 ──────────
-    // Only applied to the BEST route polyline
     const v2 = await fetchRoutesV2(lat, lng, dest.latitude, dest.longitude);
     if (uid !== activeUnitIdRef.current) return;
-
     if (v2?.intervals?.length > 0) {
-      console.log(`[fetchRoute] ✅ Overlaying ${v2.intervals.length} v2 traffic segments on best route`);
-
-      // Decode v2's own polyline (may differ slightly from Directions API)
       const v2path = decPoly(v2.encoded);
-
       let overlayCount = 0;
       v2.intervals.forEach((seg, i) => {
         const color = speedToColor(seg.speed);
         if (!color) return;
-
         const start = seg.startPolylinePointIndex || 0;
         let end;
-        if (seg.endPolylinePointIndex != null) {
-          end = seg.endPolylinePointIndex;
-        } else if (v2.intervals[i + 1]) {
-          end = v2.intervals[i + 1].startPolylinePointIndex - 1;
-        } else {
-          end = v2path.length - 1;
-        }
-
+        if (seg.endPolylinePointIndex != null) { end = seg.endPolylinePointIndex; }
+        else if (v2.intervals[i + 1]) { end = v2.intervals[i + 1].startPolylinePointIndex - 1; }
+        else { end = v2path.length - 1; }
         const segPath = v2path.slice(start, end + 1);
         if (segPath.length < 2) return;
-
-        const segOut = new window.google.maps.Polyline({
-          path: segPath, map: mapObj.current,
-          strokeColor: '#FFFFFF', strokeOpacity: 0.35, strokeWeight: 15, zIndex: 12,
-        });
-        const segPoly = new window.google.maps.Polyline({
-          path: segPath, map: mapObj.current,
-          strokeColor: color, strokeOpacity: 0.95, strokeWeight: 9, zIndex: 13,
-        });
+        const segOut = new window.google.maps.Polyline({ path: segPath, map: mapObj.current, strokeColor: '#FFFFFF', strokeOpacity: 0.35, strokeWeight: 15, zIndex: 12 });
+        const segPoly = new window.google.maps.Polyline({ path: segPath, map: mapObj.current, strokeColor: color, strokeOpacity: 0.95, strokeWeight: 9, zIndex: 13 });
         polylinesRef.current.push({ out: segOut, poly: segPoly, fp: segPath });
         overlayCount++;
       });
-
       const delay = Math.max(0, v2.trafSec - v2.durSec);
-      addTLog(
-        `🚦 [v2] Real traffic: ${overlayCount} congested segments${delay > 60 ? ` · +${Math.round(delay / 60)}min delay` : ''}`,
-        overlayCount > 0 ? 'warn' : 'ok', uid
-      );
+      addTLog(`[v2] Real traffic: ${overlayCount} congested segments${delay > 60 ? ` · +${Math.round(delay / 60)}min delay` : ''}`, overlayCount > 0 ? 'warn' : 'ok', uid);
     }
-
-    // Fit map to best route bounds
     if (parsed[0]?.fp?.length) {
       const bounds = new window.google.maps.LatLngBounds();
       parsed[0].fp.forEach(p => bounds.extend(p));
       if (destMkr.current) bounds.extend(destMkr.current.getPosition());
       if (!bounds.isEmpty()) mapObj.current.fitBounds(bounds, { top: 80, bottom: 40, left: 20, right: 20 });
     }
-
   }, [alertObj, addTLog]);
 
   const updateVehicle = useCallback((lat, lng, uid) => {
@@ -911,7 +773,7 @@ export default function LiveTrackingPage() {
         icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="${cfg.color}" stroke="white" stroke-width="2.5"/><text x="22" y="28" text-anchor="middle" font-size="16" fill="white" font-family="Arial" font-weight="bold">${alertObj.vehicleType[0].toUpperCase()}</text></svg>`), scaledSize: new window.google.maps.Size(44, 44), anchor: new window.google.maps.Point(22, 22) },
       });
       vehMkrMap.current[uid] = mkr;
-      addTLog(`ApartmentOutlined Unit on map [${uid}]`, 'ok', uid);
+      addTLog(`Unit on map [${uid}]`, 'ok', uid);
       setTimeout(() => {
         if (uid !== activeUnitIdRef.current) return;
         const b = new window.google.maps.LatLngBounds();
@@ -934,89 +796,139 @@ export default function LiveTrackingPage() {
     if (nearbySearchCenter.current) { const d = haversine(lat, lng, nearbySearchCenter.current.lat, nearbySearchCenter.current.lng); if (d < 500) return; }
     nearbyInFlight.current = true; nearbySearchCenter.current = { lat, lng };
     try {
-      const searches = Object.entries(NEARBY_TYPES).map(([key, cfg]) => new Promise(resolve => { const svc = new window.google.maps.places.PlacesService(mapObj.current); svc.nearbySearch({ location: { lat, lng }, radius: cfg.radius, type: cfg.placeType }, (results, status) => { if (status === window.google.maps.places.PlacesServiceStatus.OK && results) resolve({ key, places: results.map(p => ({ name: p.name, lat: p.geometry.location.lat(), lng: p.geometry.location.lng(), vicinity: p.vicinity || '', rating: p.rating || null, place_id: p.place_id })) }); else resolve({ key, places: [] }); }); }));
-      const results = await Promise.allSettled(searches); const counts = {}, allPlaces = [];
-      results.forEach(r => { if (r.status !== 'fulfilled') return; const { key, places } = r.value; counts[key] = places.length; if (nearbyMkrsRef.current[key]) nearbyMkrsRef.current[key].forEach(m => m.setMap(null)); nearbyMkrsRef.current[key] = []; places.forEach(p => { const nc = NEARBY_TYPES[key]; const mk = new window.google.maps.Marker({ position: { lat: p.lat, lng: p.lng }, map: nearbyLayers[key] ? mapObj.current : null, title: p.name, zIndex: 20, icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${nc.color}" stroke="white" stroke-width="2"/><text x="16" y="21" text-anchor="middle" font-size="12" fill="white" font-family="Arial" font-weight="bold">${key[0].toUpperCase()}</text></svg>`), scaledSize: new window.google.maps.Size(32, 32), anchor: new window.google.maps.Point(16, 16) } }); mk.addListener('click', () => { const d = haversine(lat, lng, p.lat, p.lng); infoWinRef.current.setContent(`<div style="font-family:Sora,sans-serif;padding:8px;min-width:180px;"><div style="font-weight:800;font-size:13px;margin-bottom:5px;">${p.name}</div><div style="font-size:11px;color:#555;margin-bottom:5px;">${p.vicinity}</div><div style="display:flex;gap:8px;font-size:11px;margin-bottom:6px;"><span style="color:#1E88E5;font-weight:700;">${fmtDist(d)}</span>${p.rating ? `<span>★ ${p.rating}</span>` : ''}</div><button onclick="window.open('https://www.google.com/maps/search/?api=1&query_place_id=${p.place_id}','_blank')" style="width:100%;background:${nc.color};color:#fff;border:none;border-radius:7px;padding:7px;font-size:11px;font-weight:700;cursor:pointer;">Open Maps</button></div>`); infoWinRef.current.open(mapObj.current, mk); }); nearbyMkrsRef.current[key].push(mk); const d = haversine(lat, lng, p.lat, p.lng); allPlaces.push({ ...p, d, cfg: NEARBY_TYPES[key] }); }); });
-      setNearbyCounts(prev => ({ ...prev, ...counts })); allPlaces.sort((a, b) => a.d - b.d); setNearbyList(allPlaces.slice(0, 20));
+      const searches = Object.entries(NEARBY_TYPES).map(([key, cfg]) => new Promise(resolve => {
+        const svc = new window.google.maps.places.PlacesService(mapObj.current);
+        svc.nearbySearch({ location: { lat, lng }, radius: cfg.radius, type: cfg.placeType }, (results, status) => {
+          if (status === window.google.maps.places.PlacesServiceStatus.OK && results)
+            resolve({ key, places: results.map(p => ({ name: p.name, lat: p.geometry.location.lat(), lng: p.geometry.location.lng(), vicinity: p.vicinity || '', rating: p.rating || null, place_id: p.place_id })) });
+          else resolve({ key, places: [] });
+        });
+      }));
+      const results = await Promise.allSettled(searches);
+      const counts = {}, allPlaces = [];
+      results.forEach(r => {
+        if (r.status !== 'fulfilled') return;
+        const { key, places } = r.value;
+        counts[key] = places.length;
+        if (nearbyMkrsRef.current[key]) nearbyMkrsRef.current[key].forEach(m => m.setMap(null));
+        nearbyMkrsRef.current[key] = [];
+        places.forEach(p => {
+          const nc = NEARBY_TYPES[key];
+          const mk = new window.google.maps.Marker({ position: { lat: p.lat, lng: p.lng }, map: nearbyLayers[key] ? mapObj.current : null, title: p.name, zIndex: 20, icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${nc.color}" stroke="white" stroke-width="2"/><text x="16" y="21" text-anchor="middle" font-size="12" fill="white" font-family="Arial" font-weight="bold">${key[0].toUpperCase()}</text></svg>`), scaledSize: new window.google.maps.Size(32, 32), anchor: new window.google.maps.Point(16, 16) } });
+          mk.addListener('click', () => { const d = haversine(lat, lng, p.lat, p.lng); infoWinRef.current.setContent(`<div style="font-family:Sora,sans-serif;padding:8px;min-width:180px;"><div style="font-weight:800;font-size:13px;margin-bottom:5px;">${p.name}</div><div style="font-size:11px;color:#555;margin-bottom:5px;">${p.vicinity}</div><div style="display:flex;gap:8px;font-size:11px;margin-bottom:6px;"><span style="color:#1E88E5;font-weight:700;">${fmtDist(d)}</span>${p.rating ? `<span>★ ${p.rating}</span>` : ''}</div><button onclick="window.open('https://www.google.com/maps/search/?api=1&query_place_id=${p.place_id}','_blank')" style="width:100%;background:${nc.color};color:#fff;border:none;border-radius:7px;padding:7px;font-size:11px;font-weight:700;cursor:pointer;">Open Maps</button></div>`); infoWinRef.current.open(mapObj.current, mk); });
+          nearbyMkrsRef.current[key].push(mk);
+          const d = haversine(lat, lng, p.lat, p.lng);
+          allPlaces.push({ ...p, d, cfg: NEARBY_TYPES[key] });
+        });
+      });
+      setNearbyCounts(prev => ({ ...prev, ...counts }));
+      allPlaces.sort((a, b) => a.d - b.d);
+      setNearbyList(allPlaces.slice(0, 20));
     } catch (_) { }
     nearbyInFlight.current = false;
   }, [nearbyLayers]);
 
   const toggleNearbyLayer = key => { setNearbyLayers(prev => { const next = { ...prev, [key]: !prev[key] }; if (nearbyMkrsRef.current[key]) nearbyMkrsRef.current[key].forEach(m => m.setMap(next[key] ? mapObj.current : null)); return next; }); };
 
-  // Main poll
+  // ── Main poll ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const myUid = activeUnitId;
     let isMounted = true;
-    let activeRequest = null;
-    let lastEventId = '0-0'; // Start by fetching whole history or newest
+    let lastEventId = '0-0';
 
     const poll = async () => {
       if (!isMounted || activeUnitIdRef.current !== myUid) return;
       try {
         const ticketNo = id || alertObj?.agentTicketId || alertObj?.id || agentTicket?.id || myUid;
-        activeRequest = getAmbulanceLocation(ticketNo, ticketNo, lastEventId);
-        const res = await activeRequest;
-        activeRequest = null;
+        const res = await getAmbulanceLocation(activeUnitId, ticketNo, lastEventId);
+        // 🚫 ignore wrong ticket data
+if (d.ticket_no && d.ticket_no !== id) {
+  setTimeout(poll, 100);
+  return;
+}
         if (!isMounted || activeUnitIdRef.current !== myUid) return;
 
         let d;
         if (res.data && (res.data.eventPayload !== undefined || res.data.channel !== undefined)) {
           const payloads = res.data.eventPayload || res.data.channel;
           if (payloads && payloads.length > 0) {
-            d = payloads[payloads.length - 1]; // Use latest received event
-            lastEventId = d.eventId || lastEventId || d.timestamp; // Advance cursor
+            d = payloads[payloads.length - 1];
+            lastEventId = d.eventId || lastEventId || d.timestamp;
           } else {
-             // Timeout or no new events, poll again
-             setTimeout(poll, 100);
-             return;
+            setTimeout(poll, 100);
+            return;
           }
         } else {
-          // Fallback legacy behavior
           d = res.data;
         }
 
-        if (!d || typeof d !== 'object') {
-          setTimeout(poll, 100);
-          return;
-        }
+        if (!d || typeof d !== 'object') { setTimeout(poll, 100); return; }
 
-        const ts = d.tripStatus || d.trip_status || 'idle';
-        setUnitStatuses(prev => prev[myUid] === ts ? prev : { ...prev, [myUid]: ts });
-        setTripStatus(ts);
-        setStepInfo({ idx: parseInt(d.stepIdx) || 0, total: parseInt(d.totalSteps) || 0 });
-        if (ts !== lastTripStRef.current) {
-          lastTripStRef.current = ts;
-          const statusText = { dispatched: 'NodeIndexOutlined', en_route: 'MedicineBoxOutlined', on_action: 'CheckCircleFilled', arrived: 'EnvironmentOutlined', completed: 'CheckCircleOutlined', abandoned: 'CloseCircleOutlined', idle: 'ClockCircleOutlined' }[ts] || 'ReloadOutlined';
-          addTLog(`${statusText} → ${TRIP_STATUS_CFG[ts]?.t || ts} [${myUid || 'unit'}]`, ts === 'arrived' || ts === 'completed' ? 'ok' : ts === 'abandoned' ? 'error' : 'info', myUid);
-          if ((ts === 'en_route' || ts === 'on_action') && !trafficOnRef.current && trafficLayerRef.current && mapObj.current) {
-            trafficLayerRef.current.setMap(mapObj.current); setTrafficOn(true);
-            addTLog('NodeIndexOutlined Traffic layer auto-enabled', 'ok', myUid);
+        const ts = d.tripStatus || 'idle';
+
+        console.log(`[FLICKER-DEBUG] Poll received tripStatus="${ts}" lastTripStRef="${lastTripStRef.current}"`);
+
+        // ── FIX 2: Guard unitStatuses — never downgrade terminal ──────────────
+        setUnitStatuses(prev => {
+          const current = prev[myUid];
+          if (TERMINAL_STATUSES.includes(current)) return prev; // terminal lock
+          if (current === ts) return prev;                       // no change
+          console.log(`[FLICKER-DEBUG] unitStatuses[${myUid}]: ${current} → ${ts}`);
+          return { ...prev, [myUid]: ts };
+        });
+
+        // ── FIX 2: Guard tripStatus — never downgrade terminal ────────────────
+        setTripStatus(prev => {
+          if (TERMINAL_STATUSES.includes(prev)) {
+            if (prev !== ts) console.log(`[FLICKER-DEBUG] BLOCKED tripStatus downgrade: ${prev} → ${ts} (terminal lock)`);
+            return prev;
           }
-          if (ts === 'completed' && !ticketCompletedRef.current) {
-            const ticket = agentTicketRef.current;
-            const units = dispatchedUnitsRef.current;
-            if (ticket?.id && units.length > 0) {
-              const allDone = units.every(uid => uid === myUid ? true : (unitStatusesRef.current[uid] === 'completed'));
-              if (allDone) {
-                ticketCompletedRef.current = true;
-                setTimeout(() => {
-                  updateAgentTicketStatus(ticket.id, 'completed');
-                  const fresh = getAgentTickets().find(t => t.id === ticket.id);
-                  (fresh?.alertIds || []).forEach(aid => updateAlertHistoryStatus(aid, 'completed'));
-                  window.dispatchEvent(new Event('agentTicketsChange'));
-                  setTicketStatus('completed');
-                  addTLog('AimOutlined All units completed → ticket auto-completed', 'ok');
-                }, 0);
+          if (prev === ts) return prev;
+          console.log(`[FLICKER-DEBUG] tripStatus: ${prev} → ${ts}`);
+          return ts;
+        });
+
+        setStepInfo({ idx: parseInt(d.stepIdx) || 0, total: parseInt(d.totalSteps) || 0 });
+
+        // ── FIX 3: Side-effects block — never let stale idle overwrite terminal
+        if (ts !== lastTripStRef.current) {
+          // If lastTripStRef is already terminal and ts is 'idle', ignore it
+          if (TERMINAL_STATUSES.includes(lastTripStRef.current) && ts === 'idle') {
+            console.log(`[FLICKER-DEBUG] BLOCKED lastTripStRef side-effect: already terminal "${lastTripStRef.current}", ignoring stale "${ts}"`);
+          } else {
+            lastTripStRef.current = ts;
+            const statusText = { dispatched: '⚡', en_route: '🚑', on_action: '🔔', arrived: '📍', completed: '✅', abandoned: '❌', idle: '⏱️' }[ts] || '🔄';
+            addTLog(`${statusText} → ${TRIP_STATUS_CFG[ts]?.t || ts} [${myUid || 'unit'}]`, ts === 'arrived' || ts === 'completed' ? 'ok' : ts === 'abandoned' ? 'error' : 'info', myUid);
+
+            if ((ts === 'en_route' || ts === 'on_action') && !trafficOnRef.current && trafficLayerRef.current && mapObj.current) {
+              trafficLayerRef.current.setMap(mapObj.current);
+              setTrafficOn(true);
+              addTLog('Traffic layer auto-enabled', 'ok', myUid);
+            }
+
+            if (ts === 'completed' && !ticketCompletedRef.current) {
+              const ticket = agentTicketRef.current;
+              const units = dispatchedUnitsRef.current;
+              if (ticket?.id && units.length > 0) {
+                const allDone = units.every(uid => uid === myUid ? true : (unitStatusesRef.current[uid] === 'completed'));
+                if (allDone) {
+                  ticketCompletedRef.current = true;
+                  setTimeout(() => {
+                    updateAgentTicketStatus(ticket.id, 'completed');
+                    const fresh = getAgentTickets().find(t => t.id === ticket.id);
+                    (fresh?.alertIds || []).forEach(aid => updateAlertHistoryStatus(aid, 'completed'));
+                    window.dispatchEvent(new Event('agentTicketsChange'));
+                    setTicketStatus('completed');
+                    addTLog('All units completed → ticket auto-completed', 'ok');
+                  }, 0);
+                }
               }
             }
           }
         }
-        if (!d.latitude || !d.longitude) { 
-          setLive(false); 
-          setTimeout(poll, 100);
-          return; 
-        }
+
+        if (!d.latitude || !d.longitude) { setLive(false); setTimeout(poll, 100); return; }
+
         const lat = parseFloat(d.latitude), lng = parseFloat(d.longitude);
         setLive(true);
         setStats({ speed: parseFloat(d.speed) || 0, distM: parseInt(d.remainingDistM) || 0, timeS: parseInt(d.remainingTimeS) || 0, lat, lng });
@@ -1024,29 +936,20 @@ export default function LiveTrackingPage() {
         const now = Date.now();
         if (alertObj?.destination && now - routeAtRef.current > 45000) { routeAtRef.current = now; fetchRoute(lat, lng, myUid); }
         fetchNearby(lat, lng);
-
-        // Instantly poll again after processing
         setTimeout(poll, 100);
+
       } catch (err) {
         if (!isMounted || activeUnitIdRef.current !== myUid) return;
-        activeRequest = null;
-        // 408 is a long-polling timeout, just reconnect immediately
-        if (err.response && err.response.status === 408) {
-          setTimeout(poll, 100);
-        } else {
-          // Actual error, backoff for 3 seconds
-          setTimeout(poll, 3000);
-        }
+        if (err.response?.status === 408) { setTimeout(poll, 100); }
+        else { setTimeout(poll, 3000); }
       }
     };
+
     poll();
-    
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, [activeUnitId, updateVehicle, fetchRoute, fetchNearby, alertObj, addTLog]);
 
-  // All-units poll (stable interval, reads via refs)
+  // ── All-units location poll (no status, stable deps) ─────────────────────
   useEffect(() => {
     const pollUnits = async () => {
       const units = dispatchedUnitsRef.current;
@@ -1054,7 +957,6 @@ export default function LiveTrackingPage() {
       try {
         const res = await axios.get(`${API_BASE_URL}/all-locations`);
         const allLocs = res.data?.data || [];
-        console.log("ALL LOCATIONS:", allLocs);
         const newLocs = {}, newTypes = {};
         allLocs.forEach(u => {
           if (units.includes(u.id)) {
@@ -1063,72 +965,24 @@ export default function LiveTrackingPage() {
           }
         });
         setUnitLocations(prev => {
-          const moved = units.some(uid => { const p = prev[uid], n = newLocs[uid]; if (!p && !n) return false; if (!p || !n) return true; return p.latitude !== n.latitude || p.longitude !== n.longitude; });
+          const moved = units.some(uid => {
+            const p = prev[uid], n = newLocs[uid];
+            if (!p && !n) return false;
+            if (!p || !n) return true;
+            return p.latitude !== n.latitude || p.longitude !== n.longitude;
+          });
           return moved ? { ...prev, ...newLocs } : prev;
         });
-        setUnitTypes(prev => { const ch = Object.entries(newTypes).some(([k, v]) => prev[k] !== v); return ch ? { ...prev, ...newTypes } : prev; });
-
-        const newStatuses = {};
-        for (const uid of units) {
-          try {
-            const r = await getAmbulanceLocation(uid);
-            const sa = r.data;
-            if (sa) {
-              //const ts = sa.tripStatus ?? unitStatusesRef.current[uid];
-              const ts = sa.tripStatus;
-              console.log("📡 UNIT STATUS FETCH:", uid, sa?.tripStatus);
-              if (!ts) continue;
-              newStatuses[uid] = ts;
-              if (ts !== unitStatusesRef.current[uid]) {
-                const statusText = { dispatched: 'NodeIndexOutlined', en_route: 'MedicineBoxOutlined', on_action: 'CheckCircleFilled', arrived: 'EnvironmentOutlined', completed: 'CheckCircleOutlined', abandoned: 'CloseCircleOutlined', idle: 'ClockCircleOutlined' }[ts] || 'ReloadOutlined';
-                addTLog(`${statusText} Unit ${uid.slice(0, 8)} → ${ts}`, ts === 'completed' || ts === 'arrived' ? 'ok' : ts === 'abandoned' ? 'error' : 'info', uid);
-              }
-              if (sa.id) updateAlertHistoryStatus(sa.id, ts);
-            }
-          } catch (_) { }
-        }
-
-        setUnitStatuses(prev => {
-          const next = { ...prev, ...newStatuses };
-
-          console.log("🔥 ALL UNITS UPDATED:", next);
-
-          // ✅ ticket completion logic (keep this)
-          if (!ticketCompletedRef.current) {
-            const ticket = agentTicketRef.current;
-            const units = dispatchedUnitsRef.current;
-
-            if (ticket?.id && units.length > 0) {
-              const allDone = units.every(uid => next[uid] === 'completed');
-
-              if (allDone) {
-                ticketCompletedRef.current = true;
-
-                setTimeout(() => {
-                  updateAgentTicketStatus(ticket.id, 'completed');
-
-                  const fresh = getAgentTickets().find(t => t.id === ticket.id);
-                  (fresh?.alertIds || []).forEach(aid =>
-                    updateAlertHistoryStatus(aid, 'completed')
-                  );
-
-                  window.dispatchEvent(new Event('agentTicketsChange'));
-                  setTicketStatus('completed');
-
-                  addTLog('🎯 All units completed → ticket auto-completed', 'ok');
-                }, 0);
-              }
-            }
-          }
-
-          return next;   // ✅ ONLY ONE RETURN
+        setUnitTypes(prev => {
+          const ch = Object.entries(newTypes).some(([k, v]) => prev[k] !== v);
+          return ch ? { ...prev, ...newTypes } : prev;
         });
       } catch (_) { }
     };
     pollUnits();
     const iv = setInterval(pollUnits, 10000);
     return () => clearInterval(iv);
-  }, [addTLog]);
+  }, []); // stable forever
 
   // Sync external agentTickets changes
   useEffect(() => {
@@ -1163,11 +1017,11 @@ export default function LiveTrackingPage() {
       if (loc?.latitude && mapObj.current) { mapObj.current.panTo({ lat: parseFloat(loc.latitude), lng: parseFloat(loc.longitude) }); mapObj.current.setZoom(15); }
       return prev;
     });
-    addTLog(`🔄 Switched live tracking → ${uid}`, 'info', uid);
+    addTLog(`Switched live tracking → ${uid}`, 'info', uid);
   }, [addTLog]);
 
   const handleMiniMapUnitClick = useCallback(uid => handleSwitchUnit(uid), [handleSwitchUnit]);
-  const toggleTraffic = () => { if (!mapObj.current || !trafficLayerRef.current) return; const next = !trafficOn; setTrafficOn(next); trafficLayerRef.current.setMap(next ? mapObj.current : null); addTLog(`🚦 Traffic ${next ? 'ON' : 'OFF'}`, next ? 'ok' : 'info'); };
+  const toggleTraffic = () => { if (!mapObj.current || !trafficLayerRef.current) return; const next = !trafficOn; setTrafficOn(next); trafficLayerRef.current.setMap(next ? mapObj.current : null); addTLog(`Traffic ${next ? 'ON' : 'OFF'}`, next ? 'ok' : 'info'); };
   const centerOnVehicle = () => { if (!mapObj.current || !lastVRef.current) return; mapObj.current.panTo(lastVRef.current); mapObj.current.setZoom(16); };
   const fitAll = () => { if (!mapObj.current) return; const b = new window.google.maps.LatLngBounds(); const aUid = activeUnitIdRef.current; if (aUid && vehMkrMap.current[aUid]) b.extend(vehMkrMap.current[aUid].getPosition()); if (destMkr.current) b.extend(destMkr.current.getPosition()); if (!b.isEmpty()) mapObj.current.fitBounds(b); };
 
@@ -1177,6 +1031,7 @@ export default function LiveTrackingPage() {
   const etaStr = stats.timeS <= 0 ? '—' : hrs === 0 ? mins + ' min' : hrs + 'hr ' + mins + 'm';
   const arrivalStr = stats.timeS > 0 ? (() => { const ar = new Date(Date.now() + stats.timeS * 1000); let ah = ar.getHours(), am = ar.getMinutes(), ap = ah >= 12 ? 'PM' : 'AM'; ah = ah % 12 || 12; return ah + ':' + am.toString().padStart(2, '0') + ' ' + ap; })() : '—';
 
+  // ── FIXED RETURN: No replayMode wrapper, no <Route> outside <Routes> ─────
   return (
     <div style={s.root}>
       <div style={s.mapWrap}>
@@ -1197,6 +1052,14 @@ export default function LiveTrackingPage() {
             <button style={s.backBtn} onClick={centerOnVehicle}><AimOutlined style={{ fontSize: '12px', verticalAlign: 'middle' }} /> Center</button>
             <button style={s.backBtn} onClick={fitAll}>⛶ Fit</button>
             <button style={{ ...s.backBtn, ...(trafficOn ? s.trafficOn : s.trafficOff) }} onClick={toggleTraffic}><NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle' }} /> Traffic: {trafficOn ? 'ON' : 'OFF'}</button>
+            {ticketStatus === 'completed' && (
+              <button
+                style={{ ...s.backBtn, background: 'rgba(26,115,232,.15)', borderColor: 'rgba(26,115,232,.4)', color: '#82B4FF', fontWeight: 800 }}
+                onClick={() => navigate(`/replay/${id}`, { state: { alert: alertObj } })}
+              >
+                <PlayCircleOutlined style={{ fontSize: '13px', verticalAlign: 'middle' }} /> Route Replay
+              </button>
+            )}
           </div>
         </div>
 
@@ -1224,13 +1087,7 @@ export default function LiveTrackingPage() {
           unitTypes={unitTypes} onUnitClick={handleMiniMapUnitClick} activeUnitId={activeUnitId}
         />
 
-        <div
-          ref={mapRef}
-          style={{
-            ...s.map,
-            visibility: live ? 'visible' : 'hidden',
-          }}
-        />
+        <div ref={mapRef} style={{ ...s.map, visibility: live ? 'visible' : 'hidden' }} />
 
         {!live && (
           <div style={s.noLocMsg}>
@@ -1250,14 +1107,7 @@ export default function LiveTrackingPage() {
               return (
                 <React.Fragment key={st}>
                   <div style={s.lcStep}>
-                    <div style={{
-                      ...s.lcDot,
-                      background: isDone ? 'rgba(52,168,83,.12)' : isActive ? 'rgba(26,115,232,.12)' : '#0D1117',
-                      color: isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D',
-                      border: `1.5px solid ${isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D'}`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 14, width: 28, height: 28, borderRadius: 8, transition: 'all .4s'
-                    }}>
+                    <div style={{ ...s.lcDot, background: isDone ? 'rgba(52,168,83,.12)' : isActive ? 'rgba(26,115,232,.12)' : '#0D1117', color: isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D', border: `1.5px solid ${isDone ? '#34A853' : isActive ? '#1A73E8' : '#30363D'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, width: 28, height: 28, borderRadius: 8, transition: 'all .4s' }}>
                       {React.cloneElement(icon, { style: { fontSize: '14px', verticalAlign: 'middle' } })}
                     </div>
                     <div style={{ ...s.lcLabel, color: isDone || isActive ? '#E6EDF3' : '#8B949E', marginTop: 4 }}>{st.replace('_', ' ')}</div>

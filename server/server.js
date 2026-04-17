@@ -227,28 +227,29 @@ setInterval(() => {
             unit.location = { latitude: lat, longitude: lng, heading, speed, updatedAt: Date.now() };
           }
 
-          const prevState = unitTripState.get(unitId) || makeFreshTripState();
-          const point = {
-            latitude: lat,
-            longitude: lng,
-            heading,
-            speed,
-            remainingDistM: data.remainingDistM || 0,
-            remainingTimeS: data.remainingTimeS || 0,
-            tripStatus: prevState.tripStatus === 'completed' ? 'completed' : tripStatus,
-            stepIdx: data.stepIdx || 0,
-            totalSteps: data.totalSteps || 0,
-            distToDest: data.distToDest || 0,
-            timestamp: Date.now(),
-          };
+          const key = `${ticketNo}:${unitId}`;
 
-          if (unitId) {
-            unitTripState.set(unitId, {
-              ...prevState,
-              ...point,
-              trail: [...(prevState.trail || []).slice(-149), point],
-            });
-          }
+const prevState = unitTripState.get(key) || makeFreshTripState();
+
+const point = {
+  latitude: lat,
+  longitude: lng,
+  heading,
+  speed,
+  remainingDistM: data.remainingDistM || 0,
+  remainingTimeS: data.remainingTimeS || 0,
+  tripStatus: prevState.tripStatus === 'completed' ? 'completed' : tripStatus,
+  stepIdx: data.stepIdx || 0,
+  totalSteps: data.totalSteps || 0,
+  distToDest: data.distToDest || 0,
+  timestamp: Date.now(),
+};
+
+unitTripState.set(key, {
+  ...prevState,
+  ...point,
+  trail: [...(prevState.trail || []).slice(-149), point],
+});
 
           ambulanceLocation = { ...point, trail: [...ambulanceLocation.trail.slice(-149), point] };
 
@@ -297,7 +298,8 @@ setInterval(() => {
             incidents.set(alertId, alertObj);
             unit.status = 'busy';
             unit.assignedIncidentId = alertId;
-            unitTripState.set(targetUnit, makeFreshTripState({ tripStatus: 'dispatched' }));
+            const key = `${alertId}:${targetUnit}`;
+unitTripState.set(key, makeFreshTripState({ tripStatus: 'dispatched' }));
 
             // 2. Persistent Storage (MySQL)
             try {

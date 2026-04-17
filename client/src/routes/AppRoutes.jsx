@@ -9,6 +9,7 @@ import AlertsPage from '../pages/AlertsPage';
 import LiveTrackingPage from '../pages/LiveTrackingPage';
 import AgentPage from '../pages/AgentPage';
 import GlobalChatPanel, { ChatTriggerButton } from '../components/GlobalChatPanel';
+import RouteReplayPage from '../pages/RouteReplayPage';
 
 function ProtectedLayout() {
   const [chatOpen, setChatOpen] = useState(false);
@@ -50,6 +51,7 @@ function ProtectedLayout() {
         <Route path="/dispatch" element={<DispatchPage />} />
         <Route path="/alerts"   element={<AlertsPage />} />
         <Route path="/live/:id" element={<LiveTrackingPage />} />
+         <Route path="/replay/:id" element={<RouteReplayPage />} />
         <Route path="*"         element={<Navigate to="/agent" replace />} />
       </Routes>
 

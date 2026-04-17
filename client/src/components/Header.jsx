@@ -109,6 +109,7 @@ export default function Header() {
   }, []);
 
   const handleLogout = () => {
+    localStorage.clear();
     logout();
     navigate('/login');
   };
@@ -171,4 +172,4 @@ export default function Header() {
       </nav>
     </>
   );
-}
+}

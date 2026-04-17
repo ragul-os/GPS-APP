@@ -96,6 +96,7 @@ export default function AlertScreen() {
   const acceptingRef = useRef(false);
   const inboxPollRef = useRef(null);     // Webhook inbox long-poll abort controller
   const inboxCursorRef = useRef('0-0'); // Track last seen Redis entry ID
+  const alertCooldownRef = useRef(false);
 
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
@@ -194,12 +195,12 @@ export default function AlertScreen() {
         setServerOnline(true);
         if (
           data && data.status === 'pending' &&
-          data.id !== lastAlertId.current &&
+          (data.agentTicketId || data.id) !== lastAlertId.current &&
           statusRef.current === 'waiting' &&
           isActiveRef.current &&
           (tripStatus === 'idle' || tripStatus === 'completed')
         ) {
-          lastAlertId.current = data.id;
+          lastAlertId.current = data.agentTicketId || data.id;   // ← stable key
           receiveAlert(data);
         }
       } catch (err) {
@@ -242,21 +243,19 @@ export default function AlertScreen() {
             // The webhook already JSON-parses the Redis payload and returns the
             // object directly in eventPayload — so m itself IS the payload.
             // Fall back to m.payload in case the format is ever nested.
-            let payload = m.payload != null ? m.payload : m;
-            if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch { } }
-
-            if (payload?.type === 'NEW_ALERT' && payload?.alert) {
-              const alert = payload.alert;
-              console.log('[Inbox] 🚨 NEW_ALERT received:', alert.id);
-              if (
-                alert.id !== lastAlertId.current &&
-                statusRef.current === 'waiting' &&
-                isActiveRef.current
-              ) {
-                lastAlertId.current = alert.id;
-                receiveAlert(alert);
-              }
+           if (payload?.type === 'NEW_ALERT' && payload?.alert) {
+            const alert = payload.alert;
+            const dedupeKey = alert.agentTicketId || alert.id;   // ← stable key
+            console.log('[Inbox] 🚨 NEW_ALERT received:', alert.id, '| dedupeKey:', dedupeKey);
+            if (
+              dedupeKey !== lastAlertId.current &&
+              statusRef.current === 'waiting' &&
+              isActiveRef.current
+            ) {
+              lastAlertId.current = dedupeKey;   // ← store stable key
+              receiveAlert(alert);
             }
+          }
           }
         } catch (err) {
           if (err.name === 'AbortError') break;
@@ -311,9 +310,15 @@ export default function AlertScreen() {
   };
 
   const receiveAlert = async (data) => {
-    stopCountdown();
-    setAlertData(data);
-    setStatus('incoming');
+    if (alertCooldownRef.current) {
+    console.log('[Alert] Cooldown active — ignoring duplicate alert');
+    return;
+  }
+  alertCooldownRef.current = true;   // ← lock so no more alerts come in
+
+  stopCountdown();
+  setAlertData(data);
+  setStatus('incoming');
     setCountdown(30);
     slideIn();
 
@@ -357,6 +362,7 @@ export default function AlertScreen() {
       return;
     }
     acceptingRef.current = true;
+     alertCooldownRef.current = false;
     console.log('👉 Accept clicked');
 
     if (!alertData) { acceptingRef.current = false; return; }
@@ -399,7 +405,7 @@ export default function AlertScreen() {
       params: {
         destination: JSON.stringify(captured.destination),
         roomId: capturedRoomId || '',
-        ambulanceId: session.username,
+        ambulanceId: session.unitId,
         ticketNo: captured.agentTicketId || captured.id || '',
         initialTripStatus: 'accepted',
       },
@@ -411,6 +417,7 @@ export default function AlertScreen() {
   // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const doReject = async (reason = 'manual', forceData = null) => {
     acceptingRef.current = false;
+    alertCooldownRef.current = false;
     const target = forceData || alertData;
     if (!target || statusRef.current !== 'incoming') return;
     stopCountdown();
@@ -578,7 +585,11 @@ export default function AlertScreen() {
             activeOpacity={0.8}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Text style={{ fontSize: 14 }}>{theme.name === 'dark' ? '☀️' : '🌙'}</Text>
+            <Ionicons
+              name={theme.name === 'dark' ? 'sunny' : 'moon'}
+              size={18}
+              color={theme.name === 'dark' ? '#FFD700' : '#555'}
+            />
             <Text style={[styles.themeToggleLbl, { color: theme.accent }]}>{theme.label}</Text>
           </TouchableOpacity>
 

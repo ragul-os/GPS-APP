@@ -218,21 +218,29 @@ const fmtArrival = (remSeconds) => { const d = new Date(Date.now() + remSeconds 
 const ping = (ambulanceId, coords, h, spd, distM, timeS, status, stepI, totalS, dDest, ticketNo) => {
   console.log(`📡 GPS PING -> Sending for Ticket: ${ticketNo || 'N/A'}`);
   return fetch(`${WEBHOOK_URL}/webhook/abc1234`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', 
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       channel: 'gps',
+      sessionId:ambulanceId,   // ← frontend reads by sessionId
+      conversationId: ticketNo || ambulanceId,
       unit_id: ambulanceId,
       ticket_no: ticketNo || '',
-      latitude: coords.latitude, longitude: coords.longitude,
-      heading: h || 0, speed: spd || 0,
-      remainingDistM: distM || 0, remainingTimeS: timeS || 0,
-      trip_status: status, stepIdx: stepI || 0, totalSteps: totalS || 0, distToDest: dDest || 0
+      latitude: coords.latitude, 
+      longitude: coords.longitude,
+      heading: h || 0, 
+      speed: spd || 0,
+      remainingDistM: distM || 0, 
+      remainingTimeS: timeS || 0,
+      trip_status: status, 
+      stepIdx: stepI || 0, 
+      totalSteps: totalS || 0, 
+      distToDest: dDest || 0
     }),
   })
     .then(r => console.log(`✅ PING SUCCESS: ${r.status}`))
     .catch(e => console.error(`❌ PING FAILED: ${e.message}`));
 };
-
 const notifyStatus = (unitId, status, ticketNo) => {
   console.log(`📣 STATUS UPDATE -> ${status} for Ticket: ${ticketNo || 'N/A'}`);
   return fetch(`${WEBHOOK_URL}/webhook/abc1234`, {
