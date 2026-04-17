@@ -30,21 +30,23 @@ async function getLocalIP() {
       }
       resolve('localhost');
     }
-    
+
     // Safety timeout
     setTimeout(() => {
-        try { socket.close(); } catch(e) {}
-        // Final fallback
-        const interfaces = os.networkInterfaces();
-        for (const name of Object.keys(interfaces)) {
-          for (const iface of interfaces[name]) {
-            if (iface.family === 'IPv4' && !iface.internal) {
-              resolve(iface.address);
-              return;
-            }
+      try {
+        socket.close();
+      } catch (e) {}
+      // Final fallback
+      const interfaces = os.networkInterfaces();
+      for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            resolve(iface.address);
+            return;
           }
         }
-        resolve('localhost');
+      }
+      resolve('localhost');
     }, 1000);
   });
 }
@@ -58,9 +60,19 @@ async function run() {
   if (fs.existsSync(mobileConfigPath)) {
     let content = fs.readFileSync(mobileConfigPath, 'utf8');
     const updatedContent = content
-      .replace(/(SERVER_URL\s*=\s*['"])http:\/\/[^:]+(:5000['"])/g, `$1http://${currentIP}$2`)
-      .replace(/(SYNAPSE_BASE\s*=\s*['"])http:\/\/[^:]+(:8008['"])/g, `$1http://${currentIP}$2`);
-    
+      .replace(
+        /(SERVER_URL\s*=\s*['"])http:\/\/[^:]+(:5000['"])/g,
+        `$1http://${currentIP}$2`,
+      )
+      .replace(
+        /(SYNAPSE_BASE\s*=\s*['"])http:\/\/[^:]+(:8008['"])/g,
+        `$1http://${currentIP}$2`,
+      )
+      .replace(
+        /(WEBHOOK_URL\s*=\s*['"])http:\/\/[^:]+(:8008['"])/g,
+        `$1http://${currentIP}$2`,
+      );
+
     if (content !== updatedContent) {
       fs.writeFileSync(mobileConfigPath, updatedContent);
       console.log(`✅ Updated Mobile Config: Mobile/src/config.js`);
@@ -70,12 +82,28 @@ async function run() {
   }
 
   // 2. Update client/src/config/apiConfig.js
-  const webConfigPath = path.join(__dirname, 'client', 'src', 'config', 'apiConfig.js');
+  const webConfigPath = path.join(
+    __dirname,
+    'client',
+    'src',
+    'config',
+    'apiConfig.js',
+  );
   if (fs.existsSync(webConfigPath)) {
     let content = fs.readFileSync(webConfigPath, 'utf8');
     const updatedContent = content
-      .replace(/(import\.meta\.env\.VITE_API_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:5000['"])/g, `$1http://${currentIP}$2`)
-      .replace(/(import\.meta\.env\.VITE_SYNAPSE_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:8008['"])/g, `$1http://${currentIP}$2`);
+      .replace(
+        /(import\.meta\.env\.VITE_API_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:5000['"])/g,
+        `$1http://${currentIP}$2`,
+      )
+      .replace(
+        /(import\.meta\.env\.VITE_SYNAPSE_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:8008['"])/g,
+        `$1http://${currentIP}$2`,
+      )
+      .replace(
+        /(import\.meta\.env\.VITE_WEBHOOK_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:8008['"])/g,
+        `$1http://${currentIP}$2`,
+      );
 
     if (content !== updatedContent) {
       fs.writeFileSync(webConfigPath, updatedContent);
