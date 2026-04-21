@@ -150,7 +150,7 @@ function buildActivitySegments(points) {
 }
 
 // ── Breadcrumb dot SVG ────────────────────────────────────────────────────────
-function makeDotSvg(color = '#34A853', size = 10, withRing = false) {
+/* function makeDotSvg(color = '#34A853', size = 10, withRing = false) {
   if (withRing) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
       <circle cx="10" cy="10" r="8" fill="none" stroke="${color}" stroke-width="2" opacity="0.5"/>
@@ -160,8 +160,25 @@ function makeDotSvg(color = '#34A853', size = 10, withRing = false) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
     <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 1}" fill="${color}" stroke="white" stroke-width="1"/>
   </svg>`;
-}
+} */
 
+  function makeDotSvg(color = '#34A853', size = 14, type = 'moving') {
+  // Arrow paths for each type (white, centered)
+  const icons = {
+    start: `<polygon points="10,5 18,15 14,15 14,23 6,23 6,15 2,15" fill="white"/>`, // up arrow
+    moving: `<polygon points="10,5 18,15 14,15 14,23 6,23 6,15 2,15" fill="white"/>`, // up arrow
+    stopped: `<rect x="6" y="6" width="12" height="12" rx="2" fill="white"/>`,        // stop square
+    end: `<polygon points="10,23 2,13 6,13 6,5 14,5 14,13 18,13" fill="white"/>`,    // down arrow
+    dot: `<circle cx="12" cy="12" r="4" fill="white"/>`,
+  };
+
+  const iconPath = icons[type] || icons.dot;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="11" fill="${color}" stroke="white" stroke-width="1.5"/>
+    ${iconPath}
+  </svg>`;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -240,7 +257,12 @@ export default function RouteReplayPage() {
 
   // ── Init Google Map ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!mapRef.current || mapObj.current || !window.google?.maps) return;
+  const initMap = () => {
+    if (!mapRef.current || mapObj.current) return;
+    if (!window.google?.maps) {
+      setTimeout(initMap, 300);
+      return;
+    }
     mapObj.current = new window.google.maps.Map(mapRef.current, {
       center: { lat: 11.0168, lng: 76.9558 },
       zoom: 13,
@@ -250,12 +272,23 @@ export default function RouteReplayPage() {
       fullscreenControl: true,
       zoomControl: true,
     });
-  }, []);
+  };
+  initMap();
+}, []);
 
   // ── Draw ALL breadcrumbs on map when data loads ────────────────────────────
   useEffect(() => {
-    if (!mapObj.current || !window.google?.maps || allPoints.length === 0) return;
-
+   if (!window.google?.maps || allPoints.length === 0) return;
+  if (!mapObj.current) {
+    const retry = setInterval(() => {
+      if (mapObj.current) {
+        clearInterval(retry);
+        // trigger re-render to re-run effect
+        setAllPoints(prev => [...prev]);
+      }
+    }, 200);
+    return () => clearInterval(retry);
+  }
     // Clear old markers
     breadcrumbMarkers.current.forEach(m => m.setMap(null));
     breadcrumbMarkers.current = [];
@@ -289,59 +322,61 @@ export default function RouteReplayPage() {
 
     // Draw dots every 30s (or every point if < 30s interval)
     let lastDotTime = null;
-    allPoints.forEach((p, i) => {
-      const t = new Date(p.timestamp).getTime();
-      const shouldDraw =
-        i === 0 ||
-        i === allPoints.length - 1 ||
-        !lastDotTime ||
-        t - lastDotTime >= 30000;
+allPoints.forEach((p, i) => {
+  const t = new Date(p.timestamp).getTime();
+  const shouldDraw =
+    i === 0 ||
+    i === allPoints.length - 1 ||
+    !lastDotTime ||
+    t - lastDotTime >= 30000;
 
-      if (!shouldDraw) return;
-      lastDotTime = t;
+  if (!shouldDraw) return;
+  lastDotTime = t;
 
-      const isFirst = i === 0;
-      const isLast = i === allPoints.length - 1;
-      const isStopped = (parseFloat(p.speed) || 0) <= 2;
+  const isFirst = i === 0;
+  const isLast = i === allPoints.length - 1;
+  const isStopped = (parseFloat(p.speed) || 0) <= 2;
 
-      let color = '#34A853'; // green = moving
-      let size = 10;
-      if (isFirst) { color = '#1A73E8'; size = 14; }      // blue start
-      else if (isLast) { color = '#E53935'; size = 14; }   // red end
-      else if (isStopped) { color = '#F9A825'; size = 10; } // yellow stop
+  let color, iconType, dotSize;
 
-      const svg = isFirst || isLast
-        ? makeDotSvg(color, size, true)
-        : makeDotSvg(color, size, false);
+  if (isFirst) {
+    color = '#1A73E8'; iconType = 'start'; dotSize = 24;
+  } else if (isLast) {
+    color = '#E53935'; iconType = 'end'; dotSize = 24;
+  } else if (isStopped) {
+    color = '#F9A825'; iconType = 'stopped'; dotSize = 22;
+  } else {
+    color = '#34A853'; iconType = 'moving'; dotSize = 18;
+  }
 
-      const mkr = new window.google.maps.Marker({
-        position: { lat: parseFloat(p.latitude), lng: parseFloat(p.longitude) },
-        map: mapObj.current,
-        zIndex: isFirst || isLast ? 100 : 50,
-        icon: {
-          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-          scaledSize: new window.google.maps.Size(size + 4, size + 4),
-          anchor: new window.google.maps.Point((size + 4) / 2, (size + 4) / 2),
-        },
-        title: `${fmtTime(p.timestamp)} — ${p.location_info || ''}`,
-      });
+  const svg = makeDotSvg(color, dotSize, iconType);
 
-      // InfoWindow on click
-      mkr.addListener('click', () => {
-        const iw = new window.google.maps.InfoWindow({
-          content: `<div style="font-family:Sora,sans-serif;font-size:12px;padding:4px;color:#000;">
-            <b>${fmtTime(p.timestamp)}</b><br/>
-            Speed: ${parseFloat(p.speed || 0).toFixed(1)} km/h<br/>
-            ${p.location_info ? `📍 ${p.location_info}` : ''}
-            ${p.remarks ? `<br/>📝 ${p.remarks}` : ''}
-          </div>`,
-        });
-        iw.open(mapObj.current, mkr);
-      });
+  const mkr = new window.google.maps.Marker({
+    position: { lat: parseFloat(p.latitude), lng: parseFloat(p.longitude) },
+    map: mapObj.current,
+    zIndex: isFirst || isLast ? 100 : 50,
+    icon: {
+      url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+      scaledSize: new window.google.maps.Size(dotSize, dotSize),
+      anchor: new window.google.maps.Point(dotSize / 2, dotSize / 2),
+    },
+    title: `${fmtTime(p.timestamp)} — ${p.location_info || ''}`,
+  });
 
-      breadcrumbMarkers.current.push(mkr);
+  mkr.addListener('click', () => {
+    const iw = new window.google.maps.InfoWindow({
+      content: `<div style="font-family:Sora,sans-serif;font-size:12px;padding:4px;color:#000;">
+        <b>${fmtTime(p.timestamp)}</b><br/>
+        Speed: ${parseFloat(p.speed || 0).toFixed(1)} km/h<br/>
+        ${p.location_info ? `📍 ${p.location_info}` : ''}
+        ${p.remarks ? `<br/>📝 ${p.remarks}` : ''}
+      </div>`,
     });
+    iw.open(mapObj.current, mkr);
+  });
 
+  breadcrumbMarkers.current.push(mkr);
+});
     // Vehicle marker (animated dot)
     if (vehicleMarker.current) vehicleMarker.current.setMap(null);
     const firstP = allPoints[0];

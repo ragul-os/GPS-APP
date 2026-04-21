@@ -80,7 +80,7 @@ export const THEMES = {
 
     accent:        '#EA580C',         // ← swap this hex to change the orange
     accentLight:   '#F97316',
-    accentBg:      'rgba(234,88,12,0.10)',
+    accentBg:      'rgba(234,88,12,0.08)',
 
     textPrimary:   '#0F172A',
     textSecondary: '#64748B',

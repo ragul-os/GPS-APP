@@ -387,6 +387,16 @@ function makeFreshTripState(overrides = {}) {
   return { latitude: null, longitude: null, heading: 0, speed: 0, remainingDistM: 0, remainingTimeS: 0, tripStatus: 'dispatched', stepIdx: 0, totalSteps: 0, distToDest: 0, timestamp: null, trail: [], ...overrides };
 }
 
+// NEW HELPER - finds the correct folder name
+function tripKey(unitId, ticketNo) {
+  if (ticketNo) return `${ticketNo}:${unitId}`;
+  // If no ticketNo given, search existing folders
+  for (const k of unitTripState.keys()) {
+    if (k === unitId || k.endsWith(`:${unitId}`)) return k;
+  }
+  return unitId; // last resort fallback
+}
+
 function haversineMetres(lat1, lon1, lat2, lon2) {
   const R = 6371000, φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
   const dφ = (lat2 - lat1) * Math.PI / 180, dλ = (lon2 - lon1) * Math.PI / 180;
@@ -665,6 +675,7 @@ app.get('/nearest', (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 function handleLocationUpdate(req, res) {
   const unitId = req.body.unitId || req.body.ambulanceId;
+  const ticketNo = req.body.ticketNo || req.body.ticket_no || null;
   const lat = parseFloat(req.body.latitude);
   const lng = parseFloat(req.body.longitude);
   if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'Invalid coordinates' });
@@ -679,7 +690,7 @@ function handleLocationUpdate(req, res) {
       updatedAt: Date.now(),
     };
   }
-
+  const key = tripKey(unitId, ticketNo);
   const prevState = unitTripState.get(unitId) || makeFreshTripState();
 
 
@@ -702,11 +713,9 @@ function handleLocationUpdate(req, res) {
   console.log(`🚑 ${unitId} | speed=${point.speed} | ETA=${point.remainingTimeS}`);
 
   if (unitId) {
-    // ── Write to THIS unit's own trip state ────────────────────────────────
-    const prev = unitTripState.get(unitId) || makeFreshTripState();
-    unitTripState.set(unitId, {
+    unitTripState.set(key, { // USE key NOT unitId
       ...point,
-      trail: [...(prev.trail || []).slice(-149), point],
+      trail: [...(prevState.trail || []).slice(-149), point],
     });
   }
 
@@ -724,10 +733,16 @@ app.post('/update-location', handleLocationUpdate);
 app.get('/ambulance-location', (req, res) => res.json(ambulanceLocation));
 
 // GET /unit-location/:unitId — THE FIX: returns ONLY this unit's trip state
+// REPLACE WITH:
 app.get('/unit-location/:unitId', (req, res) => {
-  const unit = units.get(req.params.unitId);
-  const tripState = unitTripState.get(req.params.unitId) || makeFreshTripState({ tripStatus: 'idle' });
+  const uid = req.params.unitId;
+  const ticketNo = req.query.ticket_no || null; // read ticket from URL
+  const unit = units.get(uid);
 
+  const key = tripKey(uid, ticketNo); // USE CORRECT FOLDER NAME
+  const tripState = unitTripState.get(key) || makeFreshTripState({ tripStatus: 'idle' });
+  
+  console.log(`📖 Reading key="${key}" → tripStatus="${tripState.tripStatus}"`);
   if (!unit) {
     // Return 200 with idle state for units not yet heartbeated (prevents red 404 console errors)
     return res.json({
@@ -874,13 +889,38 @@ app.get('/my-alert', (req, res) => {
 
 app.get('/status', (req, res) => res.json({ alert: currentAlert }));
 
-app.post('/accept-assignment', (req, res) => {
+app.post('/accept-assignment', (req, res) => {  
   const unitId = req.body.unitId || req.body.ambulanceId, assign = assignments.get(unitId);
   if (!assign) return res.status(400).json({ error: 'No assignment' });
   if (assign.status === 'accepted') return res.status(400).json({ error: 'Already taken by another unit' });
-  assign.status = 'accepted'; currentAlert.status = 'accepted';
-  for (const [id, a] of assignments.entries()) { if (a.id === assign.id && id !== unitId) assignments.delete(id); }
-  res.json({ success: true });
+ assign.status = 'accepted'; 
+currentAlert.status = 'accepted';
+
+// Remove this alert from ALL other units so they don't show it
+for (const [id, a] of assignments.entries()) { 
+  if (a.id === assign.id && id !== unitId) {
+    assignments.delete(id);
+    console.log(`🚫 Removed assignment from unit ${id} — accepted by ${unitId}`);
+  }
+}
+// Publish cancellation to all other unit inboxes via NATS
+if (nc) {
+  for (const [id] of units.entries()) {
+    if (id !== unitId) {
+      try {
+        nc.publish(`unit.inbox.${id}`, sc.encode(JSON.stringify({
+          type: 'ALERT_CANCELLED',
+          alertId: assign.id,
+          agentTicketId: assign.agentTicketId,
+          reason: 'accepted_by_other_unit',
+          timestamp: Date.now()
+        })));
+      } catch {}
+    }
+  }
+}
+
+res.json({ success: true });
 });
 
 app.post('/accept', (req, res) => { if (!currentAlert.id) return res.status(400).json({ error: 'No active alert' }); currentAlert.status = 'accepted'; ambulanceLocation.trail = []; res.json({ success: true }); });
@@ -906,16 +946,26 @@ app.post('/complete-trip', (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // UPDATE DISPATCH STATUS — inserts ONE status-event row to DB on button press
 // ══════════════════════════════════════════════════════════════════════════════
+// REPLACE WITH (fixed code):
 app.post('/update-dispatch-status', async (req, res) => {
   const allowed = ['dispatched', 'accepted', 'en_route', 'on_action', 'arrived', 'completed', 'abandoned', 'idle'];
-  const { tripStatus, unitId, ambulanceId } = req.body;
+  const { tripStatus, unitId, ambulanceId, ticketNo } = req.body; // added ticketNo
   if (!allowed.includes(tripStatus)) return res.status(400).json({ error: `Invalid: ${tripStatus}` });
   const uid = unitId || ambulanceId;
   if (!uid) return res.status(400).json({ error: 'unitId is required' });
-  if (!unitTripState.has(uid)) unitTripState.set(uid, makeFreshTripState());
-  const prev = unitTripState.get(uid);
-  unitTripState.set(uid, { ...prev, tripStatus, timestamp: Date.now() });
-  console.log(`✅ ${uid} → ${tripStatus}`);
+
+  const key = tripKey(uid, ticketNo); // USE CORRECT FOLDER NAME
+  if (!unitTripState.has(key)) unitTripState.set(key, makeFreshTripState());
+  const prev = unitTripState.get(key);
+
+  // SAFETY: never go back from completed
+  if (prev.tripStatus === 'completed') {
+    console.log(`🔒 ${uid} already completed — ignoring ${tripStatus}`);
+    return res.json({ success: true, unitId: uid, tripStatus: 'completed' });
+  }
+
+  unitTripState.set(key, { ...prev, tripStatus, timestamp: Date.now() });
+  console.log(`✅ ${uid} → ${tripStatus} (key=${key})`);
 
   if (prev.latitude && prev.longitude) {
     trackInsert({ unitId: uid, latitude: prev.latitude, longitude: prev.longitude, speed: prev.speed || 0, tripStatus }).catch(() => { });
@@ -928,6 +978,49 @@ app.post('/update-dispatch-status', async (req, res) => {
   ambulanceLocation.tripStatus = tripStatus;
   res.json({ success: true, unitId: uid, tripStatus });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// ROUTE REPLAY API (for RouteReplayPage)
+// ═══════════════════════════════════════════════════════════════
+app.get('/api/unit-locations/replay', async (req, res) => {
+  try {
+    const ticketNo = req.query.ticket_no;
+
+    if (!ticketNo) {
+      return res.status(400).json({ error: 'ticket_no is required' });
+    }
+
+    console.log("🎥 REPLAY API called for ticket:", ticketNo);
+
+    const { rows } = await pgPool.query(
+      `SELECT 
+         timestamp,
+         unit_id,
+         latitude,
+         longitude,
+         speed,
+         trip_status,
+         location_info,
+         remarks
+       FROM public.unit_locations
+       WHERE ticket_no = $1
+       ORDER BY "timestamp" ASC`,
+      [ticketNo]
+    );
+
+    console.log("📦 REPLAY rows fetched:", rows);
+
+    res.json({
+      success: true,
+      rows: rows
+    });
+
+  } catch (err) {
+    console.error("❌ Replay API error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 app.get('/incidents', (req, res) => res.json({ success: true, data: Array.from(incidents.values()).sort((a, b) => (b.assignedAt || 0) - (a.assignedAt || 0)) }));
 app.post('/register-token', (req, res) => { const { token } = req.body; if (!token) return res.status(400).json({ error: 'No token' }); pushTokens.add(token); res.json({ success: true, devices: pushTokens.size }); });

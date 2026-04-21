@@ -672,7 +672,10 @@ export default function DispatchPage() {
       const vehicleType = agentTicket?.vehicleType || 'ambulance';
 
       // ── STEP 1: Build dynamic invite list from selected unit IDs ──
-      const inviteUserIds = selectedUnitIds.map(id => `@${id}:localhost`);
+      const inviteUserIds = selectedUnitIds.map(id => {
+  const unit = unitList.find(u => u.id === id);
+  return `@${unit?.name || id}:localhost`; // ← unit.name = "sushma", not "AMB-N0AIDZ"
+});
 
       // ── STEP 2: Create room with all units pre-invited ──
       let roomId = null;

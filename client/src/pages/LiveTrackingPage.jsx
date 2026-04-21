@@ -1847,6 +1847,7 @@ export default function LiveTrackingPage() {
   const dispatchedUnitsRef = useRef([]);
   const agentTicketRef = useRef(null);
   const ticketCompletedRef = useRef(false);
+  const tripStatusRef = useRef('idle');
 
   const [tripStatus, setTripStatus] = useState('idle');
   const [live, setLive] = useState(false);
@@ -1919,6 +1920,9 @@ export default function LiveTrackingPage() {
   useEffect(() => {
     if (ticketStatus === 'completed') ticketCompletedRef.current = true;
   }, [ticketStatus]);
+  useEffect(() => {
+  tripStatusRef.current = tripStatus;
+}, [tripStatus]);
 
   const cfg = UCFG[alertObj?.vehicleType || 'ambulance'] || UCFG.ambulance;
 
@@ -2397,9 +2401,18 @@ export default function LiveTrackingPage() {
 
         const ts = d.tripStatus || 'idle';
 
-        console.log(
-          `[FLICKER-DEBUG] Poll received tripStatus="${ts}" lastTripStRef="${lastTripStRef.current}"`,
-        );
+console.log(
+  `[FLICKER-DEBUG] Poll received tripStatus="${ts}" lastTripStRef="${lastTripStRef.current}"`,
+);
+
+// ── FLICKER FIX: Ignore 'idle' if we already have a real status ───────
+const REAL_STATUSES = ['accepted', 'dispatched', 'en_route', 'on_action', 'arrived', 'completed', 'abandoned'];
+const isDowngradeToIdle = ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
+if (isDowngradeToIdle) {
+  console.log(`[FLICKER-DEBUG] SKIPPING stale idle — current real status is "${tripStatusRef.current}"`);
+  setTimeout(poll, 100);
+  return;
+}
 
         // ── FIX 2: Guard unitStatuses — never downgrade terminal ──────────────
         setUnitStatuses((prev) => {
@@ -2423,10 +2436,11 @@ export default function LiveTrackingPage() {
           }
           if (prev === ts) return prev;
           console.log(`[FLICKER-DEBUG] tripStatus: ${prev} → ${ts}`);
+          tripStatusRef.current = ts;
           return ts;
         });
 
-        console.log(tripStatus);
+        console.log('tripStatusRef current:', tripStatusRef.current);
 
         setStepInfo({
           idx: parseInt(d.stepIdx) || 0,

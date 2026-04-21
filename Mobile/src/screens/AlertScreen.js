@@ -35,14 +35,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AMBULANCE_TYPE, SERVER_URL, WEBHOOK_URL } from '../config';
-import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import {  useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { joinRoom } from '../services/matrixService';
 import ChatRoomListScreen from './Chatroomlistscreen';
 import { Platform } from 'react-native';
 
-const POLL_INTERVAL_MS = 3000;
-const LOC_POLL_MS = 5000;
+const POLL_INTERVAL_MS = 15000;
+//const LOC_POLL_MS = 10000;
 const HEARTBEAT_MS = 10000;
 
 const TRIP_STATUS_CONFIG = {
@@ -97,6 +97,19 @@ export default function AlertScreen() {
   const inboxPollRef = useRef(null);     // Webhook inbox long-poll abort controller
   const inboxCursorRef = useRef('0-0'); // Track last seen Redis entry ID
   const alertCooldownRef = useRef(false);
+  const acceptedTicketsRef = useRef(new Set());
+
+  useEffect(() => {
+  AsyncStorage.getItem('ACCEPTED_TICKETS').then(raw => {
+    if (raw) {
+      try {
+        const arr = JSON.parse(raw);
+        acceptedTicketsRef.current = new Set(arr);
+        console.log('[Alert] Loaded accepted tickets:', arr.length);
+      } catch {}
+    }
+  });
+}, []);
 
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
@@ -110,8 +123,8 @@ export default function AlertScreen() {
 
   useEffect(() => {
     if (!isRegistered) return;
-    startPolling();
-    startLocPoll();
+    //startPolling();
+    //startLocPoll();
     startInboxPoll();   // 🌟 Start Webhook Gateway inbox polling
     startPulse();
     return () => {
@@ -211,79 +224,120 @@ export default function AlertScreen() {
   };
 
   // 🌟 WEBHOOK GATEWAY INBOX: Long-poll the unit's private Redis inbox
-  const startInboxPoll = () => {
-    if (!unitId) return;
-    console.log('[Inbox] Starting Webhook long-poll for unit:', unitId);
+  const startInboxPoll = async () => {
+  if (!unitId) return;
+  console.log('[Inbox] Starting Webhook long-poll for unit:', unitId);
 
-    const pollLoop = async () => {
-      while (true) {
-        // Stop if screen unmounted (ref cleared)
-        if (!inboxPollRef.current) break;
-        try {
-          const cursor = inboxCursorRef.current || '0-0';
-          const url = `${WEBHOOK_URL}/webhook/gps?channel=unit-alerts&sessionId=${unitId}&conversationId=${unitId}&eventId=${cursor}`;
-          console.log('[Inbox] Polling:', url);
+  // ← Load saved cursor from storage so we never replay old alerts
+  try {
+    const saved = await AsyncStorage.getItem(`INBOX_CURSOR_${unitId}`);
+    if (saved) {
+      inboxCursorRef.current = saved;
+      console.log('[Inbox] Restored cursor:', saved);
+    } else {
+      // First ever launch — start from NOW, not from beginning
+      inboxCursorRef.current = `${Date.now()}-0`;
+    }
+  } catch { 
+    inboxCursorRef.current = `${Date.now()}-0`;
+  }
 
-          const ctrl = new AbortController();
-          inboxPollRef.current = ctrl;
-          const res = await fetch(url, { signal: ctrl.signal });
-          if (!res.ok) { await new Promise(r => setTimeout(r, 3000)); continue; }
+  const pollLoop = async () => {
+    while (true) {
+      if (!inboxPollRef.current) break;
+      try {
+        const cursor = inboxCursorRef.current || `${Date.now()}-0`;
+        
+        const url = `${WEBHOOK_URL}/webhook/gps?channel=unit-alerts&sessionId=${unitId}&conversationId=${unitId}&eventId=${cursor}`;
+        console.log('[Inbox] Polling:', url);
 
-          const json = await res.json();
-          console.log('[Inbox] Response:', JSON.stringify(json));
+        const ctrl = new AbortController();
+        inboxPollRef.current = ctrl;
+        
+        const res = await fetch(url, { signal: ctrl.signal });
+        
+        if (!res.ok) { 
+          await new Promise(r => setTimeout(r, 3000)); 
+          continue; 
+        }
 
-          // The Webhook returns { messages: [...] } or { eventPayload: [...] }
-          const msgs = json.messages || json.eventPayload || (json.payload ? [json] : []);
-          for (const m of msgs) {
-            // Update cursor so next poll only fetches new messages.
-            // Webhook sets eventId (not entryid) on the unwrapped payload object.
-            const cursorVal = m.eventId || m.entryid;
-            if (cursorVal) inboxCursorRef.current = cursorVal;
+        const json = await res.json();
+        console.log('[Inbox] Raw response:', JSON.stringify(json).slice(0, 200));
 
-            // The webhook already JSON-parses the Redis payload and returns the
-            // object directly in eventPayload — so m itself IS the payload.
-            // Fall back to m.payload in case the format is ever nested.
-           if (payload?.type === 'NEW_ALERT' && payload?.alert) {
+        const msgs = json.eventPayload || json.messages || [];
+        
+        for (const m of msgs) {
+          // Update cursor AND save it to storage
+          if (m.eventId || m.entryid) {
+            const newCursor = m.eventId || m.entryid;
+            inboxCursorRef.current = newCursor;
+            // ← Persist cursor so app restart doesn't replay old alerts
+            AsyncStorage.setItem(`INBOX_CURSOR_${unitId}`, newCursor).catch(() => {});
+          }
+
+          const payload = m.payload || m;
+          console.log('[Inbox] Processing message:', JSON.stringify(payload).slice(0, 200));
+          
+          if (payload?.type === 'NEW_ALERT' && payload?.alert) {
             const alert = payload.alert;
-            const dedupeKey = alert.agentTicketId || alert.id;   // ← stable key
-            console.log('[Inbox] 🚨 NEW_ALERT received:', alert.id, '| dedupeKey:', dedupeKey);
+            const dedupeKey = alert.agentTicketId || alert.id;
+            console.log('[Inbox] 🚨 NEW_ALERT:', alert.id, 'dedupeKey:', dedupeKey);
+            
             if (
               dedupeKey !== lastAlertId.current &&
+              !acceptedTicketsRef.current.has(dedupeKey) && 
               statusRef.current === 'waiting' &&
-              isActiveRef.current
+              isActiveRef.current &&
+              !alertCooldownRef.current
             ) {
-              lastAlertId.current = dedupeKey;   // ← store stable key
+              lastAlertId.current = dedupeKey;
               receiveAlert(alert);
             }
           }
+          // ADD this block immediately after (same indentation level):
+          if (payload?.type === 'ALERT_CANCELLED') {
+            const cancelledKey = payload.agentTicketId || payload.alertId;
+            console.log('[Inbox] 🚫 ALERT_CANCELLED:', cancelledKey);
+            acceptedTicketsRef.current.add(cancelledKey);
+            AsyncStorage.setItem(
+              'ACCEPTED_TICKETS',
+              JSON.stringify([...acceptedTicketsRef.current].slice(-50))
+            ).catch(() => {});
+            if (statusRef.current === 'incoming' && lastAlertId.current === cancelledKey) {
+              doReject('cancelled_by_other_unit');
+            }
           }
-        } catch (err) {
-          if (err.name === 'AbortError') break;
-          console.warn('[Inbox] Poll error:', err.message);
-          await new Promise(r => setTimeout(r, 5000));
         }
+        
+        if (msgs.length === 0) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        
+      } catch (err) {
+        if (err.name === 'AbortError') break;
+        console.warn('[Inbox] Poll error:', err.message);
+        await new Promise(r => setTimeout(r, 5000));
       }
-    };
-
-    // Bootstrap the ref so the loop condition works on first iteration
-    inboxPollRef.current = new AbortController();
-    pollLoop();
+    }
   };
 
-  const startLocPoll = () => {
+  inboxPollRef.current = new AbortController();
+  pollLoop();
+};
+ /*  const startLocPoll = () => {
     fetchTripStatus();
     locPollRef.current = setInterval(fetchTripStatus, LOC_POLL_MS);
-  };
+  }; */
 
   // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
-  const fetchTripStatus = async () => {
+  /* const fetchTripStatus = async () => {
     try {
       if (!unitId) return;
       const res = await fetch(`${SERVER_URL}/unit-location/${unitId}`);
       const data = await res.json();
       setTripStatus(data.tripStatus || 'idle');
     } catch { }
-  };
+  }; */
 
   const startPulse = () => {
     Animated.loop(
@@ -339,8 +393,7 @@ export default function AlertScreen() {
       setRoomId(extractedRoomId);
       roomIdRef.current = extractedRoomId;
     } else {
-      setRoomId(DISPATCH_ROOM_ID);
-      roomIdRef.current = DISPATCH_ROOM_ID;
+      console.log("No room id recived from the alert");
     }
 
     Vibration.vibrate([0, 500, 200, 500, 200, 500]);
@@ -362,7 +415,17 @@ export default function AlertScreen() {
       return;
     }
     acceptingRef.current = true;
+    const acceptedKey = alertData?.agentTicketId || alertData?.id;
+if (acceptedKey) {
+  acceptedTicketsRef.current.add(acceptedKey);
+  AsyncStorage.setItem(
+    'ACCEPTED_TICKETS', 
+    JSON.stringify([...acceptedTicketsRef.current].slice(-50)) // keep last 50
+  ).catch(() => {});
+}
      alertCooldownRef.current = false;
+     lastAlertId.current = alertData?.agentTicketId || alertData?.id || lastAlertId.current; // ← keep lock
+     inboxCursorRef.current = 'ACCEPTED'; // ← advance cursor so old msgs are skipped
     console.log('👉 Accept clicked');
 
     if (!alertData) { acceptingRef.current = false; return; }

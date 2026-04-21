@@ -69,7 +69,7 @@ async function run() {
         `$1http://${currentIP}$2`,
       )
       .replace(
-        /(WEBHOOK_URL\s*=\s*['"])http:\/\/[^:]+(:8008['"])/g,
+        /(WEBHOOK_URL\s*=\s*['"])http:\/\/[^:]+(:5001['"])/g,
         `$1http://${currentIP}$2`,
       );
 
@@ -101,7 +101,7 @@ async function run() {
         `$1http://${currentIP}$2`,
       )
       .replace(
-        /(import\.meta\.env\.VITE_WEBHOOK_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:8008['"])/g,
+        /(import\.meta\.env\.VITE_WEBHOOK_BASE_URL\s*\?\?\s*['"])http:\/\/[^:]+(:5001['"])/g,
         `$1http://${currentIP}$2`,
       );
 

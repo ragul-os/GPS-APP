@@ -727,3 +727,12 @@ export async function getOrCreateDMRoom(accessToken, myUserId, targetUserId) {
 
   return roomId;
 }
+
+export async function leaveRoom(accessToken, roomId) {
+  const res = await fetch(`${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/leave`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error('Failed to leave room');
+}

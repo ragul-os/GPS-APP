@@ -16,7 +16,6 @@ import {
 
 // ── The default dispatch room — fallback when no alert-specific room exists ──
 // Replace with the actual room ID from your dispatcher dashboard
-export const DISPATCH_ROOM_ID = '!UCzhIdLFEzeTNBNHkn:localhost';
 
 const AuthContext = createContext({
   session: null,
@@ -52,7 +51,7 @@ export function AuthProvider({ children }) {
 
   // ── Ensure user is in the dispatch room ───────────────────────────────────
   async function ensureInDispatchRoom(username) {
-    console.log('[Auth] Ensuring user is in dispatch room:', DISPATCH_ROOM_ID, 'for:', username);
+    console.log('[Auth] Ensuring user is in dispatch room:', 'for:', username);
     /* try {
       await forceJoinRoom(username, DISPATCH_ROOM_ID);
       console.log('[Auth] ✅ User is now in dispatch room');

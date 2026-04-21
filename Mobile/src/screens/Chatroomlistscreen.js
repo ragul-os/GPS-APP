@@ -1,10 +1,5 @@
 /**
  * ChatRoomListScreen.js
- *
- * CHANGES:
- *  1. DM room appears instantly after creation — no refresh needed
- *  2. Unread badge (WhatsApp-style) shown on right side of each room row
- *  3. Current open room is highlighted in the list when navigating back
  */
 
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -12,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   FlatList,
   Modal,
@@ -22,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { DISPATCH_ROOM_ID, useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { SERVER_URL } from '../config';
 import {
@@ -34,9 +30,6 @@ import {
 } from '../services/matrixService';
 import ChatScreen from './ChatScreen';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 function formatTime(ts) {
   if (!ts) return '';
   const now = new Date();
@@ -114,25 +107,66 @@ function memberAvatarColor(userId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MembersPanel
+// MembersPanel — Two-view panel
+//
+// CONCEPT: The panel has an inner container that is 2x the panel width,
+// holding both views side by side. We slide it left/right to show one at a time.
+//
+// [  Members View (320px)  |  Info View (320px)  ]
+//  ^-- slideX=0 (default)    ^-- slideX=-320 (after arrow tap)
+//
+// The panel itself has overflow:hidden so only 320px is visible at any time.
 // ─────────────────────────────────────────────────────────────────────────────
-function MembersPanel({ visible, roomId, myUserId, accessToken, onClose, onStartDM }) {
+function MembersPanel({
+  visible, roomId, roomName, ticketId,
+  myUserId, accessToken,
+  onClose, onStartDM, onLeaveRoom, onLogout,
+  theme,
+}) {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [dmLoading, setDmLoading] = useState(null);
+  const [leavingRoom, setLeavingRoom] = useState(false);
 
-  const slideAnim = useRef(new Animated.Value(320)).current;
+  const PANEL_WIDTH = 320;
+
+  // Panel slide-in from screen edge
+  const slideAnim = useRef(new Animated.Value(PANEL_WIDTH)).current;
+  // Inner container slide (0 = members, -PANEL_WIDTH = info)
+  const slideX = useRef(new Animated.Value(0)).current;
+
+  // Reset inner view to members every time panel opens
+  useEffect(() => {
+    if (visible) {
+      slideX.setValue(0);
+    }
+  }, [visible]);
 
   useEffect(() => {
     if (!visible || !roomId) return;
-    Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 65, friction: 10 }).start();
+    Animated.spring(slideAnim, {
+      toValue: 0, useNativeDriver: true, tension: 65, friction: 10,
+    }).start();
     loadMembers();
   }, [visible, roomId]);
 
-  const closeAnim = (cb) => {
-    Animated.timing(slideAnim, { toValue: 320, duration: 220, useNativeDriver: true }).start(cb);
+  const goToInfo = () => {
+    Animated.spring(slideX, {
+      toValue: -PANEL_WIDTH, useNativeDriver: true, tension: 80, friction: 12,
+    }).start();
   };
 
+  const goToMembers = () => {
+    Animated.spring(slideX, {
+      toValue: 0, useNativeDriver: true, tension: 80, friction: 12,
+    }).start();
+  };
+
+  const closeAnim = (cb) => {
+    Animated.timing(slideAnim, {
+      toValue: PANEL_WIDTH, duration: 220, useNativeDriver: true,
+    }).start(cb);
+  };
   const handleClose = () => closeAnim(onClose);
 
   const loadMembers = async () => {
@@ -165,88 +199,244 @@ function MembersPanel({ visible, roomId, myUserId, accessToken, onClose, onStart
     }
   };
 
+  const handleLeaveRoom = () => {
+    Alert.alert(
+      'Leave Room',
+      'Are you sure you want to leave this room?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave', style: 'destructive',
+          onPress: async () => {
+            setLeavingRoom(true);
+            try {
+              await onLeaveRoom(roomId);
+            } catch (err) {
+              Alert.alert('Error', 'Could not leave room: ' + err.message);
+            } finally {
+              setLeavingRoom(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (!visible) return null;
 
+  const headerBg = theme.topBar;
+  const borderColor = theme.border;
+  const textPrimary = theme.textPrimary;
+  const textSecondary = theme.textSecondary;
+  const accentColor = theme.accent;
+
   return (
-    <Modal
-      transparent
-      visible={visible}
-      animationType="none"
-      onRequestClose={handleClose}
-      statusBarTranslucent
-    >
+    <Modal transparent visible={visible} animationType="none" onRequestClose={handleClose} statusBarTranslucent>
       <TouchableOpacity style={MP.backdrop} activeOpacity={1} onPress={handleClose} />
-      <Animated.View style={[MP.panel, { transform: [{ translateX: slideAnim }] }]}>
-        <View style={MP.header}>
-          <View style={MP.headerLeft}>
-            <Ionicons name="people" size={20} color="#fff" />
-            <Text style={MP.headerTitle}>Members</Text>
-            {!loading && (
-              <View style={MP.countBadge}>
-                <Text style={MP.countTxt}>{members.length}</Text>
+
+      {/* Outer panel — slides in from right, clips overflow */}
+      <Animated.View style={[MP.panel, { backgroundColor: theme.surface, transform: [{ translateX: slideAnim }] }]}>
+
+        {/* Inner container — 2x width, holds both views */}
+        <Animated.View style={[MP.innerContainer, { width: PANEL_WIDTH * 2, transform: [{ translateX: slideX }] }]}>
+
+          {/* ════════════════════════════════════════
+              VIEW 1: Members List
+          ════════════════════════════════════════ */}
+          <View style={[MP.viewSlot, { width: PANEL_WIDTH, backgroundColor: theme.surface }]}>
+
+            <View style={[MP.header, { backgroundColor: headerBg }]}>
+              <View style={MP.headerLeft}>
+                <Ionicons name="people" size={18} color="#fff" />
+                <Text style={MP.headerTitle}>Members</Text>
+                {!loading && (
+                  <View style={MP.countBadge}>
+                    <Text style={MP.countTxt}>{members.length}</Text>
+                  </View>
+                )}
               </View>
+              <View style={MP.headerRight}>
+                {/* → Arrow: navigates to info view */}
+                <TouchableOpacity onPress={goToInfo} style={MP.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="chevron-forward" size={20} color="#fff" />
+                </TouchableOpacity>
+                {/* X: closes panel */}
+                <TouchableOpacity onPress={handleClose} style={MP.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close" size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <Text style={[MP.subheading, { color: textSecondary }]}>Tap a member to start a private chat</Text>
+            <View style={[MP.divider, { backgroundColor: borderColor }]} />
+
+            {loading ? (
+              <View style={MP.loaderWrap}>
+                <ActivityIndicator color={accentColor} size="large" />
+                <Text style={[MP.loaderTxt, { color: textSecondary }]}>Loading members…</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={members}
+                keyExtractor={m => m.userId}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 20 }}
+                renderItem={({ item: member }) => {
+                  const isMe = member.userId === myUserId;
+                  const colors = memberAvatarColor(member.userId);
+                  const isLoading = dmLoading === member.userId;
+                  return (
+                    <TouchableOpacity
+                      style={[MP.memberRow, { backgroundColor: isMe ? theme.surfaceAlt : theme.surface, borderBottomColor: borderColor }]}
+                      onPress={() => handleMemberPress(member)}
+                      disabled={isMe || !!dmLoading}
+                      activeOpacity={isMe ? 1 : 0.7}
+                    >
+                      <View style={[MP.memberAvatar, { backgroundColor: colors.bg }]}>
+                        <Text style={[MP.memberInitial, { color: colors.text }]}>{member.displayName.charAt(0).toUpperCase()}</Text>
+                        <View style={[MP.presenceDot, { backgroundColor: isMe ? '#22C55E' : '#94A3B8' }]} />
+                      </View>
+                      <View style={MP.memberInfo}>
+                        <Text style={[MP.memberName, { color: isMe ? '#15803D' : textPrimary }]}>
+                          {member.displayName}{isMe ? ' (You)' : ''}
+                        </Text>
+                        <Text style={[MP.memberUserId, { color: textSecondary }]} numberOfLines={1}>{member.userId}</Text>
+                      </View>
+                      {!isMe && (
+                        <View style={[MP.dmBtn, { backgroundColor: theme.accentBg }]}>
+                          {isLoading
+                            ? <ActivityIndicator size="small" color={accentColor} />
+                            : <Ionicons name="chatbubble-outline" size={18} color={accentColor} />
+                          }
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
+                ListEmptyComponent={
+                  <View style={MP.empty}>
+                    <Text style={[MP.emptyTxt, { color: textSecondary }]}>No members found</Text>
+                  </View>
+                }
+              />
             )}
           </View>
-          <TouchableOpacity onPress={handleClose} style={MP.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="close" size={18} color="#fff" />
-          </TouchableOpacity>
-        </View>
 
-        <Text style={MP.subheading}>Tap a member to start a private chat</Text>
-        <View style={MP.divider} />
+          {/* ════════════════════════════════════════
+              VIEW 2: Ticket Info + Actions
+          ════════════════════════════════════════ */}
+          <View style={[MP.viewSlot, { width: PANEL_WIDTH, backgroundColor: theme.surface }]}>
 
-        {loading ? (
-          <View style={MP.loaderWrap}>
-            <ActivityIndicator color="#1E40AF" size="large" />
-            <Text style={MP.loaderTxt}>Loading members…</Text>
+            <View style={[MP.header, { backgroundColor: headerBg }]}>
+              {/* ← Back: goes back to members view */}
+              <TouchableOpacity onPress={goToMembers} style={MP.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="chevron-back" size={20} color="#fff" />
+              </TouchableOpacity>
+              <Text style={[MP.headerTitle, { flex: 1, marginLeft: 6 }]}>Room Info</Text>
+              {/* X: closes panel */}
+              <TouchableOpacity onPress={handleClose} style={MP.iconBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flex: 1, padding: 16 }}>
+
+              {/* Ticket ID */}
+              {(!!ticketId || !!roomName) && (
+  <View
+    style={[
+      MP.infoCard,
+      {
+        backgroundColor: theme.surfaceAlt,
+        borderColor,
+      },
+    ]}
+  >
+    {/* Ticket ID */}
+    {!!ticketId && (
+      <View style={{ marginBottom: roomName ? 10 : 0 }}>
+        <Text style={[MP.infoCardLabel, { color: textSecondary }]}>
+          Ticket ID
+        </Text>
+        <Text
+          style={[MP.infoCardValue, { color: '#10B981' }]}
+          numberOfLines={2}
+        >
+          {ticketId}
+        </Text>
+      </View>
+    )}
+
+    {/* Divider (optional clean UI) */}
+    {!!ticketId && !!roomName && (
+      <View
+        style={{
+          height: 0.5,
+          backgroundColor: borderColor,
+          marginVertical: 8,
+        }}
+      />
+    )}
+
+    {/* Room Name */}
+    {!!roomName && (
+      <View>
+        <Text style={[MP.infoCardLabel, { color: textSecondary }]}>
+          Room
+        </Text>
+        <Text
+          style={[MP.infoCardValue, { color: textPrimary }]}
+          numberOfLines={2}
+        >
+          {roomName}
+        </Text>
+      </View>
+    )}
+  </View>
+)}
+              <View style={[MP.sectionDivider, { borderColor }]} />
+              <Text style={[MP.sectionLabel, { color: textSecondary }]}>Actions</Text>
+
+              {/* Leave Room */}
+              <TouchableOpacity
+                style={[MP.actionRow, { backgroundColor: theme.surfaceAlt, borderColor: '#DC262640' }]}
+                onPress={handleLeaveRoom}
+                disabled={leavingRoom}
+                activeOpacity={0.75}
+              >
+                <View style={[MP.actionIcon, { backgroundColor: '#DC262615' }]}>
+                  {leavingRoom
+                    ? <ActivityIndicator size="small" color="#DC2626" />
+                    : <Ionicons name="exit-outline" size={20} color="#DC2626" />
+                  }
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[MP.actionTitle, { color: '#DC2626' }]}>{leavingRoom ? 'Leaving…' : 'Leave Room'}</Text>
+                  <Text style={[MP.actionSub, { color: textSecondary }]}>Remove yourself from this chat</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color="#DC262660" />
+              </TouchableOpacity>
+
+              {/* Logout */}
+              <TouchableOpacity
+                style={[MP.actionRow, { backgroundColor: theme.surfaceAlt, borderColor, marginTop: 10 }]}
+                onPress={onLogout}
+                activeOpacity={0.75}
+              >
+                <View style={[MP.actionIcon, { backgroundColor: accentColor + '15' }]}>
+                  <Feather name="log-out" size={18} color={accentColor} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[MP.actionTitle, { color: textPrimary }]}>Logout</Text>
+                  <Text style={[MP.actionSub, { color: textSecondary }]}>Sign out of your account</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={textSecondary + '60'} />
+              </TouchableOpacity>
+
+            </View>
           </View>
-        ) : (
-          <FlatList
-            data={members}
-            keyExtractor={m => m.userId}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 32 }}
-            renderItem={({ item: member }) => {
-              const isMe = member.userId === myUserId;
-              const colors = memberAvatarColor(member.userId);
-              const initials = member.displayName.charAt(0).toUpperCase();
-              const isLoading = dmLoading === member.userId;
 
-              return (
-                <TouchableOpacity
-                  style={[MP.memberRow, isMe && MP.memberRowMe]}
-                  onPress={() => handleMemberPress(member)}
-                  disabled={isMe || !!dmLoading}
-                  activeOpacity={isMe ? 1 : 0.7}
-                >
-                  <View style={[MP.memberAvatar, { backgroundColor: colors.bg }]}>
-                    <Text style={[MP.memberInitial, { color: colors.text }]}>{initials}</Text>
-                    <View style={[MP.presenceDot, { backgroundColor: isMe ? '#22C55E' : '#94A3B8' }]} />
-                  </View>
-                  <View style={MP.memberInfo}>
-                    <Text style={[MP.memberName, isMe && MP.memberNameMe]}>
-                      {member.displayName}{isMe ? ' (You)' : ''}
-                    </Text>
-                    <Text style={MP.memberUserId} numberOfLines={1}>{member.userId}</Text>
-                  </View>
-                  {!isMe && (
-                    <View style={MP.dmBtn}>
-                      {isLoading
-                        ? <ActivityIndicator size="small" color="#1E40AF" />
-                        : <Ionicons name="chatbubble-outline" size={18} color="#1E40AF" />
-                      }
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            }}
-            ListEmptyComponent={
-              <View style={MP.empty}>
-                <Text style={MP.emptyTxt}>No members found</Text>
-              </View>
-            }
-          />
-        )}
+        </Animated.View>
       </Animated.View>
     </Modal>
   );
@@ -256,63 +446,83 @@ const MP = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
   panel: {
     position: 'absolute', top: 0, right: 0, bottom: 0,
-    width: '78%', maxWidth: 320,
-    backgroundColor: '#F8FAFF',
+     maxWidth: 320,
+    overflow: 'hidden',   // ← CRITICAL: clips the inner 2x-wide container
     shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 20,
     shadowOffset: { width: -4, height: 0 }, elevation: 20,
   },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#1E40AF',
-    paddingHorizontal: 16, paddingVertical: 14, paddingTop: 52,
-  },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerTitleWrap: {
+  innerContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
+    height: '100%',
   },
-  avatarSmall: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
+  viewSlot: {
+    flexDirection: 'column',
+    height: '100%',
   },
-  headerTitle: { fontSize: 16, fontWeight: '700', color: '#fff' },
-  countBadge: { backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
-  countTxt: { fontSize: 12, fontWeight: '700', color: '#fff' },
-  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
-  subheading: { fontSize: 11, color: '#94A3B8', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4, fontStyle: 'italic' },
-  divider: { height: 0.5, backgroundColor: '#E2E8F0', marginHorizontal: 16 },
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 14, paddingTop: 52,
+    gap: 6,
+  },
+  headerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headerTitle: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  countBadge: {
+    backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 10,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  countTxt: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  iconBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  subheading: { fontSize: 11, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4, fontStyle: 'italic' },
+  divider: { height: 0.5, marginHorizontal: 16 },
   loaderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingTop: 60 },
-  loaderTxt: { color: '#64748B', fontSize: 13 },
+  loaderTxt: { fontSize: 13 },
   memberRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingVertical: 12,
-    borderBottomWidth: 0.5, borderBottomColor: '#E2E8F0',
-    backgroundColor: '#fff', gap: 12,
+    borderBottomWidth: 0.5, gap: 12,
   },
-  memberRowMe: { backgroundColor: '#F0FDF4' },
   memberAvatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative' },
   memberInitial: { fontSize: 17, fontWeight: '700' },
   presenceDot: { position: 'absolute', bottom: 1, right: 1, width: 11, height: 11, borderRadius: 6, borderWidth: 2, borderColor: '#fff' },
   memberInfo: { flex: 1, minWidth: 0 },
-  memberName: { fontSize: 14, fontWeight: '600', color: '#0F172A', marginBottom: 2 },
-  memberNameMe: { color: '#15803D' },
-  memberUserId: { fontSize: 11, color: '#94A3B8' },
-  dmBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' },
+  memberName: { fontSize: 14, fontWeight: '600', marginBottom: 2 },
+  memberUserId: { fontSize: 11 },
+  dmBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   empty: { padding: 32, alignItems: 'center' },
-  emptyTxt: { color: '#94A3B8', fontSize: 14 },
+  emptyTxt: { fontSize: 14 },
+  infoCard: { borderRadius: 12, padding: 14, borderWidth: 1 },
+  infoCardRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  infoCardIcon: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  infoCardLabel: { fontSize: 10, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 3 },
+  infoCardValue: { fontSize: 14, fontWeight: '700' },
+  sectionDivider: { borderTopWidth: 0.5, marginVertical: 18 },
+  sectionLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 12 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 12, borderWidth: 1, gap: 12 },
+  actionIcon: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  actionTitle: { fontSize: 14, fontWeight: '700', marginBottom: 2 },
+  actionSub: { fontSize: 11 },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
-  const { session } = useAuth();
+  const { session, logout } = useAuth();
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
+
+  if (!session?.accessToken) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.bg }}>
+        <ActivityIndicator size="large" color={theme.accent} />
+      </View>
+    );
+  }
 
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -334,10 +544,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
         json.data.forEach(inc => {
           const rid = inc.matrixRoomId || inc.roomId;
           if (rid && (!cache[rid] || cache[rid].name !== inc.patientName)) {
-            cache[rid] = {
-              name: inc.patientName || 'Unknown',
-              address: inc.address || ''
-            };
+            cache[rid] = { name: inc.patientName || 'Unknown', address: inc.address || '' };
             changed = true;
           }
         });
@@ -353,23 +560,15 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
 
   useEffect(() => {
     AsyncStorage.getItem('TICKET_NAMES').then(raw => {
-      if (raw) {
-        try { 
-          const cache = JSON.parse(raw);
-          setTicketNames(cache); 
-        } catch (e) {}
-      }
+      if (raw) { try { setTicketNames(JSON.parse(raw)); } catch (e) {} }
     });
-    fetchIncidents(); // Initial fetch
+    fetchIncidents();
   }, []);
 
   const syncActive = useRef(true);
-  // Track the currently open room in a ref for use inside the sync closure
   const openRoomIdRef = useRef(null);
 
-  useEffect(() => {
-    openRoomIdRef.current = openRoomId;
-  }, [openRoomId]);
+  useEffect(() => { openRoomIdRef.current = openRoomId; }, [openRoomId]);
 
   useEffect(() => {
     if (autoOpenRoomId) {
@@ -385,52 +584,34 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   }, [extraRoomId]);
 
   useEffect(() => {
-  if (openRoomId) {
-    const updatedName = roomDisplayName(openRoomId, roomNames, dmNames);
-    setOpenLabel(updatedName);
-  }
-}, [roomNames, dmNames]);
+    if (openRoomId) setOpenLabel(roomDisplayName(openRoomId, roomNames, dmNames));
+  }, [roomNames, dmNames]);
 
   const loadRooms = async () => {
+    if (!session?.accessToken) return;
     try {
       setLoading(true);
-      await fetchIncidents(); // Ensure we have latest patient names
+      await fetchIncidents();
       const joined = await getJoinedRooms(session.accessToken);
-      const allIds = Array.from(new Set([
-        ...(extraRoomId ? [extraRoomId] : []),
-        ...joined,
-      ]));
-
-      // Fetch names for unknown rooms
+      const allIds = Array.from(new Set([...(extraRoomId ? [extraRoomId] : []), ...joined]));
       const { getRoomName } = await import('../services/matrixService');
       const names = { ...roomNames };
       for (const rid of allIds) {
-        if (!names[rid] && rid !== DISPATCH_ROOM_ID) {
-          try {
-            const n = await getRoomName(session.accessToken, rid, session.userId);
-            if (n) names[rid] = n;
-          } catch {}
+        if (!names[rid]) {
+          try { const n = await getRoomName(session.accessToken, rid, session.userId); if (n) names[rid] = n; } catch {}
         }
       }
       setRoomNames(names);
-
       const roomData = await Promise.all(
         allIds.map(async (roomId) => {
           try {
             const data = await getRoomMessages(session.accessToken, roomId, null, 20);
             const events = (data.chunk || []).filter(e => e.type === 'm.room.message');
-            const lastEvent = events[0] || null;
-            return { roomId, lastEvent, unread: 0 };
-          } catch {
-            return { roomId, lastEvent: null, unread: 0 };
-          }
+            return { roomId, lastEvent: events[0] || null, unread: 0 };
+          } catch { return { roomId, lastEvent: null, unread: 0 }; }
         })
       );
-      roomData.sort((a, b) => {
-        const ta = a.lastEvent?.origin_server_ts || 0;
-        const tb = b.lastEvent?.origin_server_ts || 0;
-        return tb - ta;
-      });
+      roomData.sort((a, b) => (b.lastEvent?.origin_server_ts || 0) - (a.lastEvent?.origin_server_ts || 0));
       setRooms(roomData);
     } catch (err) {
       console.warn('[RoomList] loadRooms error:', err.message);
@@ -439,21 +620,16 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     }
   };
 
-  // ── FIX 1: Live sync — now properly tracks new DM rooms & clears unread ──
   useEffect(() => {
+    if (!session?.accessToken) return;
     let since = null;
     const run = async () => {
-      try {
-        const init = await syncMatrix(session.accessToken, null, 0);
-        since = init.next_batch;
-      } catch { }
+      try { const init = await syncMatrix(session.accessToken, null, 0); since = init.next_batch; } catch {}
       while (syncActive.current) {
         try {
           const data = await syncMatrix(session.accessToken, since, 10000);
           since = data.next_batch;
           const updatedRooms = data.rooms?.join || {};
-
-          // Auto-join any invited rooms
           const invitedRooms = data.rooms?.invite || {};
           let newRoomsFound = false;
           for (const invitedRoomId in invitedRooms) {
@@ -461,86 +637,43 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
               const { joinRoom, saveDirectMessage } = await import('../services/matrixService');
               await joinRoom(session.accessToken, invitedRoomId);
               newRoomsFound = true;
-              
-              // NEW: If this is a DM invite, ensure it's recorded in m.direct
               const inviteState = invitedRooms[invitedRoomId].invite_state?.events || [];
-              const createEvent = inviteState.find(e => e.type === 'm.room.create');
-              const isDirect = createEvent?.content?.is_direct === true;
-              
+              const isDirect = inviteState.find(e => e.type === 'm.room.create')?.content?.is_direct === true;
               if (isDirect) {
-                const memberEvent = inviteState.find(e => e.type === 'm.room.member' && e.state_key !== session.userId);
-                if (memberEvent?.state_key) {
-                  await saveDirectMessage(session.accessToken, session.userId, memberEvent.state_key, invitedRoomId);
-                }
+                const me = inviteState.find(e => e.type === 'm.room.member' && e.state_key !== session.userId);
+                if (me?.state_key) await saveDirectMessage(session.accessToken, session.userId, me.state_key, invitedRoomId);
               }
-            } catch (err) {
-              console.warn('[RoomList] Auto-join failed for:', invitedRoomId, err.message);
-            }
+            } catch (err) { console.warn('[RoomList] Auto-join failed:', invitedRoomId, err.message); }
           }
-
-          // If we joined new rooms or have updates in existing ones
           if (newRoomsFound || Object.keys(updatedRooms).length > 0) {
-            // Resolve names for new rooms
-            const newIds = [
-              ...Object.keys(invitedRooms),
-              ...Object.keys(updatedRooms)
-            ].filter(rid => !roomNames[rid] && rid !== DISPATCH_ROOM_ID);
-
+            const newIds = [...Object.keys(invitedRooms), ...Object.keys(updatedRooms)].filter(rid => !roomNames[rid]);
             if (newIds.length > 0) {
               const { getRoomName } = await import('../services/matrixService');
               const nextNames = { ...roomNames };
               let changed = false;
               for (const rid of newIds) {
-                try {
-                  const n = await getRoomName(session.accessToken, rid, session.userId);
-                  if (n) { nextNames[rid] = n; changed = true; }
-                } catch { }
+                try { const n = await getRoomName(session.accessToken, rid, session.userId); if (n) { nextNames[rid] = n; changed = true; } } catch {}
               }
               if (changed) setRoomNames(nextNames);
             }
-
             setRooms(prev => {
               const map = {};
               prev.forEach(r => { map[r.roomId] = { ...r }; });
-
-              // 1. Add newly joined rooms from the invite block
-              for (const rid in invitedRooms) {
-                if (!map[rid]) {
-                  map[rid] = { roomId: rid, lastEvent: null, unread: 0 };
-                }
-              }
-
-              // 2. Process updates from join block
+              for (const rid in invitedRooms) { if (!map[rid]) map[rid] = { roomId: rid, lastEvent: null, unread: 0 }; }
               Object.entries(updatedRooms).forEach(([rId, rData]) => {
-                // Ensure the room exists in our map even if no new messages
-                if (!map[rId]) {
-                  map[rId] = { roomId: rId, lastEvent: null, unread: 0 };
-                }
-
+                if (!map[rId]) map[rId] = { roomId: rId, lastEvent: null, unread: 0 };
                 const events = (rData.timeline?.events || []).filter(e => e.type === 'm.room.message');
                 if (events.length > 0) {
                   const last = events[events.length - 1];
-                  const incomingUnread = events.filter(
-                    e => e.sender !== session.userId && rId !== openRoomIdRef.current
-                  ).length;
-
+                  const incomingUnread = events.filter(e => e.sender !== session.userId && rId !== openRoomIdRef.current).length;
                   map[rId].lastEvent = last;
-                  if (incomingUnread > 0) {
-                    map[rId].unread = (map[rId].unread || 0) + incomingUnread;
-                  }
+                  if (incomingUnread > 0) map[rId].unread = (map[rId].unread || 0) + incomingUnread;
                 }
               });
-
-              return Object.values(map).sort((a, b) => {
-                const ta = a.lastEvent?.origin_server_ts || 0;
-                const tb = b.lastEvent?.origin_server_ts || 0;
-                return tb - ta;
-              });
+              return Object.values(map).sort((a, b) => (b.lastEvent?.origin_server_ts || 0) - (a.lastEvent?.origin_server_ts || 0));
             });
           }
-        } catch {
-          await new Promise(r => setTimeout(r, 3000));
-        }
+        } catch { await new Promise(r => setTimeout(r, 3000)); }
       }
     };
     run();
@@ -548,56 +681,49 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
   }, [session.accessToken]);
 
   const openRoom = (room, label) => {
-    // Clear unread when opening room
     setRooms(prev => prev.map(r => r.roomId === room.roomId ? { ...r, unread: 0 } : r));
-    const displayLabel = label || roomDisplayName(room.roomId, roomNames, dmNames);
-    setOpenLabel(displayLabel);
+    setOpenLabel(label || roomDisplayName(room.roomId, roomNames, dmNames));
     setOpenRoomId(room.roomId);
     setMembersVisible(false);
   };
 
-  const closeRoom = () => {
-    setOpenRoomId(null);
-    setOpenLabel('');
-    setMembersVisible(false);
-  };
+  const closeRoom = () => { setOpenRoomId(null); setOpenLabel(''); setMembersVisible(false); };
 
-  // ── FIX 1: DM handler — room appears instantly without needing refresh ──
   const handleStartDM = (dmRoomId, memberDisplayName) => {
     setMembersVisible(false);
-
-    // Register the display name for this DM room
     setDmNames(prev => ({ ...prev, [dmRoomId]: memberDisplayName }));
-
-    // Add to rooms list immediately if not already there
     setRooms(prev => {
       if (prev.some(r => r.roomId === dmRoomId)) {
-        // Already exists — just bring it to top and clear unread
-        return prev
-          .map(r => r.roomId === dmRoomId ? { ...r, unread: 0 } : r)
+        return prev.map(r => r.roomId === dmRoomId ? { ...r, unread: 0 } : r)
           .sort((a, b) => {
-            // Bring this room to top
             if (a.roomId === dmRoomId) return -1;
             if (b.roomId === dmRoomId) return 1;
-            const ta = a.lastEvent?.origin_server_ts || 0;
-            const tb = b.lastEvent?.origin_server_ts || 0;
-            return tb - ta;
+            return (b.lastEvent?.origin_server_ts || 0) - (a.lastEvent?.origin_server_ts || 0);
           });
       }
-      // New room — prepend it
       return [{ roomId: dmRoomId, lastEvent: null, unread: 0 }, ...prev];
     });
-
-    // Open the DM room immediately
     setOpenLabel(memberDisplayName);
     setOpenRoomId(dmRoomId);
   };
 
-  // ── Open room view ──────────────────────────────────────────────────────
+  const handleLeaveRoom = async (roomId) => {
+    try {
+      const { leaveRoom } = await import('../services/matrixService');
+      await leaveRoom(session.accessToken, roomId);
+      setRooms(prev => prev.filter(r => r.roomId !== roomId));
+      closeRoom();
+    } catch (err) { throw err; }
+  };
+
+  const openRoomRawName = openRoomId ? (roomNames[openRoomId] || '') : '';
+  const openRoomIsTicket = openRoomRawName?.trim()?.toLowerCase()?.includes('ticket-');
+  const openRoomTicketId = openRoomIsTicket ? openRoomRawName : null;
+  const openRoomTicketInfo = openRoomId ? ticketNames[openRoomId] : null;
+
   if (openRoomId) {
     const colors = avatarColor(openRoomId);
     const isDM = !!dmNames[openRoomId];
-
     return (
       <View style={[styles.flex, { backgroundColor: theme.bg }]}>
         <View style={[styles.chatHeader, { paddingTop: insets.top + 10, backgroundColor: theme.topBar }]}>
@@ -605,17 +731,11 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
             <Ionicons name="chevron-back" size={26} color="#fff" />
           </TouchableOpacity>
           <View style={[styles.chatHeaderAvatar, { backgroundColor: colors.bg }]}>
-            <Text style={[styles.chatHeaderAvatarTxt, { color: colors.text }]}>
-              {roomInitials(openRoomId, roomNames, dmNames)}
-            </Text>
+            <Text style={[styles.chatHeaderAvatarTxt, { color: colors.text }]}>{roomInitials(openRoomId, roomNames, dmNames)}</Text>
           </View>
           <View style={styles.chatHeaderInfo}>
             <Text style={styles.chatHeaderName} numberOfLines={1}>{openLabel}</Text>
-            <Text style={styles.chatHeaderSub}>
-              {isDM
-                ? '🔒 Private conversation'
-                : 'Alert Communication'}
-            </Text>
+            <Text style={styles.chatHeaderSub}>{isDM ? '🔒 Private conversation' : 'Alert Communication'}</Text>
           </View>
           <TouchableOpacity
             style={[styles.membersToggleBtn, membersVisible && styles.membersToggleBtnActive]}
@@ -632,95 +752,88 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
         <MembersPanel
           visible={membersVisible}
           roomId={openRoomId}
+          roomName={openRoomTicketInfo?.name || openRoomRawName || openLabel}
+          ticketId={openRoomTicketId}
           myUserId={session.userId}
           accessToken={session.accessToken}
           onClose={() => setMembersVisible(false)}
           onStartDM={handleStartDM}
+          onLeaveRoom={handleLeaveRoom}
+          onLogout={logout}
+          theme={theme}
         />
       </View>
     );
   }
 
-  // ── Room list ────────────────────────────────────────────────────────────
   const filtered = rooms.filter(r =>
     roomDisplayName(r.roomId, roomNames, dmNames).toLowerCase().includes(search.toLowerCase())
   );
 
-    const renderRoom = ({ item }) => {
-      const name = roomDisplayName(item.roomId, roomNames, dmNames);
-      const isTicketRoom = name?.trim()?.toLowerCase()?.includes('ticket-');
-      
-      const ticketInfo = ticketNames[item.roomId];
-      const patientName = ticketInfo?.name;
-      const patientAddress = ticketInfo?.address;
-      
-      const displayName = patientName || (isTicketRoom ? 'Incident Chat' : name);
-      const cleanTicketId = isTicketRoom ? name.replace(/ticket-/gi, '') : name;
-
-      const preview = previewText(item.lastEvent);
-      const time = formatTime(item.lastEvent?.origin_server_ts);
-      const isMe = item.lastEvent?.sender === session.userId;
-      const hasUnread = (item.unread || 0) > 0;
-      const unreadCount = item.unread || 0;
+  const renderRoom = ({ item }) => {
+    const name = roomDisplayName(item.roomId, roomNames, dmNames);
+    const isTicketRoom = name?.trim()?.toLowerCase()?.includes('ticket-');
+    const ticketInfo = ticketNames[item.roomId];
+    const displayName = ticketInfo?.name || name;
+    const cleanTicketId = isTicketRoom ? name : null;
+    const preview = previewText(item.lastEvent);
+    const time = formatTime(item.lastEvent?.origin_server_ts);
+    const isMe = item.lastEvent?.sender === session.userId;
+    const hasUnread = (item.unread || 0) > 0;
+    const unreadCount = item.unread || 0;
     const colors = avatarColor(item.roomId);
     const isDMRoom = !!dmNames[item.roomId];
 
     const getMsgTypeIcon = () => {
       const type = item.lastEvent?.content?.msgtype;
-      if (type === 'm.image') return <Feather name="image" size={12} color="#94A3B8" style={{ marginRight: 3 }} />;
-      if (type === 'm.video') return <Feather name="video" size={12} color="#94A3B8" style={{ marginRight: 3 }} />;
-      if (type === 'm.audio') return <Feather name="mic" size={12} color="#94A3B8" style={{ marginRight: 3 }} />;
-      if (type === 'm.file') return <Feather name="paperclip" size={12} color="#94A3B8" style={{ marginRight: 3 }} />;
+      if (type === 'm.image') return <Feather name="image" size={12} color={theme.textSecondary} style={{ marginRight: 3 }} />;
+      if (type === 'm.video') return <Feather name="video" size={12} color={theme.textSecondary} style={{ marginRight: 3 }} />;
+      if (type === 'm.audio') return <Feather name="mic" size={12} color={theme.textSecondary} style={{ marginRight: 3 }} />;
+      if (type === 'm.file') return <Feather name="paperclip" size={12} color={theme.textSecondary} style={{ marginRight: 3 }} />;
       return null;
     };
 
     return (
       <TouchableOpacity style={[styles.roomRow, { backgroundColor: theme.surface }]} onPress={() => openRoom(item, displayName)} activeOpacity={0.75}>
         <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
-            <Text style={[styles.avatarTxt, { color: colors.text }]}>{getInitials(displayName)}</Text>
+          <Text style={[styles.avatarTxt, { color: colors.text }]}>{getInitials(displayName)}</Text>
           {isDMRoom && <View style={[styles.onlineDot, { backgroundColor: '#A78BFA' }]} />}
         </View>
-
         <View style={styles.roomInfo}>
           <View style={styles.roomNameRow}>
             <View style={styles.roomNameWrap}>
-              {isDMRoom && <View style={styles.dmTag}><Text style={styles.dmTagTxt}>DM</Text></View>}
-              {/* roomName — always use theme.textPrimary so it's visible in dark & light */}
-              <Text
-                style={[styles.roomName, { color: theme.textPrimary }, hasUnread && { fontWeight: '700', color: theme.textPrimary }]}
-                numberOfLines={1}
-              >
+              {isDMRoom && (
+                <View style={[styles.dmTag, { backgroundColor: theme.accentBg }]}>
+                  <Text style={[styles.dmTagTxt, { color: theme.accent }]}>DM</Text>
+                </View>
+              )}
+              <Text style={[styles.roomName, { color: theme.textPrimary }, hasUnread && { fontWeight: '700' }]} numberOfLines={1}>
                 {displayName}
               </Text>
             </View>
-            <Text style={[styles.roomTime, { color: theme.textSecondary }, hasUnread && { color: theme.accent, fontWeight: '600' }]}>{time}</Text>
+            <Text style={[styles.roomTime, { color: hasUnread ? theme.accent : theme.textSecondary }, hasUnread && { fontWeight: '600' }]}>
+              {time}
+            </Text>
           </View>
-
-          {isTicketRoom && (
+          {!!(isTicketRoom && cleanTicketId) && (
             <View style={{ marginBottom: 2 }}>
               <Text style={{ fontSize: 10, color: '#10B981', fontWeight: 'bold' }}>{cleanTicketId}</Text>
             </View>
           )}
-
-          {isTicketRoom && patientAddress && (
+          {!!(isTicketRoom && ticketInfo?.address) && (
             <View style={{ marginBottom: 4 }}>
-              <Text style={{ fontSize: 11, color: theme.textSecondary }} numberOfLines={1}>{patientAddress}</Text>
+              <Text style={{ fontSize: 11, color: theme.textSecondary }} numberOfLines={1}>{ticketInfo.address}</Text>
             </View>
           )}
-
           <View style={styles.roomPreviewRow}>
             <View style={styles.previewLeft}>
               {getMsgTypeIcon()}
-              <Text
-                style={[styles.roomPreview, { color: theme.textSecondary }, hasUnread && { color: theme.textPrimary, fontWeight: '500' }]}
-                numberOfLines={1}
-              >
+              <Text style={[styles.roomPreview, { color: theme.textSecondary }, hasUnread && { color: theme.textPrimary, fontWeight: '500' }]} numberOfLines={1}>
                 {isMe ? `You: ${preview}` : preview}
               </Text>
             </View>
-
             {hasUnread && (
-              <View style={styles.unreadBadge}>
+              <View style={[styles.unreadBadge, { backgroundColor: theme.accent }]}>
                 <Text style={styles.unreadTxt}>{unreadCount > 99 ? '99+' : String(unreadCount)}</Text>
               </View>
             )}
@@ -734,9 +847,14 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
     <View style={[styles.flex, { backgroundColor: theme.bg }]}>
       <View style={[styles.topBar, { paddingTop: insets.top + 10, backgroundColor: theme.topBar }]}>
         <Text style={styles.topBarTitle}>Messages</Text>
-        <TouchableOpacity onPress={loadRooms} style={styles.refreshBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Feather name="refresh-cw" size={20} color="rgba(255,255,255,0.8)" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <TouchableOpacity onPress={loadRooms} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Feather name="refresh-cw" size={20} color="rgba(255,255,255,0.8)" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={logout} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Feather name="log-out" size={20} color="rgba(255,255,255,0.8)" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={[styles.searchWrap, { backgroundColor: theme.topBar }]}>
@@ -751,7 +869,7 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
           />
           {search.length > 0 && (
             <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={17} color="#94A3B8" />
+              <Ionicons name="close-circle" size={17} color={theme.textSecondary} />
             </TouchableOpacity>
           )}
         </View>
@@ -759,14 +877,14 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
 
       {loading ? (
         <View style={styles.loader}>
-          <ActivityIndicator size="large" color="#1E40AF" />
-          <Text style={styles.loaderTxt}>Loading chats…</Text>
+          <ActivityIndicator size="large" color={theme.accent} />
+          <Text style={[styles.loaderTxt, { color: theme.textSecondary }]}>Loading chats…</Text>
         </View>
       ) : filtered.length === 0 ? (
         <View style={styles.emptyWrap}>
           <Ionicons name="chatbubbles-outline" size={56} color={theme.accent} />
           <Text style={[styles.emptyTxt, { color: theme.textPrimary }]}>No chats yet</Text>
-          <Text style={[styles.emptySub, { color: theme.textSecondary }]}>Your dispatch and alert rooms will appear here</Text>
+          <Text style={[styles.emptySub, { color: theme.textSecondary }]}>Your rooms will appear here</Text>
         </View>
       ) : (
         <FlatList
@@ -783,101 +901,41 @@ export default function ChatRoomListScreen({ extraRoomId, autoOpenRoomId }) {
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: '#F8FAFF' },
-
-  topBar: {
-    backgroundColor: '#1E40AF',
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 18, paddingBottom: 14,
-  },
+  flex: { flex: 1 },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingBottom: 14 },
   topBarTitle: { fontSize: 22, fontWeight: '700', color: '#fff', letterSpacing: 0.2 },
-  refreshBtn: { padding: 4 },
-
-  searchWrap: { backgroundColor: '#1E40AF', paddingHorizontal: 14, paddingBottom: 14 },
-  searchBar: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#EFF6FF', borderRadius: 26,
-    paddingHorizontal: 14, paddingVertical: 9,
-  },
-  searchInput: { flex: 1, fontSize: 15, color: '#1E3A8A', paddingVertical: 0 },
-
+  searchWrap: { paddingHorizontal: 14, paddingBottom: 14 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', borderRadius: 26, paddingHorizontal: 14, paddingVertical: 9 },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
   loader: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  loaderTxt: { color: '#64748B', fontSize: 14 },
-
+  loaderTxt: { fontSize: 14 },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 10 },
-  emptyTxt: { fontSize: 18, fontWeight: '600', color: '#334155' },
-  emptySub: { fontSize: 13, color: '#94A3B8', textAlign: 'center' },
-
-  roomRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 14,
-    backgroundColor: '#fff', gap: 14,
-  },
-  avatar: {
-    width: 52, height: 52, borderRadius: 26,
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative',
-  },
+  emptyTxt: { fontSize: 18, fontWeight: '600' },
+  emptySub: { fontSize: 13, textAlign: 'center' },
+  roomRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 14 },
+  avatar: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative' },
   avatarTxt: { fontSize: 17, fontWeight: '700' },
-  onlineDot: {
-    position: 'absolute', bottom: 2, right: 2,
-    width: 13, height: 13, borderRadius: 7,
-    backgroundColor: '#22C55E', borderWidth: 2, borderColor: '#fff',
-  },
-
+  onlineDot: { position: 'absolute', bottom: 2, right: 2, width: 13, height: 13, borderRadius: 7, borderWidth: 2, borderColor: '#fff' },
   roomInfo: { flex: 1, minWidth: 0 },
   roomNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 },
   roomNameWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, marginRight: 8 },
-
-  dmTag: { backgroundColor: '#EDE9FE', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
-  dmTagTxt: { fontSize: 9, fontWeight: '800', color: '#7C3AED', letterSpacing: 0.5 },
-
-  roomName: { fontSize: 15, fontWeight: '500', color: '#0F172A', flex: 1 },
-  // FIX 3: Bold when has unread messages
-  roomNameUnread: { fontWeight: '700', color: '#0F172A' },
-
-  roomTime: { fontSize: 12, color: '#94A3B8' },
-  // FIX 2: Blue time when unread
-  roomTimeUnread: { color: '#1E40AF', fontWeight: '600' },
-
+  dmTag: { borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
+  dmTagTxt: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+  roomName: { fontSize: 15, fontWeight: '500', flex: 1 },
+  roomTime: { fontSize: 12 },
   roomPreviewRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   previewLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
-  roomPreview: { fontSize: 13, color: '#94A3B8', flex: 1 },
-  // FIX 2: Darker preview text when unread
-  roomPreviewUnread: { color: '#475569', fontWeight: '500' },
-
-  // FIX 2: WhatsApp-style green unread badge
-  unreadBadge: {
-    backgroundColor: '#22C55E',
-    borderRadius: 12,
-    minWidth: 22, height: 22,
-    alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 6,
-    flexShrink: 0,
-  },
+  roomPreview: { fontSize: 13, flex: 1 },
+  unreadBadge: { borderRadius: 12, minWidth: 22, height: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, flexShrink: 0 },
   unreadTxt: { color: '#fff', fontSize: 11, fontWeight: '800' },
-
-  separator: { height: 0.5, backgroundColor: '#E2E8F0', marginLeft: 82 },
-
-  chatHeader: {
-    backgroundColor: '#1E40AF',
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingBottom: 12, gap: 10,
-  },
+  separator: { height: 0.5, marginLeft: 82 },
+  chatHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 12, gap: 10 },
   backBtn: { padding: 4 },
   chatHeaderAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   chatHeaderAvatarTxt: { fontSize: 14, fontWeight: '700' },
   chatHeaderInfo: { flex: 1, minWidth: 0 },
   chatHeaderName: { fontSize: 16, fontWeight: '700', color: '#fff' },
   chatHeaderSub: { fontSize: 11, color: 'rgba(255,255,255,0.65)' },
-
-  membersToggleBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
-  },
-  membersToggleBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    borderColor: '#fff',
-  },
+  membersToggleBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)' },
+  membersToggleBtnActive: { backgroundColor: 'rgba(255,255,255,0.3)', borderColor: '#fff' },
 });
