@@ -1,0 +1,74 @@
+flowchart TB
+    classDef client fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+    classDef gateway fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    classDef server fill:#E0E7FF,stroke:#4F46E5,stroke-width:2px,color:#312E81
+    classDef feature fill:#EDE9FE,stroke:#7C3AED,stroke-width:2.5px,color:#4C1D95
+    classDef data fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef mq fill:#FCE7F3,stroke:#DB2777,stroke-width:2px,color:#831843
+    classDef ext fill:#F3F4F6,stroke:#6B7280,stroke-width:2px,color:#1F2937
+
+    subgraph ClientLayer["CLIENT LAYER"]
+        direction LR
+        Web["Web Dispatcher<br/>React + Vite<br/>(apiConfig.js)"]
+        Mob["Mobile Unit<br/>Expo / React Native"]
+    end
+
+    subgraph GatewayLayer["GATEWAY LAYER"]
+        WH["Webhook Engine<br/>:5001<br/>/webhook/gps<br/>/webhook/abc1234"]
+    end
+
+    subgraph AppServer["APPLICATION SERVER · :5000"]
+        direction TB
+        REST["REST Routes<br/>/assign · /send-alert<br/>/track · /heartbeat<br/>/incidents · /directions"]
+        TE["Ticket Events Module<br/>register(app, deps)<br/>/api/ticket-events/*"]
+        MIG["Migration Runner<br/>server/sql/*.sql<br/>idempotent, non-blocking"]
+        NATSUB["NATS Subscribers<br/>gps.stream.req<br/>webhook.gps.system_alert<br/>system.query.&gt;"]
+    end
+
+    subgraph MsgLayer["MESSAGING"]
+        NATS{{"NATS Broker<br/>:4222"}}
+    end
+
+    subgraph DataLayer["DATA LAYER"]
+        direction LR
+        PG[("PostgreSQL · synapse<br/>unit_locations<br/>ticket_events")]
+        MY[("MySQL · emergency_db<br/>forms<br/>form_submissions")]
+    end
+
+    subgraph ExtLayer["EXTERNAL SERVICES"]
+        direction LR
+        SYN["Matrix / Synapse<br/>:8008"]
+        EXPO["Expo Push<br/>exp.host"]
+        GMAPS["Google Maps<br/>Directions · Geocode"]
+    end
+
+    Web -- "HTTP (dispatch, track, chat)" --> WH
+    Mob -- "HTTP (heartbeat, location, alerts)" --> WH
+    Web -. "Matrix chat" .-> SYN
+    Mob -. "Matrix chat" .-> SYN
+
+    WH <-- "publish / subscribe" --> NATS
+
+    REST --> PG
+    REST --> MY
+    REST -- "publish unit.inbox.*" --> NATS
+    REST -- "fire &amp; forget" --> EXPO
+    REST --> GMAPS
+
+    TE --> PG
+    TE -- "publish ticket.events.*" --> NATS
+
+    MIG -- "CREATE IF NOT EXISTS" --> PG
+
+    NATSUB --> PG
+    NATSUB -- "publish replies" --> NATS
+
+    NATS -- "ticket.events.unit.{id}<br/>unit.inbox.{id}" --> WH
+
+    class Web,Mob client
+    class WH gateway
+    class REST,NATSUB,MIG server
+    class TE feature
+    class PG,MY data
+    class NATS mq
+    class SYN,EXPO,GMAPS ext

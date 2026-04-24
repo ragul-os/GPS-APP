@@ -1,0 +1,26 @@
+flowchart TD
+    classDef client fill:#1e293b,stroke:#334155,stroke-width:2px,color:#f8fafc,rx:8,ry:8;
+    classDef gateway fill:#047857,stroke:#065f46,stroke-width:2px,color:#f8fafc,rx:8,ry:8;
+    classDef broker fill:#ea580c,stroke:#c2410c,stroke-width:2px,color:#fff,rx:8,ry:8;
+    classDef backend fill:#4f46e5,stroke:#4338ca,stroke-width:2px,color:#fff,rx:8,ry:8;
+    classDef database fill:#b91c1c,stroke:#991b1b,stroke-width:2px,color:#fff,rx:8,ry:8;
+
+    Client["Mobile App / Web App\n(Client Layer)"]:::client
+    WebhookIn["Webhook App\n(Ingress)"]:::gateway
+    WebhookOut["Webhook App\n(Egress)"]:::gateway
+    
+    NatsReq["NATS Broker\n(Topic: gps.stream.req)"]:::broker
+    NatsRes["NATS Broker\n(Topic: gps.stream.res)"]:::broker
+    
+    AppManager["Application Manager\n(Processing Logic)"]:::backend
+    DB[("Database\n(Persistence)")]:::database
+
+    Client == "1. Location Events" ==> WebhookIn
+    WebhookIn == "2. Publish payload" ==> NatsReq
+    NatsReq -. "3. Subscribe / Consume" .-> AppManager
+    
+    AppManager == "4. Perform CRUD" ==> DB
+    AppManager == "5. Publish result" ==> NatsRes
+    
+    NatsRes -. "6. Subscribe / Consume" .-> WebhookOut
+    WebhookOut == "7. Push Update" ==> Client

@@ -4,6 +4,10 @@ import MapView from '../components/MapView';
 import NearbyResources from '../components/NearbyResources';
 import UnitList from '../components/UnitList';
 import { sendAlert, assignUnit } from '../api/api';
+import {
+  dispatchTicketEvent,
+  closeTicketEvent,
+} from '../services/ticketEventsApi';
 import { useAuth } from '../context/AuthContext';
 import { createRoom, inviteUser } from '../services/MatrixService';
 import { matrixUserId } from '../config/apiConfig';
@@ -1815,6 +1819,35 @@ export default function DispatchPage() {
           });
           addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
         }
+
+        // ── Ticket Events audit log (additive, non-blocking) ──────────────
+        if (agentTicket?.id) {
+          const successfulUnitIds = results
+            .filter((r) => !r.err)
+            .map((r) => r.unitId);
+          if (successfulUnitIds.length > 0) {
+            dispatchTicketEvent(agentTicket.id, {
+              source_id: dispatcher?.username || 'dispatcher',
+              source_name:
+                dispatcher?.displayName || dispatcher?.username || 'dispatcher',
+              unit_id: successfulUnitIds,
+              unit_details: successfulUnitIds.map((uid) => {
+                const u = unitList.find((x) => x.id === uid);
+                return {
+                  unit_id: uid,
+                  name: u?.name || uid,
+                  type: u?.type || vehicleType,
+                };
+              }),
+              room_details: roomId ? { room_id: roomId } : null,
+            }).catch((err) =>
+              addLog(
+                `⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`,
+                'warn',
+              ),
+            );
+          }
+        }
       }
 
       // ── STEP 6: Update local ticket ──
@@ -1878,6 +1911,20 @@ export default function DispatchPage() {
       setAgentTicket(fresh);
       setSelectedTicket(fresh);
     }
+
+    // ── Ticket Events audit log (CLOSED, additive, non-blocking) ────────────
+    closeTicketEvent(agentTicket.id, {
+      source_id: dispatcher?.username || 'dispatcher',
+      source_name:
+        dispatcher?.displayName || dispatcher?.username || 'dispatcher',
+      remarks: 'marked completed by dispatcher',
+    }).catch((err) =>
+      addLog(
+        `⚠️ ticket-events close failed: ${err?.response?.data?.error || err.message}`,
+        'warn',
+      ),
+    );
+
     setStatusBox({
       type: 'accepted',
       icon: (

@@ -9,17 +9,17 @@ function trimTrailingSlash(url) {
 
 /** REST backend (Express / dispatch API) */
 export const API_BASE_URL = trimTrailingSlash(
-  import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.24.19:5000',
+  import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.24.9:5000',
 );
 
 /** Webhook Engine V3 */
 export const WEBHOOK_BASE_URL = trimTrailingSlash(
-  import.meta.env.VITE_WEBHOOK_BASE_URL ?? 'http://192.168.24.19:5001',
+  import.meta.env.VITE_WEBHOOK_BASE_URL ?? 'http://192.168.24.9:5001',
 );
 
 /** Synapse homeserver root (Client-Server API lives under /_matrix/...) */
 export const SYNAPSE_BASE_URL = trimTrailingSlash(
-  import.meta.env.VITE_SYNAPSE_BASE_URL ?? 'http://192.168.24.19:8008',
+  import.meta.env.VITE_SYNAPSE_BASE_URL ?? 'http://192.168.24.9:8008',
 );
 
 /**
@@ -39,6 +39,8 @@ export const GOOGLE_ROUTES_COMPUTE_URL =
   import.meta.env.VITE_GOOGLE_ROUTES_COMPUTE_URL ??
   'https://routes.googleapis.com/directions/v2:computeRoutes';
 
+
+  
 /** Google Maps / Routes API key */
 export const GOOGLE_MAPS_API_KEY =
   import.meta.env.VITE_GOOGLE_MAPS_API_KEY ??

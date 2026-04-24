@@ -1,0 +1,26 @@
+stateDiagram-v2
+    direction LR
+    [*] --> created: Agent /agent/create
+    created --> on_going: Dispatcher /dispatch
+    on_going --> assigned: unit event
+    assigned --> accepted: unit accepts
+    accepted --> en_route: unit departs
+    en_route --> arrived: unit on scene
+    arrived --> on_action: unit engaged
+    on_action --> completed: unit finishes
+    completed --> [*]
+
+    note right of created
+        event_source = agent
+        only valid first event
+    end note
+
+    note right of on_going
+        event_source = dispatcher
+        writes unit_id[] + unit_details[]
+    end note
+
+    note left of completed
+        terminal — further unit
+        events rejected with 409
+    end note

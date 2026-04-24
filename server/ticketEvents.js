@@ -1,67 +1,80 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Ticket Events Routes (additive module)
-// Mounted onto the existing Express app in server.js via register(app, deps).
-// Reuses the caller's pgPool and NATS client — no separate connections, no
-// new port. Writes only to public.ticket_events. Does not touch other routes.
+// Ticket Events (additive module) — NATS-only transport
+// register(app, { pgPool, getNc, sc }) subscribes on:
+//   • ticket.events.inbox.create        (CREATED)
+//   • ticket.events.inbox.update-info   (UPDATED_INFO)
+//   • ticket.events.inbox.dispatch      (ASSIGNED_DISPATCHER + ASSIGNED_UNITS)
+//   • ticket.events.inbox.unit          (ACKNOWLEDGED/REJECTED/ENROUTE/ARRIVED/
+//                                        ON_ACTION/COMPLETED)
+//   • ticket.events.inbox.close         (CLOSED)
+//   • ticket.events.query.get
+//   • ticket.events.query.list
+// Fanout (no reply) on:
+//   • ticket.events.out.created
+//   • ticket.events.out.dispatched
+//   • ticket.events.out.unit.{unitId}
+//   • ticket.events.out.progress.{ticketId}
+// Writes only to public.ticket_events. `app` parameter kept for signature
+// compatibility with server.js but no HTTP routes are mounted.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const UNIT_TYPES = ['ambulance', 'fire', 'police', 'rescue', 'hazmat'];
-const TYPE_SPECIFIC_FIELD = {
-  ambulance: 'medical_condition',
-  fire: 'fire_type',
-  police: 'incident_type',
-  rescue: 'rescue_type',
-  hazmat: 'hazard_type',
+// Event → event_type. ticket_status (Stage 1..4) is derived from the full
+// event history at insert time; see deriveStage() below.
+const EVENT_TYPE = {
+  CREATED: 'ENTRY',
+  UPDATED_INFO: 'UPDATE',
+  ASSIGNED_DISPATCHER: 'UPDATE',
+  ASSIGNED_UNITS: 'UPDATE',
+  ACKNOWLEDGED: 'PROGRESS',
+  REJECTED: 'PROGRESS',
+  ENROUTE: 'PROGRESS',
+  ARRIVED: 'PROGRESS',
+  ON_ACTION: 'PROGRESS',
+  COMPLETED: 'PROGRESS',
+  CLOSED: 'EXIT',
 };
-const UNIT_FLOW = [
-  'assigned',
-  'accepted',
-  'en_route',
-  'arrived',
-  'on_action',
-  'completed',
+const UNIT_EVENTS = [
+  'ACKNOWLEDGED',
+  'REJECTED',
+  'ENROUTE',
+  'ARRIVED',
+  'ON_ACTION',
+  'COMPLETED',
 ];
-const UNIT_PREV = {
-  assigned: 'on_going',
-  accepted: 'assigned',
-  en_route: 'accepted',
-  arrived: 'en_route',
-  on_action: 'arrived',
-  completed: 'on_action',
-};
+const UNIT_TYPES = ['ambulance', 'fire', 'police', 'rescue', 'hazmat'];
 
-const err = (res, code, msg) =>
-  res.status(code).json({ success: false, error: msg });
+function deriveStage(priorEvents, newEvent) {
+  if (newEvent === 'CLOSED') return 'Stage 4';
+  const all = priorEvents.concat([newEvent]);
+  if (all.some((e) => EVENT_TYPE[e] === 'PROGRESS')) return 'Stage 3';
+  if (all.some((e) => e === 'ASSIGNED_DISPATCHER' || e === 'ASSIGNED_UNITS'))
+    return 'Stage 2';
+  return 'Stage 1';
+}
+
 const isNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
 function validateAgentPayload(body) {
-  const { ticket_id, ticket_details, location } = body;
+  const { ticket_id, ticket_details } = body;
   if (!ticket_id || typeof ticket_id !== 'string')
     return 'ticket_id (string) required';
   if (!ticket_details || typeof ticket_details !== 'object')
     return 'ticket_details (object) required';
-  const { unit_type, priority, patient_name, phone_number } = ticket_details;
+  const {
+    unit_type,
+    priority,
+    patient_name,
+    phone_number,
+    latitude,
+    longitude,
+  } = ticket_details;
   if (!UNIT_TYPES.includes(unit_type))
     return `ticket_details.unit_type must be one of ${UNIT_TYPES.join(', ')}`;
   if (!priority) return 'ticket_details.priority required';
   if (!patient_name) return 'ticket_details.patient_name required';
   if (!phone_number) return 'ticket_details.phone_number required';
-  const tField = TYPE_SPECIFIC_FIELD[unit_type];
-  if (!ticket_details[tField])
-    return `ticket_details.${tField} required for unit_type ${unit_type}`;
-  if (
-    !location ||
-    !isNumber(location.latitude) ||
-    !isNumber(location.longitude)
-  )
-    return 'location.latitude and location.longitude (numbers) required';
-  if (
-    body.unit_id != null ||
-    body.unit_details != null ||
-    body.room_details != null ||
-    body.remarks != null
-  )
-    return 'unit_id, unit_details, room_details, and remarks must be null at creation';
+  if (!isNumber(latitude) || !isNumber(longitude))
+    return 'ticket_details.latitude and ticket_details.longitude (numbers) required';
   return null;
 }
 
@@ -82,17 +95,10 @@ function validateDispatcherPayload(body) {
   return null;
 }
 
-function validateUnitPayload(body, currentStatus, currentUnitIds) {
-  const { event_type, ticket_status } = body;
-  if (!event_type || !ticket_status)
-    return 'event_type and ticket_status required';
-  if (event_type !== ticket_status)
-    return 'event_type must equal ticket_status for unit events';
-  if (!UNIT_FLOW.includes(event_type))
-    return `event_type must be one of ${UNIT_FLOW.join(', ')}`;
-  const expected = UNIT_PREV[event_type];
-  if (currentStatus !== expected)
-    return `cannot transition to ${event_type} from ${currentStatus} (expected ${expected})`;
+function validateUnitPayload(body, currentUnitIds) {
+  const { event } = body;
+  if (!event || !UNIT_EVENTS.includes(event))
+    return `event must be one of ${UNIT_EVENTS.join(', ')}`;
   if (
     body.source_id &&
     Array.isArray(currentUnitIds) &&
@@ -104,7 +110,7 @@ function validateUnitPayload(body, currentStatus, currentUnitIds) {
 }
 
 function register(app, { pgPool, getNc, sc }) {
-  function publish(subject, payload) {
+  function publishSubject(subject, payload) {
     const nc = typeof getNc === 'function' ? getNc() : null;
     if (!nc) return;
     try {
@@ -114,53 +120,79 @@ function register(app, { pgPool, getNc, sc }) {
     }
   }
 
+  function natsReply(replyTo, payload) {
+    if (!replyTo) return;
+    publishSubject(replyTo, payload);
+  }
+
   async function fetchEvents(ticketId) {
     const { rows } = await pgPool.query(
-      `SELECT id, created_at, ticket_id, event_source, source_id, source_name,
-              event_type, ticket_status, ticket_details, location,
-              unit_id, unit_details, room_details, remarks
+      `SELECT id, timestamp, ticket_id, event, event_type, source_id, source_name,
+              ticket_details, ticket_status, priority, team_details, room_details, remarks
          FROM public.ticket_events
         WHERE ticket_id = $1
-        ORDER BY created_at ASC, id ASC`,
+        ORDER BY timestamp ASC, id ASC`,
       [ticketId],
     );
     return rows;
   }
 
+  // Fold the event log into a single view of the ticket: merged ticket_details,
+  // current assigned unit set, cumulative team, and the raw event sequence used
+  // by handlers for idempotency checks and stage derivation.
   function reconstruct(rows) {
     if (!rows || rows.length === 0) return null;
     const state = {
       ticket_id: rows[0].ticket_id,
       ticket_status: null,
       ticket_details: null,
-      location: null,
-      unit_id: null,
-      unit_details: null,
+      priority: null,
+      team: {},
+      unit_ids: [],
       room_details: null,
-      remarks: null,
-      created_at: rows[0].created_at,
-      updated_at: rows[rows.length - 1].created_at,
+      events: [],
+      closed: false,
+      created_at: rows[0].timestamp,
+      updated_at: rows[rows.length - 1].timestamp,
       events_count: rows.length,
       source_history: [],
     };
     for (const r of rows) {
-      if (r.ticket_status != null) state.ticket_status = r.ticket_status;
+      state.ticket_status = r.ticket_status;
       if (r.ticket_details != null)
         state.ticket_details = {
           ...(state.ticket_details || {}),
           ...r.ticket_details,
         };
-      if (r.location != null) state.location = r.location;
-      if (r.unit_id != null) state.unit_id = r.unit_id;
-      if (r.unit_details != null) state.unit_details = r.unit_details;
+      if (r.priority) state.priority = r.priority;
       if (r.room_details != null) state.room_details = r.room_details;
-      if (r.remarks != null) state.remarks = r.remarks;
+      state.events.push(r.event);
+      if (r.event === 'CREATED' || r.event === 'UPDATED_INFO') {
+        if (r.source_id) state.team.agent = r.source_id;
+      } else if (r.event === 'ASSIGNED_DISPATCHER') {
+        if (r.source_id) state.team.dispatcher = r.source_id;
+      } else if (r.event === 'ASSIGNED_UNITS') {
+        const td = r.team_details || {};
+        const units = {};
+        const unitIds = [];
+        for (const k of Object.keys(td)) {
+          if (k.indexOf('unit_') === 0) {
+            const id = k.substring('unit_'.length);
+            units[id] = td[k];
+            unitIds.push(id);
+          }
+        }
+        state.team.units = units;
+        state.unit_ids = unitIds;
+      } else if (r.event === 'CLOSED') {
+        state.closed = true;
+      }
       state.source_history.push({
-        at: r.created_at,
-        source: r.event_source,
+        at: r.timestamp,
+        event: r.event,
+        event_type: r.event_type,
         source_id: r.source_id,
         source_name: r.source_name,
-        event_type: r.event_type,
         ticket_status: r.ticket_status,
       });
     }
@@ -170,203 +202,437 @@ function register(app, { pgPool, getNc, sc }) {
   async function insertEvent(row) {
     const { rows } = await pgPool.query(
       `INSERT INTO public.ticket_events
-         (ticket_id, event_source, source_id, source_name, event_type, ticket_status,
-          ticket_details, location, unit_id, unit_details, room_details, remarks)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       RETURNING id, created_at`,
+         (ticket_id, event, event_type, source_id, source_name,
+          ticket_details, ticket_status, priority, team_details, room_details, remarks)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING id, timestamp`,
       [
         row.ticket_id,
-        row.event_source,
+        row.event,
+        row.event_type,
         row.source_id || null,
         row.source_name || null,
-        row.event_type,
-        row.ticket_status || null,
         row.ticket_details != null ? JSON.stringify(row.ticket_details) : null,
-        row.location != null ? JSON.stringify(row.location) : null,
-        row.unit_id != null ? JSON.stringify(row.unit_id) : null,
-        row.unit_details != null ? JSON.stringify(row.unit_details) : null,
+        row.ticket_status,
+        row.priority || null,
+        row.team_details != null ? JSON.stringify(row.team_details) : null,
         row.room_details != null ? JSON.stringify(row.room_details) : null,
-        row.remarks != null ? JSON.stringify(row.remarks) : null,
+        row.remarks || null,
       ],
     );
     return rows[0];
   }
 
-  // Agent — create ticket (first event)
-  app.post('/api/ticket-events/agent/create', async (req, res) => {
-    const msg = validateAgentPayload(req.body);
-    if (msg) return err(res, 400, msg);
-    try {
-      const existing = await fetchEvents(req.body.ticket_id);
-      if (existing.length > 0) return err(res, 409, 'ticket already exists');
-      const inserted = await insertEvent({
-        ticket_id: req.body.ticket_id,
-        event_source: 'agent',
-        source_id: req.body.source_id,
-        source_name: req.body.source_name,
-        event_type: 'creation',
-        ticket_status: 'created',
-        ticket_details: req.body.ticket_details,
-        location: req.body.location,
-      });
-      publish('ticket.events.created', {
-        ticket_id: req.body.ticket_id,
-        created_at: inserted.created_at,
-        ticket_details: req.body.ticket_details,
-        location: req.body.location,
-        source_id: req.body.source_id,
-        source_name: req.body.source_name,
-      });
-      res.json({
-        success: true,
-        id: inserted.id,
-        created_at: inserted.created_at,
-      });
-    } catch (e) {
-      console.error('[ticket-events][agent/create]', e.message);
-      err(res, 500, e.message);
-    }
-  });
+  // ── Handlers (invoked by NATS subscribers below) ──────────────────────────
 
-  // Dispatcher — assign units to an existing ticket
-  app.post('/api/ticket-events/:ticketId/dispatch', async (req, res) => {
-    const { ticketId } = req.params;
-    const msg = validateDispatcherPayload(req.body);
-    if (msg) return err(res, 400, msg);
-    try {
-      const rows = await fetchEvents(ticketId);
-      if (rows.length === 0) return err(res, 404, 'ticket not found');
-      const state = reconstruct(rows);
-      if (state.ticket_status !== 'created')
-        return err(
-          res,
-          409,
-          `ticket is in status '${state.ticket_status}', cannot dispatch`,
-        );
-      const inserted = await insertEvent({
-        ticket_id: ticketId,
-        event_source: 'dispatcher',
-        source_id: req.body.source_id,
-        source_name: req.body.source_name,
-        event_type: 'dispatched',
-        ticket_status: 'on_going',
-        unit_id: req.body.unit_id,
-        unit_details: req.body.unit_details,
-        room_details: req.body.room_details || null,
+  // Agent — create ticket (CREATED, Stage 1)
+  async function handleCreate(data) {
+    const replyTo = data && data.replyTo;
+    const body = (data && data.body) || {};
+    const msg = validateAgentPayload(body);
+    if (msg)
+      return natsReply(replyTo, { success: false, code: 400, error: msg });
+    const existing = await fetchEvents(body.ticket_id);
+    if (existing.length > 0)
+      return natsReply(replyTo, {
+        success: false,
+        code: 409,
+        error: 'ticket already exists',
       });
-      for (const uid of req.body.unit_id) {
-        publish(`ticket.events.unit.${uid}`, {
-          type: 'TICKET_DISPATCHED',
-          ticket_id: ticketId,
-          unit_id: uid,
-          ticket_details: state.ticket_details,
-          location: state.location,
-          room_details: req.body.room_details || null,
-          dispatched_at: inserted.created_at,
-        });
-      }
-      publish('ticket.events.dispatched', {
-        ticket_id: ticketId,
-        unit_id: req.body.unit_id,
-        at: inserted.created_at,
-      });
-      res.json({
-        success: true,
-        id: inserted.id,
-        created_at: inserted.created_at,
-      });
-    } catch (e) {
-      console.error('[ticket-events][dispatch]', e.message);
-      err(res, 500, e.message);
-    }
-  });
+    const agent = body.source_id || 'agent';
+    const inserted = await insertEvent({
+      ticket_id: body.ticket_id,
+      event: 'CREATED',
+      event_type: 'ENTRY',
+      source_id: body.source_id || null,
+      source_name: body.source_name || null,
+      ticket_details: body.ticket_details,
+      ticket_status: 'Stage 1',
+      priority: body.ticket_details.priority || null,
+      team_details: { agent },
+      remarks: body.remarks || null,
+    });
+    publishSubject('ticket.events.out.created', {
+      ticket_id: body.ticket_id,
+      at: inserted.timestamp,
+      ticket_details: body.ticket_details,
+      source_id: body.source_id,
+      source_name: body.source_name,
+    });
+    natsReply(replyTo, {
+      success: true,
+      id: inserted.id,
+      timestamp: inserted.timestamp,
+    });
+  }
 
-  // Unit — state progression (assigned → accepted → en_route → arrived → on_action → completed)
-  app.post('/api/ticket-events/:ticketId/unit', async (req, res) => {
-    const { ticketId } = req.params;
-    try {
-      const rows = await fetchEvents(ticketId);
-      if (rows.length === 0) return err(res, 404, 'ticket not found');
-      const state = reconstruct(rows);
-      const currentUnitIds = Array.isArray(state.unit_id) ? state.unit_id : [];
-      const msg = validateUnitPayload(
-        req.body,
-        state.ticket_status,
-        currentUnitIds,
+  // Agent — patch ticket info (UPDATED_INFO, stage unchanged)
+  async function handleUpdateInfo(data) {
+    const replyTo = data && data.replyTo;
+    const ticketId = data && data.ticketId;
+    const body = (data && data.body) || {};
+    if (!ticketId)
+      return natsReply(replyTo, {
+        success: false,
+        code: 400,
+        error: 'ticketId required',
+      });
+    if (!body.ticket_details || typeof body.ticket_details !== 'object')
+      return natsReply(replyTo, {
+        success: false,
+        code: 400,
+        error: 'ticket_details (object) required',
+      });
+    const rows = await fetchEvents(ticketId);
+    if (rows.length === 0)
+      return natsReply(replyTo, {
+        success: false,
+        code: 404,
+        error: 'ticket not found',
+      });
+    const state = reconstruct(rows);
+    if (state.closed)
+      return natsReply(replyTo, {
+        success: false,
+        code: 409,
+        error: 'ticket already closed',
+      });
+    const agent = body.source_id || state.team.agent || 'agent';
+    const inserted = await insertEvent({
+      ticket_id: ticketId,
+      event: 'UPDATED_INFO',
+      event_type: 'UPDATE',
+      source_id: body.source_id || state.team.agent || null,
+      source_name: body.source_name || null,
+      ticket_details: body.ticket_details,
+      ticket_status: deriveStage(state.events, 'UPDATED_INFO'),
+      priority: body.ticket_details.priority || state.priority || null,
+      team_details: { agent },
+      remarks: body.remarks || null,
+    });
+    publishSubject(`ticket.events.out.progress.${ticketId}`, {
+      ticket_id: ticketId,
+      event: 'UPDATED_INFO',
+      at: inserted.timestamp,
+    });
+    natsReply(replyTo, {
+      success: true,
+      id: inserted.id,
+      timestamp: inserted.timestamp,
+    });
+  }
+
+  // Dispatcher — auto-insert ASSIGNED_DISPATCHER (idempotent) then ASSIGNED_UNITS
+  async function handleDispatch(data) {
+    const replyTo = data && data.replyTo;
+    const ticketId = data && data.ticketId;
+    const body = (data && data.body) || {};
+    if (!ticketId)
+      return natsReply(replyTo, {
+        success: false,
+        code: 400,
+        error: 'ticketId required',
+      });
+    const msg = validateDispatcherPayload(body);
+    if (msg)
+      return natsReply(replyTo, { success: false, code: 400, error: msg });
+    const rows = await fetchEvents(ticketId);
+    if (rows.length === 0)
+      return natsReply(replyTo, {
+        success: false,
+        code: 404,
+        error: 'ticket not found',
+      });
+    const state = reconstruct(rows);
+    if (state.closed)
+      return natsReply(replyTo, {
+        success: false,
+        code: 409,
+        error: 'ticket already closed',
+      });
+    const priorEvents = state.events.slice();
+    const dispatcherId = body.source_id || 'dispatcher';
+    const dispatcherName = body.source_name || dispatcherId;
+    const agent = state.team.agent || 'agent';
+
+    if (!priorEvents.includes('ASSIGNED_DISPATCHER')) {
+      const insDisp = await insertEvent({
+        ticket_id: ticketId,
+        event: 'ASSIGNED_DISPATCHER',
+        event_type: 'UPDATE',
+        source_id: dispatcherId,
+        source_name: dispatcherName,
+        ticket_status: deriveStage(priorEvents, 'ASSIGNED_DISPATCHER'),
+        priority: state.priority,
+        team_details: { agent, dispatcher: dispatcherId },
+      });
+      priorEvents.push('ASSIGNED_DISPATCHER');
+      publishSubject(`ticket.events.out.progress.${ticketId}`, {
+        ticket_id: ticketId,
+        event: 'ASSIGNED_DISPATCHER',
+        at: insDisp.timestamp,
+      });
+    }
+
+    const teamUnits = {};
+    for (let i = 0; i < body.unit_id.length; i++) {
+      const uid = body.unit_id[i];
+      const detail = body.unit_details[i] || {};
+      teamUnits[`unit_${uid}`] = detail.name || detail.unit_name || uid;
+    }
+    const inserted = await insertEvent({
+      ticket_id: ticketId,
+      event: 'ASSIGNED_UNITS',
+      event_type: 'UPDATE',
+      source_id: dispatcherId,
+      source_name: dispatcherName,
+      ticket_status: deriveStage(priorEvents, 'ASSIGNED_UNITS'),
+      priority: state.priority,
+      team_details: teamUnits,
+      room_details: body.room_details || null,
+    });
+    for (const uid of body.unit_id) {
+      publishSubject(`ticket.events.out.unit.${uid}`, {
+        type: 'TICKET_DISPATCHED',
+        ticket_id: ticketId,
+        unit_id: uid,
+        ticket_details: state.ticket_details,
+        room_details: body.room_details || null,
+        dispatched_at: inserted.timestamp,
+      });
+    }
+    publishSubject('ticket.events.out.dispatched', {
+      ticket_id: ticketId,
+      unit_id: body.unit_id,
+      at: inserted.timestamp,
+    });
+    natsReply(replyTo, {
+      success: true,
+      id: inserted.id,
+      timestamp: inserted.timestamp,
+    });
+  }
+
+  // Unit — ACKNOWLEDGED/REJECTED/ENROUTE/ARRIVED/ON_ACTION/COMPLETED (PROGRESS)
+  async function handleUnit(data) {
+    const replyTo = data && data.replyTo;
+    const ticketId = data && data.ticketId;
+    const body = (data && data.body) || {};
+    if (!ticketId)
+      return natsReply(replyTo, {
+        success: false,
+        code: 400,
+        error: 'ticketId required',
+      });
+    const rows = await fetchEvents(ticketId);
+    if (rows.length === 0)
+      return natsReply(replyTo, {
+        success: false,
+        code: 404,
+        error: 'ticket not found',
+      });
+    const state = reconstruct(rows);
+    if (state.closed)
+      return natsReply(replyTo, {
+        success: false,
+        code: 409,
+        error: 'ticket already closed',
+      });
+    const msg = validateUnitPayload(body, state.unit_ids);
+    if (msg)
+      return natsReply(replyTo, { success: false, code: 400, error: msg });
+    const inserted = await insertEvent({
+      ticket_id: ticketId,
+      event: body.event,
+      event_type: 'PROGRESS',
+      source_id: body.source_id || null,
+      source_name: body.source_name || null,
+      ticket_status: deriveStage(state.events, body.event),
+      priority: state.priority,
+      remarks: body.remarks || null,
+    });
+    publishSubject(`ticket.events.out.progress.${ticketId}`, {
+      ticket_id: ticketId,
+      event: body.event,
+      source_id: body.source_id,
+      source_name: body.source_name,
+      at: inserted.timestamp,
+    });
+    natsReply(replyTo, {
+      success: true,
+      id: inserted.id,
+      timestamp: inserted.timestamp,
+    });
+  }
+
+  // Dispatcher — CLOSED (Stage 4)
+  async function handleClose(data) {
+    const replyTo = data && data.replyTo;
+    const ticketId = data && data.ticketId;
+    const body = (data && data.body) || {};
+    if (!ticketId)
+      return natsReply(replyTo, {
+        success: false,
+        code: 400,
+        error: 'ticketId required',
+      });
+    const rows = await fetchEvents(ticketId);
+    if (rows.length === 0)
+      return natsReply(replyTo, {
+        success: false,
+        code: 404,
+        error: 'ticket not found',
+      });
+    const state = reconstruct(rows);
+    if (state.closed)
+      return natsReply(replyTo, {
+        success: false,
+        code: 409,
+        error: 'ticket already closed',
+      });
+    const inserted = await insertEvent({
+      ticket_id: ticketId,
+      event: 'CLOSED',
+      event_type: 'EXIT',
+      source_id: body.source_id || 'dispatcher',
+      source_name: body.source_name || body.source_id || 'dispatcher',
+      ticket_status: 'Stage 4',
+      priority: state.priority,
+      remarks: body.remarks || null,
+    });
+    publishSubject(`ticket.events.out.progress.${ticketId}`, {
+      ticket_id: ticketId,
+      event: 'CLOSED',
+      at: inserted.timestamp,
+    });
+    natsReply(replyTo, {
+      success: true,
+      id: inserted.id,
+      timestamp: inserted.timestamp,
+    });
+  }
+
+  // Query — reconstructed state + raw event history for one ticket
+  async function handleGet(data) {
+    const replyTo = data && data.replyTo;
+    const ticketId = data && data.ticketId;
+    if (!ticketId)
+      return natsReply(replyTo, {
+        success: false,
+        code: 400,
+        error: 'ticketId required',
+      });
+    const rows = await fetchEvents(ticketId);
+    if (rows.length === 0)
+      return natsReply(replyTo, {
+        success: false,
+        code: 404,
+        error: 'ticket not found',
+      });
+    const state = reconstruct(rows);
+    natsReply(replyTo, { success: true, state, events: rows });
+  }
+
+  // Query — list latest row per ticket (optional query.status = 'Stage N' filter)
+  async function handleList(data) {
+    const replyTo = data && data.replyTo;
+    const query = (data && data.query) || {};
+    const params = [];
+    let where = '';
+    if (query.status) {
+      params.push(query.status);
+      where = `WHERE ticket_status = $1`;
+    }
+    const sql = `
+      SELECT DISTINCT ON (ticket_id)
+             ticket_id, timestamp, event, event_type, ticket_status,
+             ticket_details, priority, team_details, room_details
+        FROM public.ticket_events
+        ${where}
+        ORDER BY ticket_id, timestamp DESC, id DESC`;
+    const { rows } = await pgPool.query(sql, params);
+    natsReply(replyTo, { success: true, tickets: rows, total: rows.length });
+  }
+
+  // ── NATS subscription wiring ──────────────────────────────────────────────
+  // Subjects are fixed by contract with the webhook bridge (ticket-events.controller.ts).
+  const SUBSCRIPTIONS = [
+    {
+      subject: 'ticket.events.inbox.create',
+      handler: handleCreate,
+      tag: 'create',
+    },
+    {
+      subject: 'ticket.events.inbox.update-info',
+      handler: handleUpdateInfo,
+      tag: 'update-info',
+    },
+    {
+      subject: 'ticket.events.inbox.dispatch',
+      handler: handleDispatch,
+      tag: 'dispatch',
+    },
+    { subject: 'ticket.events.inbox.unit', handler: handleUnit, tag: 'unit' },
+    {
+      subject: 'ticket.events.inbox.close',
+      handler: handleClose,
+      tag: 'close',
+    },
+    { subject: 'ticket.events.query.get', handler: handleGet, tag: 'get' },
+    { subject: 'ticket.events.query.list', handler: handleList, tag: 'list' },
+  ];
+
+  function wireSubscribers(nc) {
+    for (const { subject, handler, tag } of SUBSCRIPTIONS) {
+      const sub = nc.subscribe(subject);
+      (async () => {
+        for await (const m of sub) {
+          let data = {};
+          try {
+            data = JSON.parse(sc.decode(m.data));
+          } catch (e) {
+            console.warn(`[ticket-events][${tag}] bad JSON:`, e.message);
+            continue;
+          }
+          try {
+            await handler(data);
+          } catch (e) {
+            console.error(`[ticket-events][${tag}]`, e.message);
+            natsReply(data && data.replyTo, {
+              success: false,
+              code: 500,
+              error: e.message,
+            });
+          }
+        }
+      })().catch((e) =>
+        console.error(
+          `[ticket-events][${tag}] subscription loop ended:`,
+          e.message,
+        ),
       );
-      if (msg) return err(res, 400, msg);
-      const inserted = await insertEvent({
-        ticket_id: ticketId,
-        event_source: 'unit',
-        source_id: req.body.source_id,
-        source_name: req.body.source_name,
-        event_type: req.body.event_type,
-        ticket_status: req.body.ticket_status,
-        ticket_details: req.body.ticket_details || null,
-        location: req.body.location || null,
-        unit_details: req.body.unit_details || null,
-        room_details: req.body.room_details || null,
-        remarks: req.body.remarks || null,
-      });
-      publish(`ticket.events.progress.${ticketId}`, {
-        ticket_id: ticketId,
-        event_type: req.body.event_type,
-        ticket_status: req.body.ticket_status,
-        source_id: req.body.source_id,
-        source_name: req.body.source_name,
-        location: req.body.location || null,
-        at: inserted.created_at,
-      });
-      res.json({
-        success: true,
-        id: inserted.id,
-        created_at: inserted.created_at,
-      });
-    } catch (e) {
-      console.error('[ticket-events][unit]', e.message);
-      err(res, 500, e.message);
     }
-  });
+    console.log(
+      '🎫 Ticket events NATS subscribers registered → ticket.events.{inbox,query}.*',
+    );
+  }
 
-  // GET — reconstructed state + raw event history for one ticket
-  app.get('/api/ticket-events/:ticketId', async (req, res) => {
+  // nc may not be ready at register() time (NATS connects asynchronously),
+  // so poll until it is available, then wire subscribers exactly once.
+  let wired = false;
+  const pollMs = 500;
+  const poll = setInterval(() => {
+    if (wired) return;
+    const nc = typeof getNc === 'function' ? getNc() : null;
+    if (!nc) return;
+    wired = true;
+    clearInterval(poll);
     try {
-      const rows = await fetchEvents(req.params.ticketId);
-      if (rows.length === 0) return err(res, 404, 'ticket not found');
-      const state = reconstruct(rows);
-      res.json({ success: true, state, events: rows });
+      wireSubscribers(nc);
     } catch (e) {
-      console.error('[ticket-events][get]', e.message);
-      err(res, 500, e.message);
+      console.error('[ticket-events] failed to wire subscribers:', e.message);
     }
-  });
-
-  // GET — list latest state per ticket (optional ?status= filter)
-  app.get('/api/ticket-events', async (req, res) => {
-    try {
-      const { status } = req.query;
-      const params = [];
-      let where = '';
-      if (status) {
-        params.push(status);
-        where = `WHERE ticket_status = $1`;
-      }
-      const sql = `
-        SELECT DISTINCT ON (ticket_id)
-               ticket_id, created_at, event_source, event_type, ticket_status,
-               ticket_details, location, unit_id, unit_details, room_details
-          FROM public.ticket_events
-          ${where}
-          ORDER BY ticket_id, created_at DESC, id DESC`;
-      const { rows } = await pgPool.query(sql, params);
-      res.json({ success: true, tickets: rows, total: rows.length });
-    } catch (e) {
-      console.error('[ticket-events][list]', e.message);
-      err(res, 500, e.message);
-    }
-  });
-
-  console.log('🎫 Ticket events routes registered → /api/ticket-events/*');
+  }, pollMs);
 }
 
 module.exports = { register };

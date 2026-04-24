@@ -1,0 +1,57 @@
+sequenceDiagram
+    autonumber
+    participant AG as Agent (Web)
+    participant DP as Dispatcher (Web)
+    participant UN as Unit (Mobile)
+    participant API as Server :5000<br/>/api/ticket-events/*
+    participant PG as PostgreSQL<br/>ticket_events
+    participant NATS as NATS Broker
+
+    Note over AG,NATS: 1 — Ticket created by Agent
+    AG->>API: POST /agent/create<br/>{ ticket_id, details, location }
+    API->>PG: INSERT event_type=creation<br/>ticket_status=created
+    API-->>NATS: publish ticket.events.created
+    NATS-->>DP: notify new ticket
+    API-->>AG: 201 { event_id }
+
+    Note over DP,NATS: 2 — Dispatcher assigns units
+    DP->>API: POST /{ticketId}/dispatch<br/>{ unit_ids[], room_details }
+    API->>PG: SELECT latest status (fold)
+    API->>PG: INSERT event_type=dispatched<br/>ticket_status=on_going
+    API-->>NATS: publish ticket.events.dispatched
+    loop for each assigned unit
+        API-->>NATS: publish ticket.events.unit.{unitId}
+    end
+    API-->>DP: 200 { event_id }
+    NATS-->>UN: inbox push (assigned)
+
+    Note over UN,NATS: 3 — Unit progresses through FSM
+    UN->>API: POST /{ticketId}/unit  (assigned→accepted)
+    API->>PG: fold → validate FSM → INSERT accepted
+    API-->>NATS: publish ticket.events.progress.{ticketId}
+    NATS-->>DP: live status update
+
+    UN->>API: POST /{ticketId}/unit  (accepted→en_route)
+    API->>PG: INSERT en_route
+    API-->>NATS: ticket.events.progress.*
+
+    UN->>API: POST /{ticketId}/unit  (en_route→arrived)
+    API->>PG: INSERT arrived
+    API-->>NATS: ticket.events.progress.*
+
+    UN->>API: POST /{ticketId}/unit  (arrived→on_action)
+    API->>PG: INSERT on_action
+    API-->>NATS: ticket.events.progress.*
+
+    UN->>API: POST /{ticketId}/unit  (on_action→completed)
+    API->>PG: INSERT completed
+    API-->>NATS: ticket.events.progress.*
+    NATS-->>DP: ticket closed
+
+    Note over DP,PG: 4 — Reconstruction (any time)
+    DP->>API: GET /{ticketId}
+    API->>PG: SELECT * FROM ticket_events<br/>WHERE ticket_id=$1 ORDER BY id
+    PG-->>API: full event history
+    API-->>DP: folded state + timeline
+
+    Note over API,PG: Invalid transitions (e.g. created→arrived)<br/>are rejected with 409 before INSERT

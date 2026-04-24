@@ -1552,7 +1552,7 @@ app.get('/health', (req, res) =>
   }),
 );
 
-// ── Ticket Events (additive) — mounts /api/ticket-events/* onto this app ──
+// ── Ticket Events (additive) — NATS-only: subscribes on ticket.events.{inbox,query}.* ──
 try {
   require('./ticketEvents').register(app, { pgPool, getNc: () => nc, sc });
 } catch (e) {

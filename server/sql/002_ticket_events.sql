@@ -2,56 +2,72 @@
 -- Migration: public.ticket_events
 -- Append-only event log for every ticket lifecycle change. Nothing is ever
 -- updated or deleted. Current state is reconstructed by folding all rows for a
--- ticket_id in created_at ascending order.
--- Idempotent: safe to run repeatedly.
--- Run:
---   psql -h <host> -U <user> -d <db> -f server/sql/002_ticket_events.sql
+-- ticket_id in timestamp ascending order.
+--
+-- Event taxonomy:
+--   event        : CREATED | UPDATED_INFO | ASSIGNED_DISPATCHER | ASSIGNED_UNITS |
+--                  ACKNOWLEDGED | REJECTED | ENROUTE | ARRIVED | ON_ACTION |
+--                  COMPLETED | CLOSED
+--   event_type   : ENTRY | UPDATE | PROGRESS | EXIT
+--   ticket_status: Stage 1 | Stage 2 | Stage 3 | Stage 4  (derived server-side)
+--
+-- NOTE: This migration DROPs the previous ticket_events table and rebuilds it
+-- with the new schema. Safe only while the table is empty.
 -- ─────────────────────────────────────────────────────────────────────────────
+
+-- Drop old table only when it still has the legacy schema (column `created_at`
+-- exists but new column `event` does not). On subsequent boots this is a no-op.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name   = 'ticket_events'
+           AND column_name  = 'created_at'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name   = 'ticket_events'
+           AND column_name  = 'event'
+    ) THEN
+        EXECUTE 'DROP TABLE public.ticket_events CASCADE';
+    END IF;
+END$$;
 
 CREATE TABLE IF NOT EXISTS public.ticket_events (
     id              BIGSERIAL      PRIMARY KEY,
-    created_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    timestamp       TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
 
     -- Ticket identity
     ticket_id       TEXT           NOT NULL,
 
+    -- What happened
+    event           TEXT           NOT NULL,
+    event_type      TEXT           NOT NULL,
+
     -- Who triggered the event
-    event_source    TEXT           NOT NULL,           -- agent | dispatcher | unit
     source_id       TEXT,
     source_name     TEXT,
 
-    -- What happened
-    event_type      TEXT           NOT NULL,           -- creation | dispatched | assigned | accepted | en_route | arrived | on_action | completed
-    ticket_status   TEXT,                              -- created | on_going | assigned | accepted | en_route | arrived | on_action | completed
-
-    -- Core data (JSON)
+    -- Core data (JSON, event-dependent shape)
     ticket_details  JSONB,
-    location        JSONB,
-
-    -- Unit info (multi-unit support)
-    unit_id         JSONB,                             -- array of unit ID strings
-    unit_details    JSONB,                             -- array of unit detail objects
-
-    -- Room / staging info
+    ticket_status   TEXT           NOT NULL,           -- Stage 1..4
+    priority        TEXT,
+    team_details    JSONB,
     room_details    JSONB,
 
-    -- Free-form extras
-    remarks         JSONB          DEFAULT '{}'::jsonb
+    -- Free-form remark (plain text)
+    remarks         TEXT
 );
 
--- Indexes for the common query patterns
--- State reconstruction: WHERE ticket_id = $1 ORDER BY created_at ASC, id ASC
-CREATE INDEX IF NOT EXISTS idx_ticket_events_ticket_id_created_at
-    ON public.ticket_events (ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ticket_events_ticket_id_timestamp
+    ON public.ticket_events (ticket_id, timestamp);
 
--- Dispatcher dashboards: latest state per ticket
-CREATE INDEX IF NOT EXISTS idx_ticket_events_created_at
-    ON public.ticket_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ticket_events_timestamp
+    ON public.ticket_events (timestamp DESC);
 
--- Filter by role (agent vs dispatcher vs unit events) when auditing
-CREATE INDEX IF NOT EXISTS idx_ticket_events_event_source
-    ON public.ticket_events (event_source);
+CREATE INDEX IF NOT EXISTS idx_ticket_events_event
+    ON public.ticket_events (event);
 
--- Filter open/active tickets
 CREATE INDEX IF NOT EXISTS idx_ticket_events_ticket_status
     ON public.ticket_events (ticket_status);
