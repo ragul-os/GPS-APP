@@ -3,45 +3,50 @@ import { API_BASE_URL, WEBHOOK_BASE_URL } from '../config/apiConfig';
 
 const api = axios.create({ baseURL: API_BASE_URL });
 
+// Axios instance pre-configured for the Webhook Engine (ngrok or direct).
+// The `ngrok-skip-browser-warning` header bypasses ngrok's free-tier HTML
+// interstitial page, which would otherwise block CORS for browser clients.
+
+
 // Units — REDIRECTED THROUGH GATEWAY
 export const getUnits = () =>
-  axios.get(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.get('/webhook/gps', {
     params: { action: 'getUnits' },
   });
 export const registerUnit = (data) =>
-  axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.post('/webhook/gps', {
     alert_type: 'registration',
     unit_data: data,
     timestamp: Date.now(),
   });
 export const updateUnitLoc = (data) =>
-  axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.post('/webhook/gps', {
     alert_type: 'location_update',
     unit_data: data,
     timestamp: Date.now(),
   });
 export const getNearestUnits = (lat, lng, type, limit = 10) =>
-  axios.get(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.get('/webhook/gps', {
     params: { action: 'getNearestUnits', lat, lng, type, limit },
   });
 
 // Alerts / dispatch — REDIRECTED THROUGH GATEWAY (Webhook Engine)
 export const sendAlert = (data) =>
-  axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.post('/webhook/gps', {
     alert_type: 'dispatch',
     ticket_data: data,
     timestamp: Date.now(),
   });
 
 export const assignUnit = (data) =>
-  axios.post(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.post('/webhook/gps', {
     alert_type: 'assignment',
     unit_id: data.unitId,
     ticket_data: data,
     timestamp: Date.now(),
   });
 export const getStatus = () =>
-  axios.get(`${WEBHOOK_BASE_URL}/webhook/gps`, {
+  webhookApi.get('/webhook/gps', {
     params: { action: 'getStatus' },
   });
 
@@ -55,7 +60,7 @@ export const getAmbulanceLocation = (
 ) => {
   if (!unitId) return api.get('/ambulance-location');
 
-  return axios.get(`${WEBHOOK_BASE_URL}/webhook/abc1234`, {
+  return webhookApi.get('/webhook/abc1234', {
     params: {
       channel: 'gps',
       sessionId: unitId,
@@ -76,5 +81,8 @@ export const getDirections = (originLat, originLng, destLat, destLng) =>
   api.get('/directions', {
     params: { originLat, originLng, destLat, destLng, mode: 'driving' },
   });
+  
+  export const getTicketTimeline = (ticketId) =>
+    axios.get(`${API_BASE_URL}/api/timeline/${ticketId}`);
 
 export default api;

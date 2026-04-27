@@ -64,6 +64,7 @@ import {
   BarChartOutlined,
   RadarChartOutlined,
   PlayCircleOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 
 import {
@@ -72,6 +73,7 @@ import {
   GOOGLE_ROUTES_COMPUTE_URL,
 } from '../config/apiConfig';
 import RouteReplayPage from '../pages/RouteReplayPage';
+import { closeTicketEvent, getTicketEvent } from '../services/ticketEventsApi';
 
 const DARK_MAP_STYLES = [
   { elementType: 'geometry', stylers: [{ color: '#1a1f2e' }] },
@@ -1848,6 +1850,7 @@ export default function LiveTrackingPage() {
   const agentTicketRef = useRef(null);
   const ticketCompletedRef = useRef(false);
   const tripStatusRef = useRef('idle');
+  const dbClosedRef = useRef(false);
 
   const [tripStatus, setTripStatus] = useState('idle');
   const [live, setLive] = useState(false);
@@ -2491,34 +2494,75 @@ if (isDowngradeToIdle) {
             }
 
             if (ts === 'completed' && !ticketCompletedRef.current) {
-              const ticket = agentTicketRef.current;
-              const units = dispatchedUnitsRef.current;
-              if (ticket?.id && units.length > 0) {
-                const allDone = units.every((uid) =>
-                  uid === myUid
-                    ? true
-                    : unitStatusesRef.current[uid] === 'completed',
-                );
-                if (allDone) {
-                  ticketCompletedRef.current = true;
-                  setTimeout(() => {
-                    updateAgentTicketStatus(ticket.id, 'completed');
-                    const fresh = getAgentTickets().find(
-                      (t) => t.id === ticket.id,
-                    );
-                    (fresh?.alertIds || []).forEach((aid) =>
-                      updateAlertHistoryStatus(aid, 'completed'),
-                    );
-                    window.dispatchEvent(new Event('agentTicketsChange'));
-                    setTicketStatus('completed');
-                    addTLog(
-                      'All units completed → ticket auto-completed',
-                      'ok',
-                    );
-                  }, 0);
-                }
-              }
-            }
+  const ticket = agentTicketRef.current;
+  const units = dispatchedUnitsRef.current;
+  if (ticket?.id && units.length > 0) {
+    // Mark this unit as completed in the ref immediately
+    // so the allDone check below sees it
+    unitStatusesRef.current = {
+      ...unitStatusesRef.current,
+      [myUid]: 'completed',
+    };
+
+    const allDone = units.every(
+      (uid) => unitStatusesRef.current[uid] === 'completed',
+    );
+
+    console.log(
+      `[MULTI-UNIT] allDone=${allDone} | units=${units.join(',')} | statuses=`,
+      unitStatusesRef.current,
+    );
+
+    if (allDone && !dbClosedRef.current) {
+      ticketCompletedRef.current = true;
+      dbClosedRef.current = true;
+
+      // Step A: update localStorage
+      updateAgentTicketStatus(ticket.id, 'completed');
+      const fresh = getAgentTickets().find((t) => t.id === ticket.id);
+      (fresh?.alertIds || []).forEach((aid) =>
+        updateAlertHistoryStatus(aid, 'completed'),
+      );
+      window.dispatchEvent(new Event('agentTicketsChange'));
+      setTicketStatus('completed');
+      addTLog(
+        `All ${units.length} unit(s) completed → ticket auto-completed`,
+        'ok',
+      );
+
+      // Step B: fire Stage 4 EXIT to DB
+      closeTicketEvent(ticket.id, {
+        source_id: 'system',
+        source_name: 'system',
+        remarks: `Auto-closed by live tracking — all ${units.length} unit(s) completed`,
+        completed_units: units,
+        completed_at: new Date().toISOString(),
+      })
+        .then(() => {
+          addTLog(`Stage 4 EXIT logged → ticket ${ticket.id}`, 'ok');
+        })
+        .catch((err) => {
+          // Reset so ensureDBClosed can retry on next mount
+          dbClosedRef.current = false;
+          addTLog(
+            `closeTicketEvent failed: ${
+              err?.response?.data?.error || err.message
+            }`,
+            'warn',
+          );
+        });
+    } else if (!allDone) {
+      const pending = units.filter(
+        (uid) => unitStatusesRef.current[uid] !== 'completed',
+      );
+      addTLog(
+        `Unit ${myUid} completed — waiting for: ${pending.join(', ')}`,
+        'info',
+        myUid,
+      );
+    }
+  }
+}
           }
         }
 
@@ -2614,22 +2658,112 @@ if (isDowngradeToIdle) {
     return () => clearInterval(iv);
   }, []); // stable forever
 
-  // Sync external agentTickets changes
-  useEffect(() => {
-    const refresh = () => {
-      const all = getAgentTickets();
-      const t = all.find((tk) => (tk.alertIds || []).includes(id));
-      if (t) {
-        setAgentTicket(t);
-        if (t.status === 'completed') ticketCompletedRef.current = true;
-        setTicketStatus(t.status || 'dispatched');
-        if (t.assignedUnits?.length) setDispatchedUnits(t.assignedUnits);
-      }
-    };
-    window.addEventListener('agentTicketsChange', refresh);
-    return () => window.removeEventListener('agentTicketsChange', refresh);
-  }, [id]);
+  // Sync external agentTickets changes + mount-time DB close guard
+useEffect(() => {
+  // ── localStorage listener (instant, cross-tab) ──────────────────────
+  const refresh = () => {
+    const all = getAgentTickets();
+    const t = all.find((tk) => (tk.alertIds || []).includes(id));
+    if (t) {
+      setAgentTicket(t);
+      if (t.status === 'completed') ticketCompletedRef.current = true;
+      setTicketStatus(t.status || 'dispatched');
+      if (t.assignedUnits?.length) setDispatchedUnits(t.assignedUnits);
+    }
+  };
+  window.addEventListener('agentTicketsChange', refresh);
 
+  // ── Mount-time DB close guard ────────────────────────────────────────
+  const ensureDBClosed = async () => {
+    const all = getAgentTickets();
+    const t = all.find(
+      (tk) => (tk.alertIds || []).includes(id) || tk.id === id,
+    );
+
+    // Only proceed if ticket is already completed in localStorage
+    if (!t || t.status !== 'completed') return;
+    if (dbClosedRef.current) return;
+
+    const ticketId = t.id || id;
+    const units = t.assignedUnits || [];
+
+    try {
+      const res = await getTicketEvent(ticketId);
+      const state = res?.data?.state;
+
+      // If DB already has CLOSED/Stage 4 — nothing to do
+      const alreadyClosedInDB =
+        state?.closed === true ||
+        state?.ticket_status === 'Stage 4' ||
+        (state?.events || []).includes('CLOSED');
+
+      if (alreadyClosedInDB) {
+        dbClosedRef.current = true;
+        addTLog(`DB already closed (Stage 4) for ${ticketId}`, 'info');
+        return;
+      }
+
+      // Check how many units the DB shows as COMPLETED
+      const completedUnitIds = (res?.data?.events || [])
+        .filter((e) => (e.event || '').toUpperCase() === 'COMPLETED')
+        .map((e) => e.source_id)
+        .filter(Boolean);
+
+      const allUnitsCompletedInDB =
+        units.length === 0 ||
+        units.every((uid) => completedUnitIds.includes(uid));
+
+      console.log(
+        `[ensureDBClosed] units=${units.join(',')}`,
+        `| completedInDB=${completedUnitIds.join(',')}`,
+        `| allDone=${allUnitsCompletedInDB}`,
+      );
+
+      if (!allUnitsCompletedInDB) {
+        // Some units haven't reported COMPLETED to DB yet
+        // The live poll will handle it when they do
+        const pending = units.filter(
+          (u) => !completedUnitIds.includes(u),
+        );
+        addTLog(
+          `ensureDBClosed: waiting for ${pending.join(', ')} in DB`,
+          'info',
+        );
+        return;
+      }
+
+      // All units completed in DB but no CLOSED event → fire it now
+      dbClosedRef.current = true;
+
+      await closeTicketEvent(ticketId, {
+        source_id: 'system',
+        source_name: 'system',
+        remarks: `Auto-closed on page load — all ${units.length} unit(s) previously completed`,
+        completed_units: units,
+        completed_at: new Date().toISOString(),
+      });
+
+      addTLog(
+        `Stage 4 EXIT logged on mount → ticket ${ticketId} (${units.length} units)`,
+        'ok',
+      );
+    } catch (err) {
+      console.warn('[ensureDBClosed] failed:', err.message);
+      addTLog(
+        `ensureDBClosed failed: ${
+          err?.response?.data?.error || err.message
+        }`,
+        'warn',
+      );
+    }
+  };
+
+  ensureDBClosed();
+
+  return () => {
+    window.removeEventListener('agentTicketsChange', refresh);
+  };
+}, [id, addTLog]);
   // Switch active unit
   const handleSwitchUnit = useCallback(
     (uid) => {
@@ -2734,6 +2868,19 @@ if (isDowngradeToIdle) {
             />{' '}
             Back
           </button>
+          <button
+          style={{
+            ...s.backBtn,
+            background: 'rgba(124,58,237,.15)',
+            borderColor: 'rgba(124,58,237,.4)',
+            color: '#C4B5FD',
+            fontWeight: 800,
+          }}
+          onClick={() => navigate(`/timeline/${id}`, { state: { alert: alertObj } })}
+        >
+          <HistoryOutlined style={{ fontSize: '12px', verticalAlign: 'middle' }} />{' '}
+          Timeline
+        </button>
           <div style={s.alertPill}>
             <span
               style={{ fontSize: 19, display: 'flex', alignItems: 'center' }}
