@@ -223,6 +223,62 @@ function register(app, { pgPool, getNc, sc }) {
     return rows[0];
   }
 
+  // ── Tickets table sync helpers ────────────────────────────────────────────
+  // Non-throwing: a tickets-table failure must never break the audit-log flow.
+
+  async function ticketsInsert(row) {
+    try {
+      await pgPool.query(
+        `INSERT INTO public.tickets
+           (ticket_id, ani, ticket_details, ticket_status, priority,
+            agent_name, created_at, updated_at, remarks)
+         VALUES ($1,$2,$3,$4,$5,$6,NOW(),NOW(),$7)
+         ON CONFLICT (ticket_id) DO NOTHING`,
+        [
+          row.ticket_id,
+          row.ani || null,
+          row.ticket_details != null
+            ? JSON.stringify(row.ticket_details)
+            : null,
+          row.ticket_status || 'pending',
+          row.priority || null,
+          row.agent_name || null,
+          row.remarks || null,
+        ],
+      );
+    } catch (e) {
+      console.warn('[ticket-events] ticketsInsert failed:', e.message);
+    }
+  }
+
+  async function ticketsUpdate(ticketId, fields) {
+    try {
+      const keys = Object.keys(fields).filter((k) => fields[k] !== undefined);
+      if (keys.length === 0) return;
+      const set = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
+      await pgPool.query(
+        `UPDATE public.tickets SET ${set}, updated_at = NOW() WHERE ticket_id = $1`,
+        [ticketId, ...keys.map((k) => fields[k])],
+      );
+    } catch (e) {
+      console.warn('[ticket-events] ticketsUpdate failed:', e.message);
+    }
+  }
+
+  async function ticketsMergeUnit(ticketId, unitId, unitObj) {
+    try {
+      await pgPool.query(
+        `UPDATE public.tickets
+            SET units      = COALESCE(units, '{}'::jsonb) || $2::jsonb,
+                updated_at = NOW()
+          WHERE ticket_id = $1`,
+        [ticketId, JSON.stringify({ [unitId]: unitObj })],
+      );
+    } catch (e) {
+      console.warn('[ticket-events] ticketsMergeUnit failed:', e.message);
+    }
+  }
+
   // ── Handlers (invoked by NATS subscribers below) ──────────────────────────
 
   // Agent — create ticket (CREATED, Stage 1)
@@ -258,6 +314,15 @@ function register(app, { pgPool, getNc, sc }) {
       ticket_details: body.ticket_details,
       source_id: body.source_id,
       source_name: body.source_name,
+    });
+    // ── Sync to public.tickets ────────────────────────────────────────────────
+    await ticketsInsert({
+      ticket_id: body.ticket_id,
+      ani: body.ticket_details.phone_number || null,
+      ticket_details: body.ticket_details,
+      ticket_status: 'created',
+      priority: body.ticket_details.priority || null,
+      agent_name: body.source_name || body.source_id || null,
     });
     natsReply(replyTo, {
       success: true,
@@ -406,6 +471,18 @@ function register(app, { pgPool, getNc, sc }) {
       unit_id: body.unit_id,
       at: inserted.timestamp,
     });
+    // ── Sync to public.tickets ────────────────────────────────────────────────
+    const unitsObj = {};
+    for (let i = 0; i < body.unit_id.length; i++) {
+      const uid = body.unit_id[i];
+      unitsObj[uid] = body.unit_details[i] || { unit_id: uid };
+    }
+    await ticketsUpdate(ticketId, {
+      dispatcher_id: dispatcherId,
+      dispatcher_name: dispatcherName,
+      units: JSON.stringify(unitsObj),
+      ticket_status: 'dispatched',
+    });
     natsReply(replyTo, {
       success: true,
       id: inserted.id,
@@ -458,6 +535,35 @@ function register(app, { pgPool, getNc, sc }) {
       source_name: body.source_name,
       at: inserted.timestamp,
     });
+    // ── Sync to public.tickets ────────────────────────────────────────────────
+    // Four statuses: created → dispatched → on_going → completed.
+    if (body.event === 'ACKNOWLEDGED') {
+      // Merge accepting unit into the units JSONB and flip to on_going.
+      await ticketsMergeUnit(ticketId, body.source_id, {
+        unit_id: body.source_id,
+        unit_name: body.source_name || body.source_id,
+        status: 'acknowledged',
+      });
+      await ticketsUpdate(ticketId, { ticket_status: 'on_going' });
+    } else if (body.event === 'COMPLETED') {
+      // Only mark completed when every assigned unit has sent a COMPLETED event.
+      // state.events is history BEFORE this insert; add the current unit's event.
+      const completedUnits = new Set();
+      for (let i = 0; i < state.events.length; i++) {
+        if (state.events[i] === 'COMPLETED') {
+          // source_history mirrors state.events in order
+          const src = state.source_history[i];
+          if (src && src.source_id) completedUnits.add(src.source_id);
+        }
+      }
+      completedUnits.add(body.source_id); // include this unit's COMPLETED
+      const allDone =
+        state.unit_ids.length > 0 &&
+        state.unit_ids.every((uid) => completedUnits.has(uid));
+      if (allDone) {
+        await ticketsUpdate(ticketId, { ticket_status: 'completed' });
+      }
+    }
     natsReply(replyTo, {
       success: true,
       id: inserted.id,
@@ -505,6 +611,9 @@ function register(app, { pgPool, getNc, sc }) {
       event: 'CLOSED',
       at: inserted.timestamp,
     });
+    // ── Sync to public.tickets ────────────────────────────────────────────────
+    // No status update on CLOSED — ticket remains at its last lifecycle status
+    // (on_going | completed). Closure is tracked only in the audit log.
     natsReply(replyTo, {
       success: true,
       id: inserted.id,

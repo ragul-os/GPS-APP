@@ -1921,8 +1921,8 @@ export default function LiveTrackingPage() {
     if (ticketStatus === 'completed') ticketCompletedRef.current = true;
   }, [ticketStatus]);
   useEffect(() => {
-  tripStatusRef.current = tripStatus;
-}, [tripStatus]);
+    tripStatusRef.current = tripStatus;
+  }, [tripStatus]);
 
   const cfg = UCFG[alertObj?.vehicleType || 'ambulance'] || UCFG.ambulance;
 
@@ -2401,18 +2401,29 @@ export default function LiveTrackingPage() {
 
         const ts = d.tripStatus || 'idle';
 
-console.log(
-  `[FLICKER-DEBUG] Poll received tripStatus="${ts}" lastTripStRef="${lastTripStRef.current}"`,
-);
+        console.log(
+          `[FLICKER-DEBUG] Poll received tripStatus="${ts}" lastTripStRef="${lastTripStRef.current}"`,
+        );
 
-// ── FLICKER FIX: Ignore 'idle' if we already have a real status ───────
-const REAL_STATUSES = ['accepted', 'dispatched', 'en_route', 'on_action', 'arrived', 'completed', 'abandoned'];
-const isDowngradeToIdle = ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
-if (isDowngradeToIdle) {
-  console.log(`[FLICKER-DEBUG] SKIPPING stale idle — current real status is "${tripStatusRef.current}"`);
-  setTimeout(poll, 100);
-  return;
-}
+        // ── FLICKER FIX: Ignore 'idle' if we already have a real status ───────
+        const REAL_STATUSES = [
+          'accepted',
+          'dispatched',
+          'en_route',
+          'on_action',
+          'arrived',
+          'completed',
+          'abandoned',
+        ];
+        const isDowngradeToIdle =
+          ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
+        if (isDowngradeToIdle) {
+          console.log(
+            `[FLICKER-DEBUG] SKIPPING stale idle — current real status is "${tripStatusRef.current}"`,
+          );
+          setTimeout(poll, 100);
+          return;
+        }
 
         // ── FIX 2: Guard unitStatuses — never downgrade terminal ──────────────
         setUnitStatuses((prev) => {
@@ -2733,6 +2744,23 @@ if (isDowngradeToIdle) {
               style={{ fontSize: '12px', verticalAlign: 'middle' }}
             />{' '}
             Back
+          </button>
+          <button
+            style={{
+              ...s.backBtn,
+              background: 'rgba(124,58,237,.15)',
+              borderColor: 'rgba(124,58,237,.4)',
+              color: '#C4B5FD',
+              fontWeight: 800,
+            }}
+            onClick={() =>
+              navigate(`/timeline/${id}, { state: { alert: alertObj } }`)
+            }
+          >
+            <HistoryOutlined
+              style={{ fontSize: '12px', verticalAlign: 'middle' }}
+            />{' '}
+            Timeline
           </button>
           <div style={s.alertPill}>
             <span

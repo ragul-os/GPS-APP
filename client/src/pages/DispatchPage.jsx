@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import MapView from '../components/MapView';
 import NearbyResources from '../components/NearbyResources';
 import UnitList from '../components/UnitList';
-import { sendAlert, assignUnit } from '../api/api';
+import { sendAlert, assignUnit, getTickets } from '../api/api';
 import {
   dispatchTicketEvent,
   closeTicketEvent,
@@ -168,20 +168,41 @@ function addToHistory(entry) {
   localStorage.setItem('alertHistory', JSON.stringify(stored));
   window.dispatchEvent(new Event('alertHistoryChange'));
 }
-function getAgentTickets() {
-  return JSON.parse(localStorage.getItem('agentTickets') || '[]');
-}
 function saveAgentTickets(tickets) {
   localStorage.setItem('agentTickets', JSON.stringify(tickets));
   window.dispatchEvent(new Event('agentTicketsChange'));
 }
 function updateAgentTicket(ticketId, patch) {
-  const tickets = getAgentTickets();
+  const tickets = JSON.parse(localStorage.getItem('agentTickets') || '[]');
   const idx = tickets.findIndex((t) => t.id === ticketId);
   if (idx !== -1) {
     tickets[idx] = { ...tickets[idx], ...patch };
     saveAgentTickets(tickets);
   }
+}
+
+/* ── Map DB row → dispatcher ticket shape ── */
+function mapDbTicket(r) {
+  const d = r.ticket_details || {};
+  return {
+    id: r.ticket_id,
+    vehicleType: d.unit_type || 'ambulance',
+    severity: r.priority || d.priority || 'critical',
+    name: d.patient_name || d.caller_name || d.name || r.ani || 'Unknown',
+    phone: d.phone_number || d.phone || r.ani || '',
+    address: d.address || '',
+    status: r.ticket_status || 'pending',
+    createdAt: new Date(r.created_at).getTime(),
+    agentName: r.agent_name || '',
+    assignedUnits: r.units || [],
+    answers: {
+      f1: d.patient_name || d.caller_name || d.name || '',
+      f2: d.phone_number || d.phone || r.ani || '',
+      f3: d.address || '',
+    },
+    destination: d.destination || null,
+    notes: d.notes || '',
+  };
 }
 
 /* ── Activity Log ── */
@@ -754,12 +775,21 @@ function TicketListScreen({ onSelectTicket }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState('card'); // 'card' or 'list'
 
-  useEffect(() => {
-    const load = () => setAgentTickets(getAgentTickets());
-    load();
-    window.addEventListener('agentTicketsChange', load);
-    return () => window.removeEventListener('agentTicketsChange', load);
+  const loadFromDb = useCallback(async () => {
+    try {
+      const res = await getTickets();
+      setAgentTickets((res.data?.tickets || []).map(mapDbTicket));
+    } catch (err) {
+      console.error('[DispatchPage] failed to load tickets:', err.message);
+    }
   }, []);
+
+  useEffect(() => {
+    loadFromDb();
+    // Also refresh when a local event fires (e.g. after dispatching)
+    window.addEventListener('agentTicketsChange', loadFromDb);
+    return () => window.removeEventListener('agentTicketsChange', loadFromDb);
+  }, [loadFromDb]);
 
   const pendingCount = agentTickets.filter(
     (t) => t.status === 'pending',
@@ -1546,29 +1576,34 @@ export default function DispatchPage() {
   const [allTickets, setAllTickets] = useState([]);
 
   useEffect(() => {
-    const load = () => {
-      const all = getAgentTickets();
-      setAllTickets(all);
-      // If the currently open ticket was updated externally (e.g. from LiveTracking),
-      // sync its status into local state so dispatch button + badge update live.
-      if (agentTicket?.id) {
-        const fresh = all.find((t) => t.id === agentTicket.id);
-        if (fresh && fresh.status !== agentTicket.status) {
-          setAgentTicket(fresh);
-          setSelectedTicket(fresh);
-          if (fresh.status === 'completed') {
-            setStatusBox({
-              type: 'accepted',
-              icon: (
-                <CheckCircleOutlined
-                  style={{ fontSize: '16px', verticalAlign: 'middle' }}
-                />
-              ),
-              text: 'All units completed — ticket auto-closed',
-            });
-            addLog('Ticket marked completed by live tracking', 'ok');
+    const load = async () => {
+      try {
+        const res = await getTickets();
+        const all = (res.data?.tickets || []).map(mapDbTicket);
+        setAllTickets(all);
+        // If the currently open ticket was updated externally (e.g. from LiveTracking),
+        // sync its status into local state so dispatch button + badge update live.
+        if (agentTicket?.id) {
+          const fresh = all.find((t) => t.id === agentTicket.id);
+          if (fresh && fresh.status !== agentTicket.status) {
+            setAgentTicket(fresh);
+            setSelectedTicket(fresh);
+            if (fresh.status === 'completed') {
+              setStatusBox({
+                type: 'accepted',
+                icon: (
+                  <CheckCircleOutlined
+                    style={{ fontSize: '16px', verticalAlign: 'middle' }}
+                  />
+                ),
+                text: 'All units completed — ticket auto-closed',
+              });
+              addLog('Ticket marked completed by live tracking', 'ok');
+            }
           }
         }
+      } catch (err) {
+        console.error('[DispatchPage] sync error:', err.message);
       }
     };
     load();

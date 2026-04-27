@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import MapView from '../components/MapView';
 import { createTicketEvent } from '../services/ticketEventsApi';
+import { getTickets } from '../api/api';
 import {
   MedicineBoxOutlined,
   FireOutlined,
@@ -15,6 +16,10 @@ import {
   ExclamationCircleFilled,
   ClockCircleFilled,
   PlusOutlined,
+  ArrowLeftOutlined,
+  SearchOutlined,
+  FileTextOutlined,
+  FilterOutlined,
 } from '@ant-design/icons';
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
@@ -603,8 +608,479 @@ function FormField({ field, value, onChange }) {
   }
 }
 
+/* ─── Status / Priority helpers ─────────────────────────────────────────── */
+const STATUS_CFG = {
+  pending: { label: 'Pending', color: '#F9A825', bg: 'rgba(249,168,37,.15)' },
+  dispatched: {
+    label: 'Dispatched',
+    color: '#1A73E8',
+    bg: 'rgba(26,115,232,.15)',
+  },
+  resolved: { label: 'Resolved', color: '#34A853', bg: 'rgba(52,168,83,.15)' },
+  closed: { label: 'Closed', color: '#8B949E', bg: 'rgba(139,148,158,.15)' },
+};
+const PRIORITY_COLOR = {
+  critical: '#E53935',
+  high: '#FF6D00',
+  medium: '#F9A825',
+  low: '#34A853',
+};
+
+function StatusBadge({ status }) {
+  const cfg = STATUS_CFG[status] || STATUS_CFG.pending;
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        background: cfg.bg,
+        color: cfg.color,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '4px 12px',
+        borderRadius: 20,
+        whiteSpace: 'nowrap',
+        border: `1px solid ${cfg.color}44`,
+        letterSpacing: '0.03em',
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: cfg.color,
+          flexShrink: 0,
+          display: 'inline-block',
+        }}
+      />
+      {cfg.label}
+    </span>
+  );
+}
+
+/* ─── Ticket list view ───────────────────────────────────────────────────── */
+function TicketListView({
+  tickets,
+  search,
+  setSearch,
+  dateFrom,
+  setDateFrom,
+  dateTo,
+  setDateTo,
+  timeFrom,
+  setTimeFrom,
+  timeTo,
+  setTimeTo,
+  onNewTicket,
+}) {
+  const inputStyle = {
+    background: '#0D1117',
+    border: '1px solid #30363D',
+    color: '#E6EDF3',
+    borderRadius: 8,
+    padding: '7px 11px',
+    fontSize: 12,
+    outline: 'none',
+    fontFamily: 'Sora, sans-serif',
+  };
+
+  const hasFilters = search || dateFrom || dateTo || timeFrom || timeTo;
+  const clearFilters = () => {
+    setSearch('');
+    setDateFrom('');
+    setDateTo('');
+    setTimeFrom('');
+    setTimeTo('');
+  };
+
+  return (
+    <div style={{ padding: '24px 28px', minHeight: '100vh' }}>
+      {/* ── Header ── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <FileTextOutlined style={{ color: '#ef4444', fontSize: 20 }} />
+          <span
+            style={{
+              fontSize: 18,
+              fontWeight: 700,
+              color: '#E6EDF3',
+              fontFamily: 'Sora, sans-serif',
+            }}
+          >
+            Tickets
+          </span>
+          <span
+            style={{
+              background: 'rgba(239,68,68,.15)',
+              color: '#ef4444',
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '2px 9px',
+              borderRadius: 10,
+            }}
+          >
+            {tickets.length}
+          </span>
+        </div>
+        <button
+          onClick={onNewTicket}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            background: '#ef4444',
+            border: 'none',
+            borderRadius: 9,
+            padding: '9px 18px',
+            color: '#fff',
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'Sora, sans-serif',
+          }}
+        >
+          <PlusOutlined /> New Ticket
+        </button>
+      </div>
+
+      {/* ── Filters ── */}
+      <div
+        style={{
+          background: '#161B22',
+          border: '1px solid #30363D',
+          borderRadius: 12,
+          padding: '14px 18px',
+          marginBottom: 18,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 10,
+          alignItems: 'center',
+        }}
+      >
+        {/* Search */}
+        <div style={{ position: 'relative', flex: '1 1 200px' }}>
+          <SearchOutlined
+            style={{
+              position: 'absolute',
+              left: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: '#8B949E',
+              fontSize: 13,
+            }}
+          />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder='Search by name, phone, address, type…'
+            style={{
+              ...inputStyle,
+              width: '100%',
+              paddingLeft: 32,
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+        {/* Date From */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 10, color: '#8B949E', fontWeight: 600 }}>
+            DATE FROM
+          </span>
+          <input
+            type='date'
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+        {/* Date To */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 10, color: '#8B949E', fontWeight: 600 }}>
+            DATE TO
+          </span>
+          <input
+            type='date'
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+        {/* Time From */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 10, color: '#8B949E', fontWeight: 600 }}>
+            TIME FROM
+          </span>
+          <input
+            type='time'
+            value={timeFrom}
+            onChange={(e) => setTimeFrom(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+        {/* Time To */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 10, color: '#8B949E', fontWeight: 600 }}>
+            TIME TO
+          </span>
+          <input
+            type='time'
+            value={timeTo}
+            onChange={(e) => setTimeTo(e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            style={{
+              background: 'transparent',
+              border: '1px solid #30363D',
+              color: '#8B949E',
+              borderRadius: 8,
+              padding: '7px 14px',
+              fontSize: 12,
+              cursor: 'pointer',
+              fontFamily: 'Sora, sans-serif',
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* ── Table ── */}
+      {tickets.length === 0 ? (
+        <div
+          style={{ textAlign: 'center', padding: '60px 0', color: '#8B949E' }}
+        >
+          <FileTextOutlined
+            style={{ fontSize: 40, marginBottom: 12, display: 'block' }}
+          />
+          <div style={{ fontSize: 14, fontWeight: 600 }}>No tickets found</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            {hasFilters
+              ? 'Try adjusting the filters'
+              : 'Click "New Ticket" to create the first one'}
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            background: '#161B22',
+            border: '1px solid #30363D',
+            borderRadius: 12,
+            overflow: 'hidden',
+          }}
+        >
+          {/* Table header */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '2.2fr 1fr 1.2fr 1.5fr 1fr 1fr 1.2fr 1.3fr',
+              padding: '10px 18px',
+              borderBottom: '1px solid #30363D',
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#8B949E',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+            }}
+          >
+            <span>Ticket ID</span>
+            {[
+              'Type',
+              'Name',
+              'Address',
+              'Phone',
+              'Priority',
+              'Status',
+              'Date / Time',
+            ].map((h) => (
+              <span
+                key={h}
+                style={{ textAlign: 'center' }}
+              >
+                {h}
+              </span>
+            ))}
+          </div>
+
+          {/* Rows */}
+          {tickets.map((t, i) => {
+            const unitCfg = UNIT_TYPES.find((u) => u.key === t.vehicleType);
+            const dt = new Date(t.createdAt);
+            const dateLabel = dt.toLocaleDateString('en-IN', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+            });
+            const timeLabel = dt.toLocaleTimeString('en-IN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const cell = {
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            };
+            return (
+              <div
+                key={t.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    '2.2fr 1fr 1.2fr 1.5fr 1fr 1fr 1.2fr 1.3fr',
+                  padding: '13px 18px',
+                  alignItems: 'center',
+                  borderBottom:
+                    i < tickets.length - 1 ? '1px solid #21262D' : 'none',
+                  fontSize: 12,
+                  color: '#E6EDF3',
+                  background:
+                    i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,.02)',
+                }}
+              >
+                {/* Ticket ID — left-aligned, bold, highlighted */}
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: 'fit-content',
+                      background: 'rgba(26,115,232,.12)',
+                      border: '1px solid rgba(26,115,232,.25)',
+                      color: '#82B4FF',
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      fontWeight: 800,
+                      padding: '2px 8px',
+                      borderRadius: 5,
+                      letterSpacing: '0.02em',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: '100%',
+                    }}
+                    title={t.id}
+                  >
+                    {t.id}
+                  </span>
+                </span>
+
+                {/* Type */}
+                <span
+                  style={{
+                    ...cell,
+                    gap: 5,
+                    color: unitCfg?.borderColor || '#E6EDF3',
+                  }}
+                >
+                  {unitCfg?.icon}
+                  <span style={{ fontSize: 11 }}>{unitCfg?.label}</span>
+                </span>
+
+                {/* Name */}
+                <span style={{ ...cell, fontWeight: 600 }}>{t.name}</span>
+
+                {/* Address */}
+                <span
+                  style={{
+                    ...cell,
+                    color: '#8B949E',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={t.address}
+                >
+                  {t.address}
+                </span>
+
+                {/* Phone */}
+                <span
+                  style={{
+                    ...cell,
+                    color: '#8B949E',
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {t.phone || '—'}
+                </span>
+
+                {/* Priority */}
+                <span style={{ ...cell }}>
+                  <span
+                    style={{
+                      background: `${PRIORITY_COLOR[t.severity]}18`,
+                      color: PRIORITY_COLOR[t.severity] || '#E6EDF3',
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      fontSize: 10,
+                      padding: '3px 10px',
+                      borderRadius: 20,
+                      border: `1px solid ${PRIORITY_COLOR[t.severity] || '#E6EDF3'}44`,
+                    }}
+                  >
+                    {t.severity}
+                  </span>
+                </span>
+
+                {/* Status */}
+                <span style={cell}>
+                  <StatusBadge status={t.status} />
+                </span>
+
+                {/* Date / Time */}
+                <span
+                  style={{
+                    ...cell,
+                    flexDirection: 'column',
+                    gap: 2,
+                    color: '#8B949E',
+                    fontSize: 11,
+                  }}
+                >
+                  <span>{dateLabel}</span>
+                  <span style={{ color: '#6B7789' }}>{timeLabel}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main AgentPage ─────────────────────────────────────────────────────── */
 export default function AgentPage() {
+  /* view: 'list' | 'form' */
+  const [view, setView] = useState('list');
+
+  /* ── Ticket list state ── */
+  const [tickets, setTickets] = useState([]);
+  const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [timeFrom, setTimeFrom] = useState('');
+  const [timeTo, setTimeTo] = useState('');
+
+  /* ── Form state ── */
   const [unitType, setUnitType] = useState('ambulance');
   const [severity, setSeverity] = useState('critical');
   const [pickedLat, setPickedLat] = useState(null);
@@ -613,6 +1089,39 @@ export default function AgentPage() {
   const [submitted, setSubmitted] = useState(false);
   const [lastTicket, setLastTicket] = useState(null);
   const [error, setError] = useState('');
+
+  /* ── Load tickets from PostgreSQL via API ── */
+  const loadTickets = useCallback(async () => {
+    try {
+      const res = await getTickets();
+      const rows = res.data?.tickets || [];
+      // Map DB columns → shape the list view expects
+      const mapped = rows.map((r) => {
+        const d = r.ticket_details || {};
+        return {
+          id: r.ticket_id,
+          vehicleType: d.unit_type || 'ambulance',
+          severity: r.priority || d.priority || 'critical',
+          name: d.patient_name || d.caller_name || d.name || r.ani || 'Unknown',
+          phone: d.phone_number || d.phone || r.ani || '',
+          address: d.address || '',
+          status: r.ticket_status || 'pending',
+          createdAt: new Date(r.created_at).getTime(),
+          agentName: r.agent_name || '',
+        };
+      });
+      setTickets(mapped);
+    } catch (err) {
+      console.error('[AgentPage] failed to load tickets:', err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTickets();
+    // Refresh list whenever a new ticket is submitted locally
+    window.addEventListener('agentTicketsChange', loadTickets);
+    return () => window.removeEventListener('agentTicketsChange', loadTickets);
+  }, [loadTickets]);
 
   const ucfg = UNIT_TYPES.find((u) => u.key === unitType);
   const fields = FALLBACK_FORMS[unitType] || FALLBACK_FORMS.ambulance;
@@ -704,6 +1213,51 @@ export default function AgentPage() {
     setSeverity('critical');
     setError('');
   };
+
+  const goToList = () => {
+    handleReset();
+    setView('list');
+  };
+
+  /* ── Filter logic ── */
+  const filteredTickets = tickets.filter((t) => {
+    const q = search.toLowerCase();
+    if (q) {
+      const hit = [t.id, t.name, t.phone, t.address, t.vehicleType, t.status]
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+      if (!hit) return false;
+    }
+    const created = new Date(t.createdAt);
+    const dateStr = created.toISOString().slice(0, 10); // YYYY-MM-DD
+    const timeStr = created.toTimeString().slice(0, 5); // HH:MM
+    if (dateFrom && dateStr < dateFrom) return false;
+    if (dateTo && dateStr > dateTo) return false;
+    if (timeFrom && timeStr < timeFrom) return false;
+    if (timeTo && timeStr > timeTo) return false;
+    return true;
+  });
+
+  /* ── List view ── */
+  if (view === 'list') {
+    return (
+      <TicketListView
+        tickets={filteredTickets}
+        search={search}
+        setSearch={setSearch}
+        dateFrom={dateFrom}
+        setDateFrom={setDateFrom}
+        dateTo={dateTo}
+        setDateTo={setDateTo}
+        timeFrom={timeFrom}
+        setTimeFrom={setTimeFrom}
+        timeTo={timeTo}
+        setTimeTo={setTimeTo}
+        onNewTicket={() => setView('form')}
+      />
+    );
+  }
 
   /* ── Submitted confirmation screen ── */
   if (submitted && lastTicket) {
@@ -809,24 +1363,38 @@ export default function AgentPage() {
               </div>
             ))}
           </div>
-          <button
-            style={{
-              ...s.dispatchBtn,
-              background: '#1A73E8',
-              boxShadow: '0 4px 18px rgba(26,115,232,.35)',
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-            }}
-            onClick={handleReset}
-          >
-            <PlusOutlined
-              style={{ fontSize: '16px', verticalAlign: 'middle' }}
-            />{' '}
-            Submit Another Ticket
-          </button>
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button
+              style={{
+                ...s.dispatchBtn,
+                flex: 1,
+                background: '#21262D',
+                border: '1px solid #30363D',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+              onClick={goToList}
+            >
+              <ArrowLeftOutlined style={{ fontSize: 14 }} /> Back to List
+            </button>
+            <button
+              style={{
+                ...s.dispatchBtn,
+                flex: 1,
+                background: '#1A73E8',
+                boxShadow: '0 4px 18px rgba(26,115,232,.35)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+              onClick={handleReset}
+            >
+              <PlusOutlined style={{ fontSize: 14 }} /> New Ticket
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -834,6 +1402,35 @@ export default function AgentPage() {
 
   return (
     <div style={s.pageLayout}>
+      {/* ── Back to list header ── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 16,
+        }}
+      >
+        <button
+          onClick={goToList}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'transparent',
+            border: 'none',
+            color: '#8B949E',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 600,
+            fontFamily: 'Sora, sans-serif',
+            padding: 0,
+          }}
+        >
+          <ArrowLeftOutlined /> Back to Tickets
+        </button>
+        <span style={{ fontSize: 12, color: '#30363D' }}>New Ticket</span>
+      </div>
       {/* Unit type selector */}
       <div style={s.card}>
         <div style={s.cardTitle}>

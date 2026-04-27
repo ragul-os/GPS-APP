@@ -1,5 +1,5 @@
 /**
- * server.js — Emergency Control System  v5.2
+ * server.js — Emergency Management System  v5.2
  *
  * KEY FIX vs v4.0:
  * ─────────────────────────────────────────────────────────────────────────────
@@ -1552,6 +1552,188 @@ app.get('/health', (req, res) =>
   }),
 );
 
+// ══════════════════════════════════════════════════════════════════════════════
+// USER ROLE LOOKUP — reads from public.ems_users (PostgreSQL)
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /api/user-role/:username
+// Returns: { role: 'agent' | 'dispatcher' | 'admin' }
+// Used by the frontend after successful Matrix authentication.
+app.get('/api/user-role/:username', async (req, res) => {
+  const { username } = req.params;
+  if (!username) return res.status(400).json({ error: 'username required' });
+
+  try {
+    const result = await pgPool.query(
+      'SELECT role FROM public.ems_users WHERE user_name = $1 LIMIT 1',
+      [username.trim().toLowerCase()],
+    );
+
+    if (result.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ error: 'User not found in EMS user registry. Contact admin.' });
+    }
+
+    const role = result.rows[0].role;
+    const validRoles = ['agent', 'dispatcher', 'admin'];
+    if (!validRoles.includes(role)) {
+      console.warn(`[user-role] Unknown role "${role}" for user "${username}"`);
+      return res.status(403).json({ error: `Unrecognised role: ${role}` });
+    }
+
+    console.log(`[user-role] ${username} → ${role}`);
+    return res.json({ role });
+  } catch (err) {
+    console.error('[user-role] DB error:', err.message);
+    return res.status(500).json({ error: 'Database error. Try again.' });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TICKETS LIST — reads from public.tickets (PostgreSQL)
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /api/tickets
+// Returns all tickets ordered by created_at DESC.
+// Supports optional query params: status, priority, search (name/phone/address).
+app.get('/api/tickets', async (req, res) => {
+  try {
+    const { status, priority } = req.query;
+    const params = [];
+    const conditions = [];
+
+    if (status) {
+      params.push(status);
+      conditions.push(`ticket_status = $${params.length}`);
+    }
+    if (priority) {
+      params.push(priority);
+      conditions.push(`priority = $${params.length}`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const { rows } = await pgPool.query(
+      `SELECT ticket_id, ani, ticket_details, ticket_status, priority,
+              agent_name, dispatcher_name, units, created_at
+         FROM public.tickets
+         ${where}
+         ORDER BY created_at DESC`,
+      params,
+    );
+    res.json({ success: true, tickets: rows });
+  } catch (err) {
+    console.error('[api/tickets] error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/timeline/:ticketId', async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    if (!ticketId) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'ticketId is required' });
+    }
+
+    console.log(`📜 TIMELINE API called for ticket: ${ticketId}`);
+
+    const { rows } = await pgPool.query(
+      `SELECT
+         id,
+         "timestamp"        AS created_at,
+         ticket_id,
+         event,
+         event_type,
+         source_id,
+         source_name,
+         ticket_details,
+         ticket_status,
+         priority,
+         team_details,
+         room_details,
+         remarks
+       FROM public.ticket_events
+       WHERE ticket_id = $1
+       ORDER BY "timestamp" ASC`,
+      [ticketId],
+    );
+
+    console.log(
+      `📦 TIMELINE rows fetched: ${rows.length} for ticket ${ticketId}`,
+    );
+
+    // Flatten jsonb fields so the frontend gets plain objects
+    const events = rows.map((row) => {
+      const ticketDetails =
+        typeof row.ticket_details === 'string'
+          ? JSON.parse(row.ticket_details)
+          : row.ticket_details || {};
+
+      const teamDetails =
+        typeof row.team_details === 'string'
+          ? JSON.parse(row.team_details)
+          : row.team_details || {};
+
+      const roomDetails =
+        typeof row.room_details === 'string'
+          ? JSON.parse(row.room_details)
+          : row.room_details || {};
+
+      // Pull unit_details and location out of ticket_details if present
+      const unit_details =
+        ticketDetails.unit_details || ticketDetails.unitDetails || null;
+      const location = ticketDetails.location || null;
+      const event_source =
+        ticketDetails.event_source ||
+        ticketDetails.eventSource ||
+        teamDetails.source ||
+        row.event_type ||
+        'system';
+      const remarks_obj =
+        ticketDetails.remarks || (row.remarks ? { note: row.remarks } : null);
+
+      return {
+        // Core identity
+        id: row.id,
+        created_at: row.created_at,
+        ticket_id: row.ticket_id,
+
+        // Event classification
+        event: row.event,
+        event_type: row.event_type,
+        ticket_status: row.ticket_status,
+        priority: row.priority,
+
+        // Source info (who triggered this event)
+        event_source,
+        source_id: row.source_id,
+        source_name: row.source_name,
+
+        // Optional enrichment
+        unit_details,
+        location,
+        remarks: remarks_obj,
+
+        // Raw jsonb blobs (available if frontend needs deeper drill-down)
+        ticket_details: ticketDetails,
+        team_details: teamDetails,
+        room_details: roomDetails,
+      };
+    });
+
+    res.json({
+      success: true,
+      ticketId,
+      total: events.length,
+      events,
+    });
+  } catch (err) {
+    console.error('❌ Timeline API error:', err.message);
+    res.status(500).json({ success: false, error: err.message, events: [] });
+  }
+});
+
 // ── Ticket Events (additive) — NATS-only: subscribes on ticket.events.{inbox,query}.* ──
 try {
   require('./ticketEvents').register(app, { pgPool, getNc: () => nc, sc });
@@ -1565,7 +1747,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚨 Emergency Control System v5.2 → http://0.0.0.0:${PORT}`);
+  console.log(`🚨 Emergency Management System v5.2 → http://0.0.0.0:${PORT}`);
   console.log(
     `💓 Heartbeat (keep-alive, DB only on comeback) → POST /heartbeat`,
   );
