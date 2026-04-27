@@ -11,6 +11,10 @@ const webhookApi = axios.create({
   headers: { 'ngrok-skip-browser-warning': 'true' },
 });
 
+// Axios instance pre-configured for the Webhook Engine (ngrok or direct).
+// The `ngrok-skip-browser-warning` header bypasses ngrok's free-tier HTML
+// interstitial page, which would otherwise block CORS for browser clients.
+
 // Units — REDIRECTED THROUGH GATEWAY
 export const getUnits = () =>
   webhookApi.get('/webhook/gps', {

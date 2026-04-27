@@ -1734,6 +1734,108 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
   }
 });
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TICKET TIMELINE API — reads from public.ticket_events
+// GET /api/timeline/:ticketId
+// ══════════════════════════════════════════════════════════════════════════════
+app.get('/api/timeline/:ticketId', async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    if (!ticketId) {
+      return res.status(400).json({ success: false, error: 'ticketId is required' });
+    }
+
+    console.log(`📜 TIMELINE API called for ticket: ${ticketId}`);
+
+    const { rows } = await pgPool.query(
+      `SELECT
+         id,
+         "timestamp"        AS created_at,
+         ticket_id,
+         event,
+         event_type,
+         source_id,
+         source_name,
+         ticket_details,
+         ticket_status,
+         priority,
+         team_details,
+         room_details,
+         remarks
+       FROM public.ticket_events
+       WHERE ticket_id = $1
+       ORDER BY "timestamp" ASC`,
+      [ticketId]
+    );
+
+    console.log(`📦 TIMELINE rows fetched: ${rows.length} for ticket ${ticketId}`);
+
+    // Flatten jsonb fields so the frontend gets plain objects
+    const events = rows.map((row) => {
+      const ticketDetails =
+        typeof row.ticket_details === 'string'
+          ? JSON.parse(row.ticket_details)
+          : row.ticket_details || {};
+
+      const teamDetails =
+        typeof row.team_details === 'string'
+          ? JSON.parse(row.team_details)
+          : row.team_details || {};
+
+      const roomDetails =
+        typeof row.room_details === 'string'
+          ? JSON.parse(row.room_details)
+          : row.room_details || {};
+
+      // Pull unit_details and location out of ticket_details if present
+      const unit_details  = ticketDetails.unit_details  || ticketDetails.unitDetails  || null;
+      const location      = ticketDetails.location      || null;
+      const event_source  = ticketDetails.event_source  || ticketDetails.eventSource  ||
+                            teamDetails.source           || row.event_type             || 'system';
+      const remarks_obj   = ticketDetails.remarks       || (row.remarks ? { note: row.remarks } : null);
+
+      return {
+        // Core identity
+        id:            row.id,
+        created_at:    row.created_at,
+        ticket_id:     row.ticket_id,
+
+        // Event classification
+        event:         row.event,
+        event_type:    row.event_type,
+        ticket_status: row.ticket_status,
+        priority:      row.priority,
+
+        // Source info (who triggered this event)
+        event_source,
+        source_id:     row.source_id,
+        source_name:   row.source_name,
+
+        // Optional enrichment
+        unit_details,
+        location,
+        remarks:       remarks_obj,
+
+        // Raw jsonb blobs (available if frontend needs deeper drill-down)
+        ticket_details: ticketDetails,
+        team_details:   teamDetails,
+        room_details:   roomDetails,
+      };
+    });
+
+    res.json({
+      success: true,
+      ticketId,
+      total: events.length,
+      events,
+    });
+  } catch (err) {
+    console.error('❌ Timeline API error:', err.message);
+    res.status(500).json({ success: false, error: err.message, events: [] });
+  }
+});
+
 // ── Ticket Events (additive) — NATS-only: subscribes on ticket.events.{inbox,query}.* ──
 try {
   require('./ticketEvents').register(app, { pgPool, getNc: () => nc, sc });

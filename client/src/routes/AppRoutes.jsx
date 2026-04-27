@@ -21,6 +21,7 @@ import GlobalChatPanel, {
 } from '../components/GlobalChatPanel';
 import RouteReplayPage from '../pages/RouteReplayPage';
 import TimelinePage from '../pages/TimelinePage';
+import TimelinePage from '../pages/TimelinePage';
 
 function ProtectedLayout() {
   const { dispatcher } = useAuth();
@@ -127,7 +128,8 @@ function ProtectedLayout() {
             path='/replay/:id'
             element={<RouteReplayPage />}
           />
-          <Route
+           <Route path="/timeline/:id" element={<TimelinePage />} />
+        <Route
             path='/timeline/:id'
             element={<TimelinePage />}
           />
