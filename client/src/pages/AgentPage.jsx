@@ -610,14 +610,13 @@ function FormField({ field, value, onChange }) {
 
 /* ─── Status / Priority helpers ─────────────────────────────────────────── */
 const STATUS_CFG = {
-  pending: { label: 'Pending', color: '#F9A825', bg: 'rgba(249,168,37,.15)' },
-  dispatched: {
-    label: 'Dispatched',
-    color: '#1A73E8',
-    bg: 'rgba(26,115,232,.15)',
-  },
-  resolved: { label: 'Resolved', color: '#34A853', bg: 'rgba(52,168,83,.15)' },
-  closed: { label: 'Closed', color: '#8B949E', bg: 'rgba(139,148,158,.15)' },
+  pending:    { label: 'Pending',    color: '#F9A825', bg: 'rgba(249,168,37,.15)' },
+  created:    { label: 'Created',    color: '#1A73E8', bg: 'rgba(26,115,232,.15)' },
+  dispatched: { label: 'Dispatched', color: '#1A73E8', bg: 'rgba(26,115,232,.15)' },
+  on_going:   { label: 'Ongoing',    color: '#9C27B0', bg: 'rgba(156,39,176,.15)' },
+  resolved:   { label: 'Resolved',   color: '#34A853', bg: 'rgba(52,168,83,.15)'  },
+  completed:  { label: 'Completed',  color: '#34A853', bg: 'rgba(52,168,83,.15)'  },
+  closed:     { label: 'Closed',     color: '#8B949E', bg: 'rgba(139,148,158,.15)'},
 };
 const PRIORITY_COLOR = {
   critical: '#E53935',
@@ -1098,6 +1097,7 @@ export default function AgentPage() {
       // Map DB columns → shape the list view expects
       const mapped = rows.map((r) => {
         const d = r.ticket_details || {};
+        console.log("Tickets Information", rows);
         return {
           id: r.ticket_id,
           vehicleType: d.unit_type || 'ambulance',
@@ -1105,7 +1105,7 @@ export default function AgentPage() {
           name: d.patient_name || d.caller_name || d.name || r.ani || 'Unknown',
           phone: d.phone_number || d.phone || r.ani || '',
           address: d.address || '',
-          status: r.ticket_status || 'pending',
+          status: r.ticket_status ,
           createdAt: new Date(r.created_at).getTime(),
           agentName: r.agent_name || '',
         };

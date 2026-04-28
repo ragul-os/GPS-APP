@@ -21,7 +21,7 @@ import GlobalChatPanel, {
 } from '../components/GlobalChatPanel';
 import RouteReplayPage from '../pages/RouteReplayPage';
 import TimelinePage from '../pages/TimelinePage';
-import TimelinePage from '../pages/TimelinePage';
+
 
 function ProtectedLayout() {
   const { dispatcher } = useAuth();

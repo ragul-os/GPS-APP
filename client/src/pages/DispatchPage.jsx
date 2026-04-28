@@ -200,7 +200,10 @@ function mapDbTicket(r) {
       f2: d.phone_number || d.phone || r.ani || '',
       f3: d.address || '',
     },
-    destination: d.destination || null,
+   destination: {
+      latitude: d.latitude || null,
+      longitude: d.longitude || null,
+    },
     notes: d.notes || '',
   };
 }
