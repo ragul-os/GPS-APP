@@ -20,6 +20,12 @@ import {
   SearchOutlined,
   FileTextOutlined,
   FilterOutlined,
+  PhoneOutlined,
+  PhoneFilled,
+  CustomerServiceOutlined,
+  CloseOutlined,
+  DeleteOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 
 /* ─── constants ─────────────────────────────────────────────────────────── */
@@ -610,14 +616,13 @@ function FormField({ field, value, onChange }) {
 
 /* ─── Status / Priority helpers ─────────────────────────────────────────── */
 const STATUS_CFG = {
-  pending: { label: 'Pending', color: '#F9A825', bg: 'rgba(249,168,37,.15)' },
-  dispatched: {
-    label: 'Dispatched',
-    color: '#1A73E8',
-    bg: 'rgba(26,115,232,.15)',
-  },
-  resolved: { label: 'Resolved', color: '#34A853', bg: 'rgba(52,168,83,.15)' },
-  closed: { label: 'Closed', color: '#8B949E', bg: 'rgba(139,148,158,.15)' },
+  pending:    { label: 'Pending',    color: '#F9A825', bg: 'rgba(249,168,37,.15)' },
+  created:    { label: 'Created',    color: '#1A73E8', bg: 'rgba(26,115,232,.15)' },
+  dispatched: { label: 'Dispatched', color: '#1A73E8', bg: 'rgba(26,115,232,.15)' },
+  on_going:   { label: 'Ongoing',    color: '#9C27B0', bg: 'rgba(156,39,176,.15)' },
+  resolved:   { label: 'Resolved',   color: '#34A853', bg: 'rgba(52,168,83,.15)'  },
+  completed:  { label: 'Completed',  color: '#34A853', bg: 'rgba(52,168,83,.15)'  },
+  closed:     { label: 'Closed',     color: '#8B949E', bg: 'rgba(139,148,158,.15)'},
 };
 const PRIORITY_COLOR = {
   critical: '#E53935',
@@ -660,6 +665,431 @@ function StatusBadge({ status }) {
   );
 }
 
+/* ─── Dummy dialer / mini contact-center panel (UI-only, no telephony) ──── */
+const DUMMY_CALLERS = [
+  { name: 'Ramesh Kumar',  number: '+91 98765 43210' },
+  { name: 'Priya Nair',    number: '+91 99887 11220' },
+  { name: 'Anil Verma',    number: '+91 98111 23456' },
+  { name: 'Control Room',  number: '+91 100' },
+  { name: 'Sita Devi',     number: '+91 90123 45678' },
+  { name: 'Vikram Singh',  number: '+91 97000 11122' },
+  { name: 'Hospital Admin',number: '+91 80045 12121' },
+  { name: 'Unknown',       number: '+91 87654 32100' },
+];
+const INITIAL_CALL_HISTORY = [
+  { id: 'h1', name: 'Ramesh Kumar', number: '+91 98765 43210', type: 'incoming', duration: '02:14', when: '2m ago' },
+  { id: 'h2', name: 'Unknown',      number: '+91 90000 12345', type: 'missed',   duration: '—',     when: '14m ago' },
+  { id: 'h3', name: 'Priya Nair',   number: '+91 99887 11220', type: 'outgoing', duration: '00:45', when: '1h ago' },
+  { id: 'h4', name: 'Control Room', number: '+91 100',         type: 'outgoing', duration: '03:02', when: '2h ago' },
+];
+const RING_DURATION_MS = 30000;
+const INCOMING_INTERVAL_MS = 60000;
+
+function fmtCallDuration(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function DialerPanel({ open, onToggle }) {
+  const [number, setNumber] = useState('');
+  const [tab, setTab] = useState('keypad'); // 'keypad' | 'history'
+  const [incomingCalls, setIncomingCalls] = useState([]);
+  const [activeCall, setActiveCall] = useState(null);
+  const [history, setHistory] = useState(INITIAL_CALL_HISTORY);
+  const [, setTick] = useState(0);
+  const ringTimersRef = useRef(new Map());
+
+  // Spawn a random incoming call every minute; auto-mark missed after 30s.
+  useEffect(() => {
+    const spawn = () => {
+      const caller = DUMMY_CALLERS[Math.floor(Math.random() * DUMMY_CALLERS.length)];
+      const id = `call-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const call = { id, ...caller, ringStartedAt: Date.now() };
+      setIncomingCalls((curr) => [...curr, call]);
+      const t = setTimeout(() => {
+        ringTimersRef.current.delete(id);
+        setIncomingCalls((curr) => {
+          if (!curr.find((c) => c.id === id)) return curr;
+          setHistory((h) => [
+            { id, name: call.name, number: call.number, type: 'missed', duration: '—', when: 'Just now' },
+            ...h,
+          ]);
+          return curr.filter((c) => c.id !== id);
+        });
+      }, RING_DURATION_MS);
+      ringTimersRef.current.set(id, t);
+    };
+    const interval = setInterval(spawn, INCOMING_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      ringTimersRef.current.forEach((t) => clearTimeout(t));
+      ringTimersRef.current.clear();
+    };
+  }, []);
+
+  // 1-second ticker for live duration / ring countdown displays.
+  useEffect(() => {
+    if (!activeCall && incomingCalls.length === 0) return;
+    const i = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(i);
+  }, [activeCall, incomingCalls.length]);
+
+  const press = (k) => setNumber((n) => (n + k).slice(0, 18));
+  const back  = () => setNumber((n) => n.slice(0, -1));
+  const clear = () => setNumber('');
+
+  const pushHistory = (entry) => setHistory((h) => [entry, ...h]);
+
+  const finishActive = (a) => {
+    if (!a) return;
+    pushHistory({
+      id: a.id, name: a.name, number: a.number,
+      type: a.outgoing ? 'outgoing' : 'incoming',
+      duration: fmtCallDuration(Date.now() - a.connectedAt),
+      when: 'Just now',
+    });
+  };
+
+  const acceptCall = (call) => {
+    const t = ringTimersRef.current.get(call.id);
+    if (t) { clearTimeout(t); ringTimersRef.current.delete(call.id); }
+    setIncomingCalls((curr) => curr.filter((c) => c.id !== call.id));
+    if (activeCall) finishActive(activeCall);
+    setActiveCall({ ...call, connectedAt: Date.now() });
+  };
+
+  const declineCall = (call) => {
+    const t = ringTimersRef.current.get(call.id);
+    if (t) { clearTimeout(t); ringTimersRef.current.delete(call.id); }
+    setIncomingCalls((curr) => curr.filter((c) => c.id !== call.id));
+    pushHistory({
+      id: call.id, name: call.name, number: call.number,
+      type: 'missed', duration: '—', when: 'Just now',
+    });
+  };
+
+  const endActive = () => {
+    if (!activeCall) return;
+    finishActive(activeCall);
+    setActiveCall(null);
+  };
+
+  const startOutgoing = () => {
+    if (!number) return;
+    if (activeCall) finishActive(activeCall);
+    setActiveCall({
+      id: `out-${Date.now()}`,
+      name: number, number,
+      connectedAt: Date.now(), outgoing: true,
+    });
+  };
+
+  if (!open) {
+    return (
+      <div style={ds.collapsed}>
+        <button style={ds.toggleBtn} onClick={onToggle} title='Open dialer'>
+          <CustomerServiceOutlined style={{ fontSize: 22 }} />
+        </button>
+      </div>
+    );
+  }
+
+  const KEYS = [
+    ['1', ''], ['2', 'ABC'], ['3', 'DEF'],
+    ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
+    ['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ'],
+    ['*', ''], ['0', '+'], ['#', ''],
+  ];
+
+  return (
+    <div style={ds.expanded}>
+      {/* Header */}
+      <div style={ds.header}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <CustomerServiceOutlined style={{ fontSize: 16, color: '#34A853' }} />
+          <span style={ds.headerTitle}>Contact Center</span>
+        </div>
+        <button style={ds.closeBtn} onClick={onToggle} title='Close dialer'>
+          <CloseOutlined />
+        </button>
+      </div>
+
+      {/* Agent status */}
+      <div style={ds.statusRow}>
+        <span style={ds.statusDot} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#34A853' }}>Available</span>
+        <span style={{ marginLeft: 'auto', fontSize: 10, color: '#8B949E' }}>Ext. 2041</span>
+      </div>
+
+      {/* Active connected call */}
+      {activeCall && (
+        <div style={ds.activeCard}>
+          <span style={ds.pulse} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={ds.activeName}>{activeCall.name}</div>
+            <div style={ds.activeMeta}>
+              Connected · {fmtCallDuration(Date.now() - activeCall.connectedAt)}
+            </div>
+          </div>
+          <button style={ds.endSmallBtn} onClick={endActive} title='End call'>
+            <PhoneFilled style={{ transform: 'rotate(135deg)' }} />
+          </button>
+        </div>
+      )}
+
+      {/* Incoming ringing calls */}
+      {incomingCalls.length > 0 && (
+        <div style={ds.incomingStack}>
+          {incomingCalls.map((c) => {
+            const remaining = Math.max(
+              0,
+              Math.ceil((RING_DURATION_MS - (Date.now() - c.ringStartedAt)) / 1000),
+            );
+            return (
+              <div key={c.id} style={ds.incomingCard}>
+                <div style={ds.incomingHeader}>
+                  <span style={ds.ringPulse} />
+                  <span style={ds.incomingLabel}>Incoming Call · {remaining}s</span>
+                </div>
+                <div style={ds.incomingName}>{c.name}</div>
+                <div style={ds.incomingNum}>{c.number}</div>
+                <div style={ds.incomingActions}>
+                  <button style={ds.declineBtn} onClick={() => declineCall(c)}>
+                    <PhoneFilled style={{ marginRight: 4, transform: 'rotate(135deg)' }} /> Decline
+                  </button>
+                  <button style={ds.acceptBtn} onClick={() => acceptCall(c)}>
+                    <PhoneFilled style={{ marginRight: 4 }} /> Accept
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={ds.tabs}>
+        <button
+          style={{ ...ds.tabBtn, ...(tab === 'keypad' ? ds.tabActive : {}) }}
+          onClick={() => setTab('keypad')}
+        >
+          <PhoneOutlined style={{ marginRight: 5 }} /> Dialer
+        </button>
+        <button
+          style={{ ...ds.tabBtn, ...(tab === 'history' ? ds.tabActive : {}) }}
+          onClick={() => setTab('history')}
+        >
+          <HistoryOutlined style={{ marginRight: 5 }} /> History
+        </button>
+      </div>
+
+      {tab === 'keypad' ? (
+        <>
+          {/* Number display */}
+          <div style={ds.numberWrap}>
+            <input
+              style={ds.numberInput}
+              value={number}
+              onChange={(e) => setNumber(e.target.value.replace(/[^0-9*#+]/g, '').slice(0, 18))}
+              placeholder='Enter number'
+            />
+            {number && (
+              <button style={ds.backspace} onClick={back} title='Backspace'>
+                <DeleteOutlined />
+              </button>
+            )}
+          </div>
+
+          {/* Keypad */}
+          <div style={ds.keypad}>
+            {KEYS.map(([k, sub]) => (
+              <button key={k} style={ds.key} onClick={() => press(k)}>
+                <div style={ds.keyMain}>{k}</div>
+                {sub && <div style={ds.keySub}>{sub}</div>}
+              </button>
+            ))}
+          </div>
+
+          {/* Call controls */}
+          <div style={ds.callRow}>
+            <button style={ds.clearBtn} onClick={clear} disabled={!number}>Clear</button>
+            <button
+              style={ds.callBtn}
+              onClick={startOutgoing}
+              disabled={!number || !!activeCall}
+            >
+              <PhoneFilled style={{ marginRight: 6 }} /> Call
+            </button>
+          </div>
+        </>
+      ) : (
+        <div style={ds.histList}>
+          {history.map((c) => {
+            const color = c.type === 'missed' ? '#E53935' : c.type === 'incoming' ? '#34A853' : '#1A73E8';
+            const arrow = c.type === 'missed' ? '✕' : c.type === 'incoming' ? '↙' : '↗';
+            return (
+              <div key={c.id} style={ds.histItem} onClick={() => { setNumber(c.number.replace(/[^0-9*#+]/g, '')); setTab('keypad'); }}>
+                <div style={{ ...ds.histIcon, color }}>{arrow}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={ds.histName}>{c.name}</div>
+                  <div style={ds.histNum}>{c.number}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 10, color: '#8B949E' }}>{c.when}</div>
+                  <div style={{ fontSize: 10, color: '#6B7789', fontFamily: 'JetBrains Mono, monospace' }}>{c.duration}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ds = {
+  collapsed: {
+    width: 56, flexShrink: 0, background: '#0D1117', borderRight: '1px solid #30363D',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 18,
+    position: 'sticky', top: 0, alignSelf: 'flex-start', height: '100vh',
+  },
+  toggleBtn: {
+    width: 40, height: 40, borderRadius: 10, border: '1px solid #30363D',
+    background: 'rgba(52,168,83,.12)', color: '#34A853', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+
+  expanded: {
+    width: 300, flexShrink: 0, background: '#0D1117', borderRight: '1px solid #30363D',
+    padding: '14px 14px 18px', display: 'flex', flexDirection: 'column',
+    fontFamily: 'Sora, sans-serif',
+    position: 'sticky', top: 0, alignSelf: 'flex-start', height: '100vh',
+    overflowY: 'auto',
+  },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  headerTitle: { fontSize: 13, fontWeight: 800, color: '#E6EDF3', letterSpacing: 0.3 },
+  closeBtn: {
+    background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer',
+    fontSize: 14, padding: 4, borderRadius: 6,
+  },
+  statusRow: {
+    display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 8,
+    background: '#161B22', border: '1px solid #30363D', marginBottom: 12,
+  },
+  statusDot: { width: 8, height: 8, borderRadius: '50%', background: '#34A853', boxShadow: '0 0 6px #34A853' },
+
+  tabs: { display: 'flex', gap: 4, background: '#161B22', padding: 3, borderRadius: 8, marginBottom: 12, border: '1px solid #30363D' },
+  tabBtn: {
+    flex: 1, background: 'transparent', border: 'none', color: '#8B949E',
+    fontSize: 11, fontWeight: 700, padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
+    fontFamily: 'Sora, sans-serif',
+  },
+  tabActive: { background: '#30363D', color: '#E6EDF3' },
+
+  activeCard: {
+    display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+    padding: '10px 12px', borderRadius: 10,
+    background: 'rgba(52,168,83,.10)', border: '1px solid rgba(52,168,83,.45)',
+  },
+  activeName: {
+    fontSize: 12, fontWeight: 800, color: '#E6EDF3',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  activeMeta: { fontSize: 10, color: '#34A853', fontFamily: 'JetBrains Mono, monospace', marginTop: 2 },
+  endSmallBtn: {
+    width: 32, height: 32, borderRadius: 8, border: 'none', background: '#E53935',
+    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', fontSize: 13, flexShrink: 0,
+    boxShadow: '0 3px 10px rgba(229,57,53,.35)',
+  },
+
+  incomingStack: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 },
+  incomingCard: {
+    padding: '10px 12px', borderRadius: 10,
+    background: 'rgba(26,115,232,.08)', border: '1px solid rgba(26,115,232,.45)',
+    display: 'flex', flexDirection: 'column', gap: 4,
+  },
+  incomingHeader: { display: 'flex', alignItems: 'center', gap: 6 },
+  ringPulse: {
+    width: 8, height: 8, borderRadius: '50%', background: '#1A73E8',
+    animation: 'livePulse 1s infinite',
+  },
+  incomingLabel: { fontSize: 10, fontWeight: 700, color: '#1A73E8', letterSpacing: 0.3 },
+  incomingName: {
+    fontSize: 13, fontWeight: 800, color: '#E6EDF3',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  incomingNum: { fontSize: 10, color: '#8B949E', fontFamily: 'JetBrains Mono, monospace' },
+  incomingActions: { display: 'flex', gap: 6, marginTop: 4 },
+  declineBtn: {
+    flex: 1, background: 'transparent', border: '1px solid #E53935', borderRadius: 8,
+    color: '#E53935', padding: '6px 0', fontSize: 11, fontWeight: 700, cursor: 'pointer',
+    fontFamily: 'Sora, sans-serif',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
+  acceptBtn: {
+    flex: 1, background: '#34A853', border: 'none', borderRadius: 8, color: '#fff',
+    padding: '6px 0', fontSize: 11, fontWeight: 800, cursor: 'pointer',
+    fontFamily: 'Sora, sans-serif',
+    boxShadow: '0 3px 10px rgba(52,168,83,.3)',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
+
+  numberWrap: { position: 'relative', marginBottom: 12 },
+  numberInput: {
+    width: '100%', boxSizing: 'border-box', background: '#161B22', border: '1px solid #30363D',
+    borderRadius: 10, padding: '12px 38px 12px 12px', fontSize: 18, fontWeight: 700,
+    color: '#E6EDF3', outline: 'none', fontFamily: 'JetBrains Mono, monospace', letterSpacing: 1,
+  },
+  backspace: {
+    position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+    background: 'transparent', border: 'none', color: '#8B949E', cursor: 'pointer', fontSize: 14, padding: 4,
+  },
+
+  keypad: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginBottom: 12 },
+  key: {
+    background: '#161B22', border: '1px solid #30363D', borderRadius: 10,
+    padding: '10px 0', cursor: 'pointer', color: '#E6EDF3', display: 'flex',
+    flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    fontFamily: 'Sora, sans-serif', transition: 'background .12s',
+  },
+  keyMain: { fontSize: 18, fontWeight: 700, lineHeight: 1 },
+  keySub: { fontSize: 8, color: '#8B949E', letterSpacing: 1, marginTop: 2 },
+
+  callRow: { display: 'flex', gap: 8 },
+  clearBtn: {
+    flex: 1, background: 'transparent', border: '1px solid #30363D', borderRadius: 9,
+    color: '#8B949E', padding: '9px 0', fontSize: 11, fontWeight: 700, cursor: 'pointer',
+    fontFamily: 'Sora, sans-serif',
+  },
+  callBtn: {
+    flex: 2, background: '#34A853', border: 'none', borderRadius: 9, color: '#fff',
+    padding: '10px 0', fontSize: 12, fontWeight: 800, cursor: 'pointer',
+    boxShadow: '0 4px 14px rgba(52,168,83,.3)', fontFamily: 'Sora, sans-serif',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
+  endBtn: {
+    flex: 2, background: '#E53935', border: 'none', borderRadius: 9, color: '#fff',
+    padding: '10px 0', fontSize: 12, fontWeight: 800, cursor: 'pointer',
+    boxShadow: '0 4px 14px rgba(229,57,53,.3)', fontFamily: 'Sora, sans-serif',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
+  onCallBadge: {
+    marginTop: 10, padding: '6px 10px', borderRadius: 8, background: 'rgba(229,57,53,.12)',
+    color: '#E53935', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6,
+  },
+  pulse: { width: 8, height: 8, borderRadius: '50%', background: '#E53935', animation: 'livePulse 1s infinite' },
+
+  histList: { display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', maxHeight: 460 },
+  histItem: {
+    display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8,
+    background: '#161B22', border: '1px solid #30363D', cursor: 'pointer',
+  },
+  histIcon: { fontSize: 16, fontWeight: 800, width: 18, textAlign: 'center' },
+  histName: { fontSize: 12, fontWeight: 700, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  histNum: { fontSize: 10, color: '#8B949E', fontFamily: 'JetBrains Mono, monospace' },
+};
+
 /* ─── Ticket list view ───────────────────────────────────────────────────── */
 function TicketListView({
   tickets,
@@ -674,6 +1104,8 @@ function TicketListView({
   timeTo,
   setTimeTo,
   onNewTicket,
+  dialerOpen,
+  setDialerOpen,
 }) {
   const inputStyle = {
     background: '#0D1117',
@@ -696,7 +1128,9 @@ function TicketListView({
   };
 
   return (
-    <div style={{ padding: '24px 28px', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', minHeight: '100vh' }}>
+      <DialerPanel open={dialerOpen} onToggle={() => setDialerOpen((v) => !v)} />
+      <div style={{ flex: 1, minWidth: 0, padding: '24px 28px' }}>
       {/* ── Header ── */}
       <div
         style={{
@@ -1063,6 +1497,7 @@ function TicketListView({
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -1090,6 +1525,10 @@ export default function AgentPage() {
   const [lastTicket, setLastTicket] = useState(null);
   const [error, setError] = useState('');
 
+  /* ── Dialer panel — shared across list & form views ── */
+  const [dialerOpen, setDialerOpen] = useState(false);
+  const toggleDialer = () => setDialerOpen((v) => !v);
+
   /* ── Load tickets from PostgreSQL via API ── */
   const loadTickets = useCallback(async () => {
     try {
@@ -1098,6 +1537,7 @@ export default function AgentPage() {
       // Map DB columns → shape the list view expects
       const mapped = rows.map((r) => {
         const d = r.ticket_details || {};
+        console.log("Tickets Information", rows);
         return {
           id: r.ticket_id,
           vehicleType: d.unit_type || 'ambulance',
@@ -1105,7 +1545,7 @@ export default function AgentPage() {
           name: d.patient_name || d.caller_name || d.name || r.ani || 'Unknown',
           phone: d.phone_number || d.phone || r.ani || '',
           address: d.address || '',
-          status: r.ticket_status || 'pending',
+          status: r.ticket_status ,
           createdAt: new Date(r.created_at).getTime(),
           agentName: r.agent_name || '',
         };
@@ -1192,15 +1632,17 @@ export default function AgentPage() {
         ...(typeField && answers.f4 ? { [typeField]: answers.f4 } : {}),
         notes: ticket.notes,
       },
-    }).catch((err) =>
-      console.warn(
-        '[ticket-events] create failed:',
-        err?.response?.data?.error || err.message,
-      ),
-    );
+    })
+      .then(() => window.dispatchEvent(new Event('agentTicketsChange')))
+      .catch((err) =>
+        console.warn(
+          '[ticket-events] create failed:',
+          err?.response?.data?.error || err.message,
+        ),
+      );
 
-    setLastTicket(ticket);
-    setSubmitted(true);
+    // Return immediately to the tickets list (no confirmation screen).
+    goToList();
   };
 
   const handleReset = () => {
@@ -1255,6 +1697,8 @@ export default function AgentPage() {
         timeTo={timeTo}
         setTimeTo={setTimeTo}
         onNewTicket={() => setView('form')}
+        dialerOpen={dialerOpen}
+        setDialerOpen={setDialerOpen}
       />
     );
   }
@@ -1401,7 +1845,9 @@ export default function AgentPage() {
   }
 
   return (
-    <div style={s.pageLayout}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', minHeight: '100vh' }}>
+      <DialerPanel open={dialerOpen} onToggle={toggleDialer} />
+      <div style={{ ...s.pageLayout, flex: 1, minWidth: 0 }}>
       {/* ── Back to list header ── */}
       <div
         style={{
@@ -1656,6 +2102,7 @@ export default function AgentPage() {
           {ucfg?.icon} SUBMIT INCIDENT TICKET
         </button>
       </div>
+    </div>
     </div>
   );
 }

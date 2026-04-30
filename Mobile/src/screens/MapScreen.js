@@ -510,6 +510,15 @@ const ping = (
     'PING',
   );
 };
+
+
+const markUnitAvailable = (uid) => {
+  fetch(`${SERVER_URL}/api/units/available`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ unitId: uid }),
+  }).catch(err => console.warn('[markUnitAvailable] failed:', err.message));
+};
 // Unit trip_status → ticket-events `event` (UPPERCASE taxonomy).
 // ACKNOWLEDGED is emitted from AlertScreen on accept, so it's not in this map.
 const TRIP_STATUS_TO_EVENT = {
@@ -1268,6 +1277,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
     setTripStatus('completed');
     isCompletedRef.current = true;
     notifyStatus(ambulanceId, 'completed', ticketNo);
+    markUnitAvailable(ambulanceId); 
     if (carRef.current)
       ping(
         ambulanceId,
@@ -1297,6 +1307,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
             tripStatusRef.current = 'abandoned';
             setTripStatus('abandoned');
             notifyStatus(ambulanceId, 'abandoned', ticketNo);
+            markUnitAvailable(ambulanceId);
             if (carRef.current)
               ping(
                 ambulanceId,
@@ -1321,6 +1332,7 @@ export default function MapScreen({ route: navRoute, navigation }) {
   const stopNav = () => {
     tripStatusRef.current = 'completed';
     notifyStatus(ambulanceId, 'completed', ticketNo);
+    markUnitAvailable(ambulanceId);
     if (carRef.current)
       ping(
         ambulanceId,

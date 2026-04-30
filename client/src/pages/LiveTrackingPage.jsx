@@ -1,28 +1,22 @@
 /**
- * LiveTrackingPage — v6 FLICKER-FREE FINAL
+ * LiveTrackingPage — v7 MULTI-UNIT + DB-CLOSE FINAL (FIXED)
  *
- * FIXES IN THIS VERSION:
- * ─────────────────────────────────────────────────────────────────────────────
- * FIX 1 — Removed replayMode state + broken <Route> wrapper from return()
- *          The conditional {replayMode ? <Route.../> : <>...</>} was causing
- *          React Router to mutate location.key → re-firing the sync useEffect
- *          → setTripStatus('idle') → visible flicker every ~100ms
- *
- * FIX 2 — setTripStatus now uses functional updater with terminal-state guard
- *          Never downgrades from 'completed'/'abandoned' back to anything
- *
- * FIX 3 — lastTripStRef guard added: never let stale 'idle' overwrite a
- *          terminal status in the side-effects block
- *
- * FIX 4 — The navigation sync useEffect now only resets tripStatus to 'idle'
- *          when the ticket is NOT already completed
- *
- * FIX 5 — Added [FLICKER-DEBUG] console logs so you can trace every status
- *          change in DevTools. Remove them once confirmed stable.
- * ─────────────────────────────────────────────────────────────────────────────
+ * KEY FIXES:
+ * 1. completedUnitsSetRef — single source of truth for which units have fired COMPLETED.
+ *    No more relying on unitStatusesRef being in sync with React state.
+ * 2. tryCloseTicket() — called from BOTH the main poll (active unit) AND the
+ *    status-poll (non-active units). Whichever fires last triggers the DB close.
+ * 3. dbClosedRef guards are kept but the allDone check now uses
+ *    completedUnitsSetRef which is always authoritative.
  */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getAmbulanceLocation, getDirections } from '../api/api';
 import axios from 'axios';
@@ -73,7 +67,11 @@ import {
   GOOGLE_ROUTES_COMPUTE_URL,
 } from '../config/apiConfig';
 import RouteReplayPage from '../pages/RouteReplayPage';
-import { closeTicketEvent, getTicketEvent } from '../services/ticketEventsApi';
+import {
+  closeTicketEvent,
+  getTicketEvent,
+  unitTicketEvent,
+} from '../services/ticketEventsApi';
 
 const DARK_MAP_STYLES = [
   { elementType: 'geometry', stylers: [{ color: '#1a1f2e' }] },
@@ -566,6 +564,24 @@ function speedToColor(speed) {
 // ── localStorage helpers ──────────────────────────────────────────────────────
 function getAgentTickets() {
   return JSON.parse(localStorage.getItem('agentTickets') || '[]');
+}
+// Return the UNION of assignedUnits across every agent ticket that references
+// the given alert/ticket id. Handles the case where a second dispatch created
+// a new ticket entry instead of appending to an existing one.
+function resolveDispatchedUnits(routeId, alertObj) {
+  const all = getAgentTickets();
+  const matched = all.filter(
+    (tk) =>
+      (tk.alertIds || []).includes(routeId) ||
+      tk.id === routeId ||
+      (alertObj?.agentTicketId && tk.id === alertObj.agentTicketId),
+  );
+  const set = new Set();
+  matched.forEach((tk) =>
+    (tk.assignedUnits || []).forEach((u) => u && set.add(u)),
+  );
+  if (alertObj?.assignedUnit) set.add(alertObj.assignedUnit);
+  return [...set];
 }
 function saveAgentTickets(t) {
   localStorage.setItem('agentTickets', JSON.stringify(t));
@@ -1229,7 +1245,6 @@ function MiniMapOverlay({
   const miniMkrsRef = useRef({});
   const hasFitOnce = useRef(false);
   const [collapsed, setCollapsed] = useState(false);
-
   const activeType = unitTypes[activeUnitId] || 'ambulance';
   const activeColor = (UCFG[activeType] || UCFG.ambulance).color;
 
@@ -1280,10 +1295,7 @@ function MiniMapOverlay({
           url:
             'data:image/svg+xml;charset=UTF-8,' +
             encodeURIComponent(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">
-              <path d="M14 0C6 0 0 6 0 14C0 25 14 36 14 36C14 36 28 25 28 14C28 6 22 0 14 0Z" fill="#E53935" stroke="white" stroke-width="2"/>
-              <circle cx="14" cy="14" r="5" fill="white"/>
-            </svg>`,
+              `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M14 0C6 0 0 6 0 14C0 25 14 36 14 36C14 36 28 25 28 14C28 6 22 0 14 0Z" fill="#E53935" stroke="white" stroke-width="2"/><circle cx="14" cy="14" r="5" fill="white"/></svg>`,
             ),
           scaledSize: new window.google.maps.Size(28, 36),
           anchor: new window.google.maps.Point(14, 36),
@@ -1296,27 +1308,26 @@ function MiniMapOverlay({
     if (!miniMapObj.current || collapsed) return;
     const bounds = new window.google.maps.LatLngBounds();
     let hasLoc = false;
-    if (alertObj?.destination?.latitude) {
+    if (alertObj?.destination?.latitude)
       bounds.extend({
         lat: alertObj.destination.latitude,
         lng: alertObj.destination.longitude,
       });
-    }
     dispatchedUnits.forEach((uid) => {
       const loc = unitLocations[uid];
       if (!loc?.latitude) return;
       hasLoc = true;
-      const lat = parseFloat(loc.latitude);
-      const lng = parseFloat(loc.longitude);
-      const type = unitTypes[uid] || 'ambulance';
-      const ucfg = UCFG[type] || UCFG.ambulance;
-      const isActive = uid === activeUnitId;
-      const outerSize = isActive ? 44 : 30;
-      const innerR = isActive ? 14 : 9;
-      const ringR = isActive ? 20 : 0;
-      const sw = isActive ? 3 : 1.5;
-      const op = isActive ? 1 : 0.65;
-      const zIdx = isActive ? 110 : 100;
+      const lat = parseFloat(loc.latitude),
+        lng = parseFloat(loc.longitude);
+      const type = unitTypes[uid] || 'ambulance',
+        ucfg = UCFG[type] || UCFG.ambulance;
+      const isActive = uid === activeUnitId,
+        outerSize = isActive ? 44 : 30,
+        innerR = isActive ? 14 : 9,
+        ringR = isActive ? 20 : 0,
+        sw = isActive ? 3 : 1.5,
+        op = isActive ? 1 : 0.65,
+        zIdx = isActive ? 110 : 100;
       const svg = isActive
         ? `<svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 ${outerSize} ${outerSize}"><defs><filter id="s"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="${ucfg.color}" flood-opacity="0.8"/></filter></defs><circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${ringR}" fill="none" stroke="${ucfg.color}" stroke-width="2" opacity="0.4"/><circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${innerR}" fill="${ucfg.color}" stroke="white" stroke-width="${sw}" opacity="${op}" filter="url(#s)"/><text x="${outerSize / 2}" y="${outerSize / 2 + 6}" text-anchor="middle" font-size="16" fill="white" font-family="Arial" font-weight="bold">${type[0].toUpperCase()}</text></svg>`
         : `<svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 ${outerSize} ${outerSize}"><circle cx="${outerSize / 2}" cy="${outerSize / 2}" r="${innerR}" fill="${ucfg.color}" stroke="white" stroke-width="${sw}" opacity="${op}"/><text x="${outerSize / 2}" y="${outerSize / 2 + 4}" text-anchor="middle" font-size="11" fill="white" font-family="Arial" font-weight="bold">${type[0].toUpperCase()}</text></svg>`;
@@ -1820,12 +1831,20 @@ export default function LiveTrackingPage() {
   const navigate = useNavigate();
   const { id } = useParams();
   const location = useLocation();
-  const alertObj =
-    location.state?.alert ||
-    JSON.parse(localStorage.getItem('alertHistory') || '[]').find(
-      (a) => a.id === id || a.agentTicketId === id,
-    ) ||
-    null;
+  // Memoised so the reference is stable across renders. Without this, every
+  // render produced a new alertObj object, which invalidated the useCallbacks
+  // (fetchRoute, updateVehicle) that depend on it, causing the active-poll
+  // effect to restart continuously — that restart was the source of the
+  // main-map flicker between unit locations and the repeated timeline events.
+  const alertObj = useMemo(
+    () =>
+      location.state?.alert ||
+      JSON.parse(localStorage.getItem('alertHistory') || '[]').find(
+        (a) => a.id === id || a.agentTicketId === id,
+      ) ||
+      null,
+    [id, location.state, location.key],
+  );
 
   const mapRef = useRef(null);
   const mapObj = useRef(null);
@@ -1850,7 +1869,14 @@ export default function LiveTrackingPage() {
   const agentTicketRef = useRef(null);
   const ticketCompletedRef = useRef(false);
   const tripStatusRef = useRef('idle');
+  // ── KEY REF: prevents duplicate closeTicketEvent calls ──
   const dbClosedRef = useRef(false);
+
+  // ── FIX: single authoritative set of which units have completed ──────────
+  // This is the ONLY place we track completed units. Both the main poll
+  // (active unit) and the status-poll (non-active units) write to this ref.
+  // We never rely on unitStatusesRef for the allDone check.
+  const completedUnitsSetRef = useRef(new Set());
 
   const [tripStatus, setTripStatus] = useState('idle');
   const [live, setLive] = useState(false);
@@ -1885,24 +1911,15 @@ export default function LiveTrackingPage() {
     const t = all.find((tk) => (tk.alertIds || []).includes(id));
     return t?.status || alertObj?.status || 'dispatched';
   });
-  const [dispatchedUnits, setDispatchedUnits] = useState(() => {
-    const all = getAgentTickets();
-    const t = all.find((tk) => (tk.alertIds || []).includes(id));
-    if (t?.assignedUnits?.length) return t.assignedUnits;
-    if (alertObj?.assignedUnit) return [alertObj.assignedUnit];
-    return [];
-  });
+  const [dispatchedUnits, setDispatchedUnits] = useState(() =>
+    resolveDispatchedUnits(id, alertObj),
+  );
   const [unitLocations, setUnitLocations] = useState({});
   const [unitStatuses, setUnitStatuses] = useState({});
   const [unitTypes, setUnitTypes] = useState({});
-  const [activeUnitId, setActiveUnitId] = useState(() => {
-    const all = getAgentTickets();
-    const t = all.find((tk) => (tk.alertIds || []).includes(id));
-    return t?.assignedUnits?.[0] || alertObj?.assignedUnit || null;
-  });
-
-  // ── REMOVED: replayMode state (was causing Route wrapper flicker) ──────────
-  // Navigation to replay uses navigate() directly — no local state needed.
+  const [activeUnitId, setActiveUnitId] = useState(
+    () => resolveDispatchedUnits(id, alertObj)[0] || null,
+  );
 
   // Keep refs in sync
   useEffect(() => {
@@ -1929,15 +1946,145 @@ export default function LiveTrackingPage() {
 
   const cfg = UCFG[alertObj?.vehicleType || 'ambulance'] || UCFG.ambulance;
 
+  // Coalesce duplicate log entries: if the same message + unitId was logged
+  // within the last 4 seconds, skip it. This eliminates the repetitive
+  // 'Tracking:' / 'Incident:' / status-poll spam in the timeline panel.
   const addTLog = useCallback((msg, type = 'info', unitId = null) => {
-    const ts = new Date().toLocaleTimeString();
-    setTLogs((prev) => [
-      ...prev.slice(-120),
-      { msg: `[${ts}] ${msg}`, type, unitId },
-    ]);
+    const now = Date.now();
+    setTLogs((prev) => {
+      for (let i = prev.length - 1; i >= 0 && i >= prev.length - 5; i--) {
+        const e = prev[i];
+        if (
+          e &&
+          e.unitId === unitId &&
+          e.body === msg &&
+          now - (e.t || 0) < 4000
+        ) {
+          return prev;
+        }
+      }
+      const ts = new Date().toLocaleTimeString();
+      return [
+        ...prev.slice(-120),
+        { msg: `[${ts}] ${msg}`, body: msg, type, unitId, t: now },
+      ];
+    });
   }, []);
 
-  // ── FIX 4: Navigation sync — only reset tripStatus when NOT already terminal
+  // ── FIX: tryCloseTicket — called from BOTH poll loops ────────────────────
+  // This is the single function that decides whether all units are done
+  // and fires the DB close. It uses completedUnitsSetRef as the source of
+  // truth so it works correctly regardless of which poll loop calls it.
+  const tryCloseTicket = useCallback(
+    async (callerUnitId) => {
+      if (dbClosedRef.current) return;
+
+      const ticket = agentTicketRef.current;
+      // ── KEY FIX ─────────────────────────────────────────────────────────────
+      // When the ticket was loaded from the DB (not from localStorage), agentTicket
+      // is null and ticket?.id is undefined. Fall back to the URL param `id` so
+      // the DB close calls still fire correctly.
+      const ticketId = ticket?.id || id;
+
+      // Units: prefer the agentTicket's assignedUnits; fall back to the
+      // dispatchedUnitsRef (set from alertObj.assignedUnit); as a last resort
+      // use just the active unit so single-unit flows always work.
+      const units =
+        dispatchedUnitsRef.current.length > 0
+          ? dispatchedUnitsRef.current
+          : activeUnitIdRef.current
+            ? [activeUnitIdRef.current]
+            : [];
+
+      if (!ticketId || units.length === 0) return;
+
+      const allDone = units.every((uid) =>
+        completedUnitsSetRef.current.has(uid),
+      );
+
+      console.log(
+        `[tryCloseTicket] caller=${callerUnitId} ticketId=${ticketId} allDone=${allDone}`,
+        `completedSet=[${[...completedUnitsSetRef.current].join(',')}]`,
+        `required=[${units.join(',')}]`,
+      );
+
+      if (!allDone) {
+        const pending = units.filter(
+          (uid) => !completedUnitsSetRef.current.has(uid),
+        );
+        addTLog(
+          `Unit ${callerUnitId} completed — waiting for: ${pending.join(', ')}`,
+          'info',
+          callerUnitId,
+        );
+        return;
+      }
+
+      // All done — guard immediately so concurrent calls don't double-fire
+      dbClosedRef.current = true;
+      ticketCompletedRef.current = true;
+
+      // Step A: update localStorage + React state
+      // (no-op if ticket is DB-only and not present in localStorage)
+      if (ticket?.id) {
+        updateAgentTicketStatus(ticket.id, 'completed');
+        const fresh = getAgentTickets().find((t) => t.id === ticket.id);
+        (fresh?.alertIds || []).forEach((aid) =>
+          updateAlertHistoryStatus(aid, 'completed'),
+        );
+      }
+      window.dispatchEvent(new Event('agentTicketsChange'));
+      setTicketStatus('completed');
+      addTLog(
+        `All ${units.length} unit(s) completed → ticket auto-completed`,
+        'ok',
+      );
+
+      // Step B: fire unitTicketEvent COMPLETED for each unit (updates
+      //          public.tickets.ticket_status → 'completed' in DB), then close.
+      try {
+        for (const uid of units) {
+          await unitTicketEvent(ticketId, {
+            event: 'COMPLETED',
+            source_id: uid,
+            source_name: uid,
+            remarks: 'Auto-completed by live tracking',
+          }).catch((err) => {
+            // 409 = already sent by mobile app — harmless, ignore
+            if (err?.response?.status !== 409) {
+              console.warn(
+                `[tryCloseTicket] unitTicketEvent failed for ${uid}:`,
+                err.message,
+              );
+            }
+          });
+        }
+
+        // Step C: fire CLOSED / Stage 4 audit event
+        await closeTicketEvent(ticketId, {
+          source_id: 'system',
+          source_name: 'system',
+          remarks: `Auto-closed by live tracking — all ${units.length} unit(s) completed`,
+          completed_units: units,
+          completed_at: new Date().toISOString(),
+        });
+        addTLog(`Stage 4 EXIT logged → ticket ${ticketId}`, 'ok');
+      } catch (err) {
+        const is409 = err?.response?.status === 409;
+        if (!is409) {
+          // Allow retry on next page load
+          dbClosedRef.current = false;
+        }
+        addTLog(
+          `closeTicketEvent failed: ${err?.response?.data?.error || err.message}`,
+          'warn',
+        );
+      }
+    },
+    [id, addTLog],
+  );
+
+  // ── Navigation sync ───────────────────────────────────────────────────────
   useEffect(() => {
     const all = getAgentTickets();
     const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
@@ -1949,43 +2096,31 @@ export default function LiveTrackingPage() {
       (tk) => (tk.alertIds || []).includes(id) || tk.id === id,
     );
 
-    console.log(
-      '[FLICKER-DEBUG] Nav sync effect fired. id=',
-      id,
-      'ticket status=',
-      t?.status,
-    );
-
     setAgentTicket(t || null);
     setTicketStatus(t?.status || ao?.status || 'dispatched');
 
-    if (t?.assignedUnits?.length) setDispatchedUnits(t.assignedUnits);
-    else if (ao?.assignedUnit) setDispatchedUnits([ao.assignedUnit]);
-    else setDispatchedUnits([]);
+    // Union of assignedUnits across all tickets that reference this alert id.
+    const units = resolveDispatchedUnits(id, ao);
+    setDispatchedUnits(units);
 
-    const nextActive = t?.assignedUnits?.[0] || ao?.assignedUnit || null;
+    const nextActive = units[0] || null;
     activeUnitIdRef.current = nextActive;
     setActiveUnitId(nextActive);
 
     const alreadyTerminal =
       t?.status === 'completed' || t?.status === 'abandoned';
     ticketCompletedRef.current = alreadyTerminal;
+    if (alreadyTerminal) dbClosedRef.current = true;
     lastTripStRef.current = '';
 
-    // ── KEY FIX: Don't reset to 'idle' if ticket is already terminal ─────────
+    // Reset completed set on navigation
+    completedUnitsSetRef.current = new Set();
+
     if (!alreadyTerminal) {
-      console.log(
-        '[FLICKER-DEBUG] Resetting tripStatus to idle (ticket not terminal)',
-      );
-      setTripStatus((prev) => {
-        if (['completed', 'abandoned'].includes(prev)) return prev;
-        return prev; // do NOT override
-      });
       setLive(false);
       setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
       setRouteData([]);
       setStepInfo({ idx: 0, total: 0 });
-
       Object.values(vehMkrMap.current).forEach((mkr) => {
         try {
           mkr?.setMap(null);
@@ -2001,13 +2136,8 @@ export default function LiveTrackingPage() {
       polylinesRef.current = [];
       routeAtRef.current = 0;
       lastVRef.current = null;
-
       setUnitStatuses({});
       setUnitLocations({});
-    } else {
-      console.log(
-        '[FLICKER-DEBUG] Ticket is terminal, NOT resetting tripStatus to idle',
-      );
     }
 
     addTLog(`Incident: ${ao?.name || id}`, 'info');
@@ -2092,11 +2222,11 @@ export default function LiveTrackingPage() {
       polylinesRef.current = [];
       parsed.forEach((r, i) => {
         if (!r.fp?.length) return;
-        const isBest = i === 0;
-        const opacity = isBest ? 1 : 0.45;
-        const weight = isBest ? 9 : 5;
-        const color = isBest ? '#1A73E8' : '#90CAF9';
-        const outW = isBest ? 15 : 9;
+        const isBest = i === 0,
+          opacity = isBest ? 1 : 0.45,
+          weight = isBest ? 9 : 5,
+          color = isBest ? '#1A73E8' : '#90CAF9',
+          outW = isBest ? 15 : 9;
         const out = new window.google.maps.Polyline({
           path: r.fp,
           geodesic: true,
@@ -2146,13 +2276,11 @@ export default function LiveTrackingPage() {
           if (!color) return;
           const start = seg.startPolylinePointIndex || 0;
           let end;
-          if (seg.endPolylinePointIndex != null) {
+          if (seg.endPolylinePointIndex != null)
             end = seg.endPolylinePointIndex;
-          } else if (v2.intervals[i + 1]) {
+          else if (v2.intervals[i + 1])
             end = v2.intervals[i + 1].startPolylinePointIndex - 1;
-          } else {
-            end = v2path.length - 1;
-          }
+          else end = v2path.length - 1;
           const segPath = v2path.slice(start, end + 1);
           if (segPath.length < 2) return;
           const segOut = new window.google.maps.Polyline({
@@ -2351,7 +2479,7 @@ export default function LiveTrackingPage() {
     });
   };
 
-  // ── Main poll ─────────────────────────────────────────────────────────────
+  // ── Main poll (active unit) ───────────────────────────────────────────────
   useEffect(() => {
     const myUid = activeUnitId;
     let isMounted = true;
@@ -2395,8 +2523,6 @@ export default function LiveTrackingPage() {
           setTimeout(poll, 100);
           return;
         }
-
-        // 🚫 ignore wrong ticket data
         if (d.ticket_no && ticketNo && d.ticket_no !== ticketNo) {
           setTimeout(poll, 100);
           return;
@@ -2404,11 +2530,6 @@ export default function LiveTrackingPage() {
 
         const ts = d.tripStatus || 'idle';
 
-        console.log(
-          `[FLICKER-DEBUG] Poll received tripStatus="${ts}" lastTripStRef="${lastTripStRef.current}"`,
-        );
-
-        // ── FLICKER FIX: Ignore 'idle' if we already have a real status ───────
         const REAL_STATUSES = [
           'accepted',
           'dispatched',
@@ -2421,56 +2542,37 @@ export default function LiveTrackingPage() {
         const isDowngradeToIdle =
           ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
         if (isDowngradeToIdle) {
-          console.log(
-            `[FLICKER-DEBUG] SKIPPING stale idle — current real status is "${tripStatusRef.current}"`,
-          );
           setTimeout(poll, 100);
           return;
         }
 
-        // ── FIX 2: Guard unitStatuses — never downgrade terminal ──────────────
+        // Guard unitStatuses — never downgrade terminal
         setUnitStatuses((prev) => {
           const current = prev[myUid];
-          if (TERMINAL_STATUSES.includes(current)) return prev; // terminal lock
-          if (current === ts) return prev; // no change
-          console.log(
-            `[FLICKER-DEBUG] unitStatuses[${myUid}]: ${current} → ${ts}`,
-          );
+          if (TERMINAL_STATUSES.includes(current)) return prev;
+          if (current === ts) return prev;
           return { ...prev, [myUid]: ts };
         });
 
-        // ── FIX 2: Guard tripStatus — never downgrade terminal ────────────────
+        // Guard tripStatus — never downgrade terminal
         setTripStatus((prev) => {
-          if (TERMINAL_STATUSES.includes(prev)) {
-            if (prev !== ts)
-              console.log(
-                `[FLICKER-DEBUG] BLOCKED tripStatus downgrade: ${prev} → ${ts} (terminal lock)`,
-              );
-            return prev;
-          }
+          if (TERMINAL_STATUSES.includes(prev)) return prev;
           if (prev === ts) return prev;
-          console.log(`[FLICKER-DEBUG] tripStatus: ${prev} → ${ts}`);
           tripStatusRef.current = ts;
           return ts;
         });
-
-        console.log('tripStatusRef current:', tripStatusRef.current);
 
         setStepInfo({
           idx: parseInt(d.stepIdx) || 0,
           total: parseInt(d.totalSteps) || 0,
         });
 
-        // ── FIX 3: Side-effects block — never let stale idle overwrite terminal
         if (ts !== lastTripStRef.current) {
-          // If lastTripStRef is already terminal and ts is 'idle', ignore it
           if (
             TERMINAL_STATUSES.includes(lastTripStRef.current) &&
             ts === 'idle'
           ) {
-            console.log(
-              `[FLICKER-DEBUG] BLOCKED lastTripStRef side-effect: already terminal "${lastTripStRef.current}", ignoring stale "${ts}"`,
-            );
+            // blocked — stale idle after terminal
           } else {
             lastTripStRef.current = ts;
             const statusText =
@@ -2504,81 +2606,15 @@ export default function LiveTrackingPage() {
               addTLog('Traffic layer auto-enabled', 'ok', myUid);
             }
 
-            if (ts === 'completed' && !ticketCompletedRef.current) {
-              const ticket = agentTicketRef.current;
-              const units = dispatchedUnitsRef.current;
-              if (ticket?.id && units.length > 0) {
-                // Mark this unit as completed in the ref immediately
-                // so the allDone check below sees it
-                unitStatusesRef.current = {
-                  ...unitStatusesRef.current,
-                  [myUid]: 'completed',
-                };
-
-                const allDone = units.every(
-                  (uid) => unitStatusesRef.current[uid] === 'completed',
-                );
-
-                console.log(
-                  `[MULTI-UNIT] allDone=${allDone} | units=${units.join(',')} | statuses=`,
-                  unitStatusesRef.current,
-                );
-
-                if (allDone && !dbClosedRef.current) {
-                  ticketCompletedRef.current = true;
-                  dbClosedRef.current = true;
-
-                  // Step A: update localStorage
-                  updateAgentTicketStatus(ticket.id, 'completed');
-                  const fresh = getAgentTickets().find(
-                    (t) => t.id === ticket.id,
-                  );
-                  (fresh?.alertIds || []).forEach((aid) =>
-                    updateAlertHistoryStatus(aid, 'completed'),
-                  );
-                  window.dispatchEvent(new Event('agentTicketsChange'));
-                  setTicketStatus('completed');
-                  addTLog(
-                    `All ${units.length} unit(s) completed → ticket auto-completed`,
-                    'ok',
-                  );
-
-                  // Step B: fire Stage 4 EXIT to DB
-                  closeTicketEvent(ticket.id, {
-                    source_id: 'system',
-                    source_name: 'system',
-                    remarks: `Auto-closed by live tracking — all ${units.length} unit(s) completed`,
-                    completed_units: units,
-                    completed_at: new Date().toISOString(),
-                  })
-                    .then(() => {
-                      addTLog(
-                        `Stage 4 EXIT logged → ticket ${ticket.id}`,
-                        'ok',
-                      );
-                    })
-                    .catch((err) => {
-                      // Reset so ensureDBClosed can retry on next mount
-                      dbClosedRef.current = false;
-                      addTLog(
-                        `closeTicketEvent failed: ${
-                          err?.response?.data?.error || err.message
-                        }`,
-                        'warn',
-                      );
-                    });
-                } else if (!allDone) {
-                  const pending = units.filter(
-                    (uid) => unitStatusesRef.current[uid] !== 'completed',
-                  );
-                  addTLog(
-                    `Unit ${myUid} completed — waiting for: ${pending.join(', ')}`,
-                    'info',
-                    myUid,
-                  );
-                }
-              }
+            // ── FIXED COMPLETION BLOCK ───────────────────────────────────
+            if (ts === 'completed') {
+              // Mark this unit in the authoritative set
+              completedUnitsSetRef.current.add(myUid);
+              addTLog(`Unit ${myUid} reported completed`, 'ok', myUid);
+              // tryCloseTicket checks if ALL units are in the set
+              await tryCloseTicket(myUid);
             }
+            // ── END COMPLETION BLOCK ─────────────────────────────────────
           }
         }
 
@@ -2608,18 +2644,12 @@ export default function LiveTrackingPage() {
         setTimeout(poll, 100);
       } catch (err) {
         if (!isMounted || activeUnitIdRef.current !== myUid) return;
-        // 30s long-poll timeout or server long-poll 408 → immediate retry
         const isTimeout =
           err?.code === 'ECONNABORTED' ||
           err?.code === 'ERR_CANCELED' ||
           err?.message === 'canceled' ||
           /timeout/i.test(err?.message || '');
         if (err.response?.status === 408 || isTimeout) {
-          if (isTimeout) {
-            console.log(
-              '[LiveTracking] long-poll timed out after 30s, retrying…',
-            );
-          }
           setTimeout(poll, 100);
         } else {
           setTimeout(poll, 3000);
@@ -2631,14 +2661,23 @@ export default function LiveTrackingPage() {
     return () => {
       isMounted = false;
     };
-  }, [activeUnitId, updateVehicle, fetchRoute, fetchNearby, alertObj, addTLog]);
+  }, [
+    activeUnitId,
+    updateVehicle,
+    fetchRoute,
+    fetchNearby,
+    alertObj,
+    addTLog,
+    tryCloseTicket,
+  ]);
 
-  // ── All-units location poll (no status, stable deps) ─────────────────────
+  // ── All-units location + status poll ─────────────────────────────────────
   useEffect(() => {
     const pollUnits = async () => {
       const units = dispatchedUnitsRef.current;
       if (!units.length) return;
       try {
+        // ── 1. Mini-map locations ─────────────────────────────────────────
         const res = await axios.get(`${API_BASE_URL}/all-locations`);
         const allLocs = res.data?.data || [];
         const newLocs = {},
@@ -2667,36 +2706,117 @@ export default function LiveTrackingPage() {
           const ch = Object.entries(newTypes).some(([k, v]) => prev[k] !== v);
           return ch ? { ...prev, ...newTypes } : prev;
         });
+
+        // ── 2. TripStatus for NON-ACTIVE units ────────────────────────────
+        if (ticketCompletedRef.current) return;
+        const ticketNo = agentTicketRef.current?.id || id;
+        const nonActive = units.filter(
+          (uid) => uid !== activeUnitIdRef.current,
+        );
+        if (!nonActive.length) return;
+
+        const statusResults = await Promise.allSettled(
+          nonActive.map((uid) =>
+            axios.get(
+              `${API_BASE_URL}/unit-location/${encodeURIComponent(uid)}`,
+              {
+                params: ticketNo ? { ticket_no: ticketNo } : {},
+                timeout: 5000,
+              },
+            ),
+          ),
+        );
+
+        let anyNewCompletion = false;
+        statusResults.forEach((r, i) => {
+          if (r.status !== 'fulfilled') return;
+          const uid = nonActive[i];
+          const ts = r.value.data?.tripStatus;
+          if (!ts || ts === 'idle') return;
+          if (
+            TERMINAL_STATUSES.includes(unitStatusesRef.current[uid]) &&
+            ts !== 'completed'
+          )
+            return;
+          if (unitStatusesRef.current[uid] === ts) {
+            // Even if status didn't change, make sure completed units are in the set
+            if (ts === 'completed' && !completedUnitsSetRef.current.has(uid)) {
+              completedUnitsSetRef.current.add(uid);
+              anyNewCompletion = true;
+            }
+            return;
+          }
+
+          // Update React state
+          setUnitStatuses((prev) => {
+            if (TERMINAL_STATUSES.includes(prev[uid]) || prev[uid] === ts)
+              return prev;
+            return { ...prev, [uid]: ts };
+          });
+          // Update the ref immediately so allDone checks work synchronously
+          unitStatusesRef.current = { ...unitStatusesRef.current, [uid]: ts };
+
+          addTLog(`[status-poll] ${uid} → ${ts}`, 'info', uid);
+
+          // ── FIX: if this non-active unit is now completed, add to set and try close
+          if (ts === 'completed' && !completedUnitsSetRef.current.has(uid)) {
+            completedUnitsSetRef.current.add(uid);
+            anyNewCompletion = true;
+          }
+        });
+
+        // If any non-active unit newly completed, try to close the ticket
+        if (anyNewCompletion) {
+          await tryCloseTicket('status-poll');
+        }
       } catch (_) {}
     };
     pollUnits();
     const iv = setInterval(pollUnits, 10000);
     return () => clearInterval(iv);
-  }, []); // stable forever
+  }, [id, addTLog, tryCloseTicket]);
 
-  // Sync external agentTickets changes + mount-time DB close guard
+  // ── Sync localStorage changes + mount-time DB close guard ────────────────
   useEffect(() => {
-    // ── localStorage listener (instant, cross-tab) ──────────────────────
     const refresh = () => {
       const all = getAgentTickets();
       const t = all.find((tk) => (tk.alertIds || []).includes(id));
       if (t) {
         setAgentTicket(t);
-        if (t.status === 'completed') ticketCompletedRef.current = true;
+        if (t.status === 'completed') {
+          ticketCompletedRef.current = true;
+          dbClosedRef.current = true;
+        }
         setTicketStatus(t.status || 'dispatched');
-        if (t.assignedUnits?.length) setDispatchedUnits(t.assignedUnits);
+      }
+      // Re-derive the union from ALL matching tickets (not just the first one)
+      // and merge with the current list so a transient localStorage write
+      // never causes a previously-known unit to disappear from the sidebar
+      // or mini-map. Note: do NOT reset activeUnitId here when the user
+      // already has one — that would override their manual selection on
+      // every storage update.
+      const fresh = resolveDispatchedUnits(id, alertObj);
+      if (fresh.length) {
+        setDispatchedUnits((prev) => {
+          const merged = new Set(prev);
+          fresh.forEach((u) => merged.add(u));
+          if (merged.size === prev.length) return prev;
+          return [...merged];
+        });
+        if (!activeUnitIdRef.current) {
+          activeUnitIdRef.current = fresh[0];
+          setActiveUnitId(fresh[0]);
+        }
       }
     };
     window.addEventListener('agentTicketsChange', refresh);
 
-    // ── Mount-time DB close guard ────────────────────────────────────────
+    // ── Mount-time DB close guard ─────────────────────────────────────────
     const ensureDBClosed = async () => {
       const all = getAgentTickets();
       const t = all.find(
         (tk) => (tk.alertIds || []).includes(id) || tk.id === id,
       );
-
-      // Only proceed if ticket is already completed in localStorage
       if (!t || t.status !== 'completed') return;
       if (dbClosedRef.current) return;
 
@@ -2707,7 +2827,6 @@ export default function LiveTrackingPage() {
         const res = await getTicketEvent(ticketId);
         const state = res?.data?.state;
 
-        // If DB already has CLOSED/Stage 4 — nothing to do
         const alreadyClosedInDB =
           state?.closed === true ||
           state?.ticket_status === 'Stage 4' ||
@@ -2719,7 +2838,6 @@ export default function LiveTrackingPage() {
           return;
         }
 
-        // Check how many units the DB shows as COMPLETED
         const completedUnitIds = (res?.data?.events || [])
           .filter((e) => (e.event || '').toUpperCase() === 'COMPLETED')
           .map((e) => e.source_id)
@@ -2729,15 +2847,7 @@ export default function LiveTrackingPage() {
           units.length === 0 ||
           units.every((uid) => completedUnitIds.includes(uid));
 
-        console.log(
-          `[ensureDBClosed] units=${units.join(',')}`,
-          `| completedInDB=${completedUnitIds.join(',')}`,
-          `| allDone=${allUnitsCompletedInDB}`,
-        );
-
         if (!allUnitsCompletedInDB) {
-          // Some units haven't reported COMPLETED to DB yet
-          // The live poll will handle it when they do
           const pending = units.filter((u) => !completedUnitIds.includes(u));
           addTLog(
             `ensureDBClosed: waiting for ${pending.join(', ')} in DB`,
@@ -2746,9 +2856,7 @@ export default function LiveTrackingPage() {
           return;
         }
 
-        // All units completed in DB but no CLOSED event → fire it now
         dbClosedRef.current = true;
-
         await closeTicketEvent(ticketId, {
           source_id: 'system',
           source_name: 'system',
@@ -2756,7 +2864,6 @@ export default function LiveTrackingPage() {
           completed_units: units,
           completed_at: new Date().toISOString(),
         });
-
         addTLog(
           `Stage 4 EXIT logged on mount → ticket ${ticketId} (${units.length} units)`,
           'ok',
@@ -2771,12 +2878,12 @@ export default function LiveTrackingPage() {
     };
 
     ensureDBClosed();
-
     return () => {
       window.removeEventListener('agentTicketsChange', refresh);
     };
-  }, [id, addTLog]);
-  // Switch active unit
+  }, [id, addTLog, alertObj]);
+
+  // ── Switch active unit ────────────────────────────────────────────────────
   const handleSwitchUnit = useCallback(
     (uid) => {
       if (uid === activeUnitIdRef.current) return;
@@ -2798,7 +2905,6 @@ export default function LiveTrackingPage() {
       routeAtRef.current = 0;
       lastVRef.current = null;
       setLive(false);
-      // setTripStatus('idle');
       setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
       setRouteData([]);
       setStepInfo({ idx: 0, total: 0 });
@@ -2866,7 +2972,6 @@ export default function LiveTrackingPage() {
         })()
       : '—';
 
-  // ── FIXED RETURN: No replayMode wrapper, no <Route> outside <Routes> ─────
   return (
     <div style={s.root}>
       <div style={s.mapWrap}>
@@ -2890,23 +2995,6 @@ export default function LiveTrackingPage() {
             }}
             onClick={() =>
               navigate(`/timeline/${id}`, { state: { alert: alertObj } })
-            }
-          >
-            <HistoryOutlined
-              style={{ fontSize: '12px', verticalAlign: 'middle' }}
-            />{' '}
-            Timeline
-          </button>
-          <button
-            style={{
-              ...s.backBtn,
-              background: 'rgba(124,58,237,.15)',
-              borderColor: 'rgba(124,58,237,.4)',
-              color: '#C4B5FD',
-              fontWeight: 800,
-            }}
-            onClick={() =>
-              navigate(`/timeline/${id}, { state: { alert: alertObj } }`)
             }
           >
             <HistoryOutlined
@@ -3616,7 +3704,7 @@ const s = {
   nearbyLeg: {
     position: 'absolute',
     bottom: 20,
-    left: 85,
+    left: 150,
     zIndex: 20,
     background: 'rgba(13,17,23,.92)',
     border: '1px solid #30363D',
@@ -3815,13 +3903,6 @@ const s = {
     border: '1px solid #30363D',
     fontSize: 10,
     fontFamily: 'JetBrains Mono, monospace',
-  },
-  chatBubble: {
-    position: 'absolute',
-    bottom: 20,
-    left: 16,
-    zIndex: 60,
-    pointerEvents: 'auto',
   },
 };
 

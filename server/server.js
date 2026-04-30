@@ -119,38 +119,36 @@ let pushTokens = new Set();
 // OFFLINE DETECTION — checks lastSeen set by /heartbeat
 // When a unit transitions to offline → insert ONE DB row recording the event
 // ══════════════════════════════════════════════════════════════════════════════
-setInterval(() => {
+setInterval(async () => {
   const now = Date.now();
   for (const [id, unit] of units.entries()) {
-    if (
-      now - unit.lastSeen > HEARTBEAT_TIMEOUT_MS &&
-      unit.status !== 'offline'
-    ) {
+    if (now - unit.lastSeen > HEARTBEAT_TIMEOUT_MS && unit.status !== 'offline') {
       unit.status = 'offline';
       console.log(`📴 Unit offline: ${id}`);
 
       const ts = unitTripState.get(id);
-      // Best coords: prefer unitTripState (most recent from /track or heartbeat),
-      // fall back to unit.location (set by heartbeat), skip insert if nothing known
       const offLat = ts?.latitude || unit.location?.latitude;
       const offLng = ts?.longitude || unit.location?.longitude;
-      const offSpd = ts?.speed || unit.location?.speed || 0;
+
+      // Update the units table — device_status = offline
+      try {
+        await pgPool.query(
+          `UPDATE public.units SET device_status = 'offline', updated_at = now() WHERE unit_id = $1`,
+          [id]
+        );
+        console.log(`🔴 DB: ${id} → offline`);
+      } catch (err) {
+        console.warn(`[offline-detect] DB update failed for ${id}:`, err.message);
+      }
 
       if (offLat && offLng) {
         trackInsert({
-          unitId: id,
-          latitude: offLat,
-          longitude: offLng,
-          speed: offSpd,
+          unitId: id, latitude: offLat, longitude: offLng,
+          speed: ts?.speed || unit.location?.speed || 0,
           tripStatus: ts?.tripStatus || 'idle',
           locationInfo: null,
           forceDeviceStatus: 'offline',
         }).catch(() => {});
-        console.log(`🔴 DB: ${id} → offline @ ${offLat},${offLng}`);
-      } else {
-        console.log(
-          `🔴 Unit ${id} went offline — no coords available, skipping DB insert`,
-        );
       }
     }
   }
@@ -359,6 +357,13 @@ setInterval(() => {
             incidents.set(alertId, alertObj);
             unit.status = 'busy';
             unit.assignedIncidentId = alertId;
+
+            pgPool.query(
+              `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
+              [targetUnit]
+            ).then(() => console.log(`[nats-dispatch] ${targetUnit} → busy in DB`))
+             .catch(err => console.warn(`[nats-dispatch] DB update failed:`, err.message));
+ 
             const key = `${alertId}:${targetUnit}`;
             unitTripState.set(
               key,
@@ -897,9 +902,14 @@ app.post('/heartbeat', (req, res) => {
   unit.lastSeen = Date.now();
 
   if (unit.status === 'offline') {
-    unit.status = unit.assignedIncidentId ? 'busy' : 'available';
-    console.log(`🔄 Unit back online: ${unit.name} (${unitId})`);
-  }
+  unit.status = unit.assignedIncidentId ? 'busy' : 'available';
+  console.log(`🔄 Unit back online: ${unit.name} (${unitId})`);
+  // Sync comeback to DB
+  pgPool.query(
+    `UPDATE public.units SET device_status = 'online', unit_status = CASE WHEN unit_status = 'busy' THEN 'busy' ELSE 'available' END, updated_at = now() WHERE unit_id = $1`,
+    [unitId]
+  ).catch(err => console.warn('[heartbeat] comeback DB update failed:', err.message));
+}
 
   const lat = parseFloat(req.body.latitude);
   const lng = parseFloat(req.body.longitude);
@@ -1232,6 +1242,11 @@ app.post('/assign', async (req, res) => {
   });
   unit.status = 'busy';
   unit.assignedIncidentId = incidentId;
+  pgPool.query(
+    `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
+    [id]
+  ).then(() => console.log(`[assign] ${id} → busy in DB`))
+   .catch(err => console.warn(`[assign] DB update failed:`, err.message));
   currentAlert = { ...alertData };
 
   // Reset THIS unit's trip state (not all units)
@@ -1327,7 +1342,12 @@ app.post('/accept-assignment', (req, res) => {
     return res.status(400).json({ error: 'Already taken by another unit' });
   assign.status = 'accepted';
   currentAlert.status = 'accepted';
-
+  pgPool.query(
+    `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
+    [unitId]
+  ).then(() => console.log(`[accept-assignment] ${unitId} → busy in DB`))
+   .catch(err => console.warn(`[accept-assignment] DB update failed:`, err.message));
+ 
   // Remove this alert from ALL other units so they don't show it
   for (const [id, a] of assignments.entries()) {
     if (a.id === assign.id && id !== unitId) {
@@ -1382,6 +1402,10 @@ app.post('/reject-assignment', (req, res) => {
   if (unit) {
     unit.status = 'available';
     unit.assignedIncidentId = null;
+    pgPool.query(
+      `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
+      [unitId]
+    ).catch(err => console.warn(`[reject-assignment] DB update failed:`, err.message));
   }
   assignments.delete(unitId);
   currentAlert.status = 'rejected';
@@ -1401,6 +1425,10 @@ app.post('/complete-trip', (req, res) => {
   if (unit) {
     unit.status = 'available';
     unit.assignedIncidentId = null;
+    pgPool.query(
+      `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
+      [unitId]
+    ).catch(err => console.warn(`[complete-trip] DB update failed:`, err.message));
   }
   assignments.delete(unitId);
   if (unitId && unitTripState.has(unitId))
@@ -1833,6 +1861,97 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
   } catch (err) {
     console.error('❌ Timeline API error:', err.message);
     res.status(500).json({ success: false, error: err.message, events: [] });
+  }
+});
+
+
+// Called at login and re-registration to upsert the unit into public.units
+app.post('/api/units/sync', async (req, res) => {
+  const { unitId, username, unitType, deviceStatus = 'online' } = req.body;
+  if (!unitId || !username || !unitType)
+    return res.status(400).json({ error: 'unitId, username, unitType required' });
+  try {
+    await pgPool.query(
+      `INSERT INTO public.units (unit_id, user_name, password, unit_type, unit_status, device_status, updated_at)
+       VALUES ($1, $2, '', $3, 'available', $4, now())
+       ON CONFLICT (unit_id) DO UPDATE SET
+         user_name     = EXCLUDED.user_name,
+         unit_type     = EXCLUDED.unit_type,
+         device_status = $4,
+         -- NEVER reset busy → available on reconnect. Only update if currently available.
+         unit_status   = CASE
+                           WHEN public.units.unit_status = 'busy' THEN 'busy'
+                           ELSE 'available'
+                         END,
+         updated_at    = now()`,
+      [unitId, username, unitType, deviceStatus]
+    );
+    console.log(`[units/sync] ${unitId} → ${deviceStatus}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[units/sync] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.post('/api/units/available', async (req, res) => {
+  const { unitId } = req.body;
+  if (!unitId) return res.status(400).json({ error: 'unitId required' });
+  try {
+    await pgPool.query(
+      `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
+      [unitId]
+    );
+    // Also update in-memory
+    const unit = units.get(unitId);
+    if (unit) {
+      unit.status = 'available';
+      unit.assignedIncidentId = null;
+    }
+    assignments.delete(unitId);
+    console.log(`[units/available] ${unitId} → available`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[units/available] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/units/db-status', async (req, res) => {
+  try {
+    const { rows } = await pgPool.query(
+      `SELECT unit_id AS id, user_name AS name, unit_type AS type,
+              unit_status AS status, device_status, updated_at
+       FROM public.units
+       ORDER BY updated_at DESC`
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/unit/online', async (req, res) => {
+  const { unitId } = req.body;
+
+  try {
+    await pgPool.query(
+      `UPDATE public.units 
+       SET device_status = 'online', 
+           unit_status = CASE 
+                           WHEN unit_status = 'busy' THEN 'busy' 
+                           ELSE 'available' 
+                         END, 
+           updated_at = now() 
+       WHERE unit_id = $1`,
+      [unitId]
+    );
+
+    res.json({ success: true, message: 'Unit status updated' });
+  } catch (err) {
+    console.error('[unit-online] error:', err.message);
+    res.status(500).json({ success: false });
   }
 });
 

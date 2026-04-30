@@ -8,7 +8,6 @@ const api = axios.create({ baseURL: API_BASE_URL });
 // interstitial page, which would otherwise block CORS for browser clients.
 const webhookApi = axios.create({
   baseURL: WEBHOOK_BASE_URL,
-  headers: { 'ngrok-skip-browser-warning': 'true' },
 });
 
 // Axios instance pre-configured for the Webhook Engine (ngrok or direct).
@@ -94,5 +93,9 @@ export const getDirections = (originLat, originLng, destLat, destLng) =>
 
 export const getTicketTimeline = (ticketId) =>
   axios.get(`${API_BASE_URL}/api/timeline/${ticketId}`);
+
+
+// Fetch units from public.units (PostgreSQL) — includes real unit_status
+export const getUnitsFromDb = () => api.get('/api/units/db-status');
 
 export default api;

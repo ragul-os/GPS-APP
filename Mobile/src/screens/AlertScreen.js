@@ -181,27 +181,39 @@ export default function AlertScreen() {
 
   // ── CHANGE: uses dynamic unitId and unitType ──────────────────────────────
   const registerAmbulance = async () => {
-    try {
-      await Location.requestForegroundPermissionsAsync();
-      const res = await fetch(`${SERVER_URL}/register-ambulance`, {
+  try {
+    await Location.requestForegroundPermissionsAsync();
+    const res = await fetch(`${SERVER_URL}/register-ambulance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ambulanceId: unitId,
+        unitId,
+        name: session.displayname || session.username,
+        type: unitType,
+      }),
+    });
+    const json = await res.json();
+    if (json.success) {
+      setIsRegistered(true);
+      if (!heartbeatRef.current) startHeartbeat();
+
+      // Sync device_status = online back to DB on every app start/restart
+      fetch(`${SERVER_URL}/api/units/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ambulanceId: unitId, // ← was: session.username
-          unitId: unitId, // ← was: session.username
-          name: session.displayname || session.username,
-          type: unitType, // ← was: AMBULANCE_TYPE from config
+          unitId,
+          username: session.username,
+          unitType,
+          deviceStatus: 'online',
         }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setIsRegistered(true);
-        if (!heartbeatRef.current) startHeartbeat();
-      }
-    } catch (err) {
-      console.warn('[Alert] Registration failed:', err.message);
+      }).catch(err => console.warn('[AlertScreen] DB sync failed:', err.message));
     }
-  };
+  } catch (err) {
+    console.warn('[Alert] Registration failed:', err.message);
+  }
+};
 
   // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const startHeartbeat = () => {
@@ -553,6 +565,21 @@ export default function AlertScreen() {
     } catch (err) {
       console.warn('[Alert] Accept API failed:', err.message);
     }
+
+
+    try {
+  await fetch(`${SERVER_URL}/api/unit/online`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      unitId: unitId
+    }),
+  });
+
+  console.log('[Alert] Unit status updated to online ✅');
+} catch (err) {
+  console.warn('[Alert] Unit status update failed:', err.message);
+}
 
     // ── Ticket Events audit log (ACKNOWLEDGED, additive, non-blocking) ───
     const ticketNoForEvent = captured.agentTicketId || captured.id || '';

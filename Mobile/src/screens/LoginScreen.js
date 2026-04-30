@@ -136,17 +136,30 @@ export default function LoginScreen() {
       await AsyncStorage.setItem('UNIT_TYPE', unitType);
       await AsyncStorage.setItem('UNIT_ID', unitId);
 
-      // ── Step 6: Hand off to AuthContext ─────────────────────────────────────
-      setStatusMsg(STEPS.success);
-      await login({
-        username:    username.trim(),
-        displayname: username.trim(),
-        accessToken: matrixSession.access_token,
-        userId:      matrixSession.user_id,
-        deviceId:    matrixSession.device_id,
-        unitType,    // e.g. 'ambulance'
-        unitId,      // e.g. 'AMB-A3F9K2'
-      });
+      // ── Step 6: Hand off to AuthContext ─────────────────────────────────────────
+setStatusMsg(STEPS.success);
+await login({
+  username: username.trim(),
+  displayname: username.trim(),
+  accessToken: matrixSession.access_token,
+  userId: matrixSession.user_id,
+  deviceId: matrixSession.device_id,
+  unitType,
+  unitId,
+});
+
+// ── Step 7: Sync unit to DB ──────────────────────────────────────────────────
+try {
+  await fetch(`${SERVER_URL}/api/units/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ unitId, username: username.trim(), unitType, deviceStatus: 'online' }),
+  });
+} catch (err) {
+  console.warn('[LoginScreen] DB sync failed (non-fatal):', err.message);
+}
+
+      
 
     } catch (err) {
       // Matrix error codes

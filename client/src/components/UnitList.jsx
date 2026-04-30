@@ -11,9 +11,10 @@ import {
   SearchOutlined, 
   CheckCircleOutlined, 
   EnvironmentOutlined,
-  ApartmentOutlined
+  ApartmentOutlined,
+  LockOutlined
 } from '@ant-design/icons';
-import { getUnits, getNearestUnits, registerUnit, updateUnitLoc } from '../api/api';
+import { getUnits, getUnitsFromDb, getNearestUnits, registerUnit, updateUnitLoc } from '../api/api';
 
 const UCFG = {
   ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Ambulance',  color: '#E53935' },
@@ -40,33 +41,71 @@ function haversineMetres(la1, lo1, la2, lo2) {
 }
 function fmtDist(m) { return m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m'; }
 
-/* ─────────────────────────────────────────────────────────────────
-   Props
-   • pickedLat / pickedLng  – destination coords (for distance sort)
-   • selectedUnitIds        – string[]  (controlled from parent)
-   • onToggleUnit           – (id: string) => void
-   • onUnitListChange       – (units: Unit[]) => void
-   • activeTab              – 'units' | 'resources' | 'mock'  (optional, for tabbed layout)
-───────────────────────────────────────────────────────────────── */
 export default function UnitList({
   pickedLat,
   pickedLng,
   selectedUnitIds = [],
   onToggleUnit,
   onUnitListChange,
-  refreshTrigger,   // increment to force an immediate refresh
+  refreshTrigger,
 }) {
   const [units,     setUnits]     = useState([]);
   const [mockUnits, setMockUnits] = useState({});
 
-
-  /* ── Fetch & merge ── */
+  /* ── Fetch & merge ──
+     DB is the authority for unit_status (available / busy).
+     Live (/units) is the authority for isOnline, location, secondsAgo.
+     Units only in DB (server restarted, unit offline) are still shown
+     so dispatcher can see their last-known status.
+  ── */
   const fetchAll = useCallback(async () => {
     try {
-      const res  = await getUnits();
-      const real = res.data?.data || [];
+      console.log('[UnitList] fetchAll → getUnits() + getUnitsFromDb()');
+
+      const [liveRes, dbRes] = await Promise.allSettled([getUnits(), getUnitsFromDb()]);
+
+      const liveUnits = liveRes.status === 'fulfilled' ? (liveRes.value.data?.data || []) : [];
+      const dbUnits   = dbRes.status  === 'fulfilled' ? (dbRes.value.data?.data  || []) : [];
+
+      console.log('[UnitList] live:', liveUnits.length, '| db:', dbUnits.length);
+
+      if (liveRes.status === 'rejected') console.warn('[UnitList] getUnits() failed:', liveRes.reason);
+      if (dbRes.status  === 'rejected') console.warn('[UnitList] getUnitsFromDb() failed:', dbRes.reason);
+
+      const liveMap = Object.fromEntries(liveUnits.map(u => [u.id, u]));
+      const dbMap   = Object.fromEntries(dbUnits.map(u => [u.id, u]));
+
+      // Union: DB is the master registry of known units
+      const allIds = new Set([...dbUnits.map(u => u.id), ...liveUnits.map(u => u.id)]);
+
+      const mergedLive = Array.from(allIds).map(id => {
+        const live = liveMap[id];
+        const db   = dbMap[id];
+
+        // DB wins for status — this is the persistent truth
+        const finalStatus = db?.status || live?.status || 'available';
+
+        // isOnline: live heartbeat is authoritative
+        const isOnline = live
+          ? (live.isOnline === true)
+          : (db?.device_status === 'online');
+
+        console.log(`[UnitList] ${id} → db.status=${db?.status} live.status=${live?.status} final=${finalStatus} online=${isOnline}`);
+
+        return {
+          ...(live || {}),
+          id,
+          name:          live?.name          || db?.name  || id,
+          type:          live?.type          || db?.type  || 'ambulance',
+          status:        finalStatus,                        // ← DB wins
+          device_status: db?.device_status   || 'offline',
+          isOnline,
+          secondsAgo:    live?.secondsAgo    ?? null,
+        };
+      });
+
       const mArr = Object.values(mockUnits);
-      let merged = [...mArr, ...real.filter(u => !mockUnits[u.id])];
+      let merged = [...mArr, ...mergedLive.filter(u => !mockUnits[u.id])];
 
       if (pickedLat != null && pickedLng != null) {
         merged = merged.map(u => ({
@@ -86,24 +125,29 @@ export default function UnitList({
         });
       }
 
+      console.log('[UnitList] merged:', merged.map(u => ({ id: u.id, status: u.status, isOnline: u.isOnline })));
       setUnits(merged);
       onUnitListChange?.(merged);
 
       const online = merged.filter(u => u.isOnline).length;
       const el = document.getElementById('hdr-units');
       if (el) el.textContent = online + ' units online';
-    } catch { /* server offline — silently ignore */ }
+    } catch (err) {
+      console.error('[UnitList] fetchAll error:', err.message);
+    }
   }, [mockUnits, pickedLat, pickedLng, onUnitListChange]);
 
   useEffect(() => {
     fetchAll();
-    const iv = setInterval(fetchAll, 15000); // 15s — unit list changes slowly
+    const iv = setInterval(fetchAll, 10000); // 10s for faster busy/available reflection
     return () => clearInterval(iv);
   }, [fetchAll]);
 
-  // Force-refresh whenever parent increments refreshTrigger (e.g. after dispatch)
   useEffect(() => {
-    if (refreshTrigger) fetchAll();
+    if (refreshTrigger) {
+      console.log('[UnitList] refreshTrigger:', refreshTrigger);
+      fetchAll();
+    }
   }, [refreshTrigger, fetchAll]);
 
   /* ── Mock helpers ── */
@@ -142,295 +186,232 @@ export default function UnitList({
     try {
       const res  = await getNearestUnits(pickedLat, pickedLng, null, 10);
       const data = res.data?.data || [];
-      if (data.length && onToggleUnit) onToggleUnit(data[0].id);
-    } catch { }
+      // Only auto-select if unit is not busy in our merged list
+      const firstAvailable = data.find(u => {
+        const inList = units.find(x => x.id === u.id);
+        return !inList || inList.status !== 'busy';
+      });
+      if (firstAvailable && onToggleUnit) onToggleUnit(firstAvailable.id);
+    } catch (err) {
+      console.error('[UnitList] findNearest error:', err.message);
+    }
   };
 
-  const onlineUnits  = units.filter(u => u.isOnline);
-  const mockCount    = Object.keys(mockUnits).length;
+  const realUnits    = units.filter(u => !u._isMock);
+  const onlineUnits  = realUnits.filter(u => u.isOnline);
+  const offlineUnits = realUnits.filter(u => !u.isOnline);
+  const mockArr      = Object.values(mockUnits);
 
-  /* ════════════════════════════════════════════
-     RENDER
-  ════════════════════════════════════════════ */
   return (
-  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-    {/* ════════ MOCK UNITS BOX ════════ */}
-    <div style={s.wrap}>
-      <div style={s.boxHeader}>
-        <span><ExperimentOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Mock Units</span>
-        {Object.keys(mockUnits).length > 0 && (
-          <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9,
-            background: 'rgba(249,168,37,.15)', color: '#F9A825' }}>
-            {Object.keys(mockUnits).length} active
-          </span>
-        )}
-      </div>
-      <div style={s.tabBody}>
-        <div style={s.tabHint}>
-          Toggle mock units online/offline to simulate a live fleet for testing.
-        </div>
-        <div style={s.mockGrid}>
-          {MOCK_DEFS.map(def => {
-            const active = !!mockUnits[def.id];
-            const cfg    = UCFG[def.type] || UCFG.ambulance;
-            return (
-              <button
-                key={def.id}
-                style={{
-                  ...s.mockBtn,
-                  ...(active ? { borderColor: cfg.color, background: `${cfg.color}12`, color: cfg.color } : {}),
-                }}
-                onClick={() => toggleMock(def)}
-              >
-                <span style={{ fontSize: 18, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
-                <div style={{ textAlign: 'left', minWidth: 0 }}>
-                  <div style={{ fontSize: 10, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {def.name}
-                  </div>
-                  <div style={{ fontSize: 8, opacity: .6, marginTop: 1 }}>{def.id}</div>
-                </div>
-                <span style={{
-                  marginLeft: 'auto', flexShrink: 0,
-                  fontSize: 8, fontWeight: 800, padding: '2px 6px', borderRadius: 4,
-                  background: active ? `${cfg.color}25` : 'rgba(139,148,158,.1)',
-                  color: active ? cfg.color : '#8B949E',
-                }}>
-                  {active ? 'ONLINE' : 'OFF'}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <button style={s.clearAllMockBtn} onClick={clearAllMocks}>
-          <DeleteOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Clear All Mock Units
-        </button>
-      </div>
-    </div>
-
-    {/* ════════ ONLINE UNITS BOX ════════ */}
-    <div style={s.wrap}>
-      <div style={s.boxHeader}>
-        <span><ApartmentOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Online Units</span>
-        {onlineUnits.length > 0 && (
-          <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9,
-            background: 'rgba(52,168,83,.15)', color: '#34A853' }}>
-            {onlineUnits.length} online
-          </span>
-        )}
-      </div>
-      <div style={s.tabBody}>
-        <div style={s.tabHint}>
-          {selectedUnitIds.length > 0
-            ? `${selectedUnitIds.length} unit(s) selected — all will be dispatched together`
-            : 'Click to select units. Multiple units can be dispatched simultaneously.'}
-        </div>
-
-        <button style={s.nearestBtn} onClick={findNearest}>
-          <SearchOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Auto-select Nearest Available
-        </button>
-
-        {selectedUnitIds.length > 0 && (
-          <div style={s.selBanner}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#82B4FF' }}>
-              <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> {selectedUnitIds.length} unit(s) queued for dispatch
+      {/* ════════ MOCK UNITS BOX ════════ */}
+      <div style={s.wrap}>
+        <div style={s.boxHeader}>
+          <span><ExperimentOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Mock Units</span>
+          {mockArr.length > 0 && (
+            <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9,
+              background: 'rgba(249,168,37,.15)', color: '#F9A825' }}>
+              {mockArr.length} active
             </span>
-            <button
-              style={s.clearBtn}
-              onClick={() => selectedUnitIds.slice().forEach(id => onToggleUnit?.(id))}
-            >
-              Clear all
-            </button>
-          </div>
-        )}
-
-        {onlineUnits.length === 0 ? (
-          <div style={s.emptyMsg}>
-            <div style={{ fontSize: 30, marginBottom: 7 }}><WifiOutlined style={{ opacity: .2 }} /></div>
-            <div style={{ fontSize: 12, fontWeight: 700 }}>No units online</div>
-            <div style={{ fontSize: 10, marginTop: 3, opacity: .6 }}>
-              Use the Mock Units panel above to add test units
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {onlineUnits.map(u => {
-              const isSel  = selectedUnitIds.includes(u.id);
-              const isBusy = u.status === 'busy';
-              const cfg    = UCFG[u.type] || UCFG.ambulance;
+          )}
+        </div>
+        <div style={s.tabBody}>
+          <div style={s.tabHint}>Toggle mock units online/offline to simulate a live fleet for testing.</div>
+          <div style={s.mockGrid}>
+            {MOCK_DEFS.map(def => {
+              const active = !!mockUnits[def.id];
+              const cfg    = UCFG[def.type] || UCFG.ambulance;
               return (
-                <div
-                  key={u.id}
-                  style={{
-                    ...s.unitCard,
-                    ...(isSel  ? { borderColor: cfg.color, background: `${cfg.color}12`, boxShadow: `0 0 0 1px ${cfg.color}30` } : {}),
-                    ...(isBusy ? { opacity: .6 } : { cursor: 'pointer' }),
-                  }}
-                  onClick={() => !isBusy && onToggleUnit?.(u.id)}
-                  title={isBusy ? 'Unit is busy on active incident' : ''}
-                >
-                  <div style={{
-                    width: 18, height: 18, borderRadius: 5, flexShrink: 0,
-                    border: `2px solid ${isSel ? cfg.color : '#30363D'}`,
-                    background: isSel ? cfg.color : 'transparent',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'all .15s',
-                  }}>
-                    {isSel && <span style={{ fontSize: 10, color: '#fff', fontWeight: 900 }}>✓</span>}
+                <button key={def.id} style={{ ...s.mockBtn, ...(active ? { borderColor: cfg.color, background: `${cfg.color}12`, color: cfg.color } : {}) }} onClick={() => toggleMock(def)}>
+                  <span style={{ fontSize: 18, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
+                  <div style={{ textAlign: 'left', minWidth: 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{def.name}</div>
+                    <div style={{ fontSize: 8, opacity: .6, marginTop: 1 }}>{def.id}</div>
                   </div>
-
-                  <span style={{ fontSize: 22, flexShrink: 0, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {u.name}
-                      </span>
-                      {u._isMock && (
-                        <span style={{ fontSize: 8, background: 'rgba(249,168,37,.15)', color: '#F9A825', padding: '1px 5px', borderRadius: 4, flexShrink: 0 }}>
-                          MOCK
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 9, color: '#8B949E', marginTop: 1 }}>
-                      {u.id} · {u.isOnline ? (u.secondsAgo + 's ago') : 'Offline'}
-                      {u.location?.latitude ? <><ApartmentOutlined style={{ fontSize: '10px', verticalAlign: 'middle', marginLeft: 4 }} /> GPS</> : ''}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
-                    <span style={{
-                      fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 6,
-                      background: isBusy ? 'rgba(249,168,37,.15)' : 'rgba(52,168,83,.15)',
-                      color: isBusy ? '#F9A825' : '#34A853',
-                    }}>
-                      {isBusy ? 'Busy' : 'Available'}
-                    </span>
-                    {u.distanceM != null && (
-                      <span style={{ fontSize: 9, color: '#82B4FF', fontWeight: 700 }}>
-                        <EnvironmentOutlined style={{ fontSize: '10px', verticalAlign: 'middle', marginRight: 4 }} /> {fmtDist(u.distanceM)}
-                      </span>
-                    )}
-                  </div>
-                </div>
+                  <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 8, fontWeight: 800, padding: '2px 6px', borderRadius: 4, background: active ? `${cfg.color}25` : 'rgba(139,148,158,.1)', color: active ? cfg.color : '#8B949E' }}>
+                    {active ? 'ONLINE' : 'OFF'}
+                  </span>
+                </button>
               );
             })}
           </div>
+          <button style={s.clearAllMockBtn} onClick={clearAllMocks}>
+            <DeleteOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Clear All Mock Units
+          </button>
+        </div>
+      </div>
+
+      {/* ════════ UNITS BOX ════════ */}
+      <div style={s.wrap}>
+        <div style={s.boxHeader}>
+          <span><ApartmentOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Units</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {onlineUnits.length > 0 && (
+              <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9, background: 'rgba(52,168,83,.15)', color: '#34A853' }}>
+                {onlineUnits.length} online
+              </span>
+            )}
+            {onlineUnits.filter(u => u.status === 'busy').length > 0 && (
+              <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 9, background: 'rgba(249,168,37,.15)', color: '#F9A825' }}>
+                {onlineUnits.filter(u => u.status === 'busy').length} busy
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={s.tabBody}>
+          <div style={s.tabHint}>
+            {selectedUnitIds.length > 0
+              ? `${selectedUnitIds.length} unit(s) selected — all will be dispatched together`
+              : 'Click to select available units. Busy units cannot be dispatched.'}
+          </div>
+
+          <button style={s.nearestBtn} onClick={findNearest}>
+            <SearchOutlined style={{ fontSize: '14px', verticalAlign: 'middle', marginRight: 6 }} /> Auto-select Nearest Available
+          </button>
+
+          {selectedUnitIds.length > 0 && (
+            <div style={s.selBanner}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#82B4FF' }}>
+                <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 6 }} /> {selectedUnitIds.length} unit(s) queued for dispatch
+              </span>
+              <button style={s.clearBtn} onClick={() => selectedUnitIds.slice().forEach(id => onToggleUnit?.(id))}>
+                Clear all
+              </button>
+            </div>
+          )}
+
+          {/* Mock units section */}
+          {mockArr.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={s.sectionLabel}>Mock Units</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {mockArr.map(u => <UnitRow key={u.id} u={u} isSel={selectedUnitIds.includes(u.id)} onToggleUnit={onToggleUnit} />)}
+              </div>
+            </div>
+          )}
+
+          {/* Online real units */}
+          {onlineUnits.length === 0 && mockArr.length === 0 ? (
+            <div style={s.emptyMsg}>
+              <div style={{ fontSize: 30, marginBottom: 7 }}><WifiOutlined style={{ opacity: .2 }} /></div>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>No units online</div>
+              <div style={{ fontSize: 10, marginTop: 3, opacity: .6 }}>Use the Mock Units panel above to add test units</div>
+            </div>
+          ) : onlineUnits.length > 0 ? (
+            <div style={{ marginBottom: offlineUnits.length > 0 ? 14 : 0 }}>
+              <div style={s.sectionLabel}>Online</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {onlineUnits.map(u => (
+                  <UnitRow key={u.id} u={u} isSel={selectedUnitIds.includes(u.id)} onToggleUnit={onToggleUnit} />
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Offline units — shown so dispatcher can see their last DB status */}
+          {offlineUnits.length > 0 && (
+            <div>
+              <div style={{ ...s.sectionLabel, color: '#30363D' }}>Offline</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {offlineUnits.map(u => <UnitRow key={u.id} u={u} isSel={false} onToggleUnit={null} dimmed />)}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Reusable unit row ── */
+function UnitRow({ u, isSel, onToggleUnit, dimmed = false }) {
+  const isBusy      = u.status === 'busy';   // DB-authoritative
+  const isClickable = !isBusy && !dimmed && !!onToggleUnit;
+  const cfg         = UCFG[u.type] || UCFG.ambulance;
+
+  return (
+    <div
+      style={{
+        ...s.unitCard,
+        ...(isSel  ? { borderColor: cfg.color, background: `${cfg.color}12`, boxShadow: `0 0 0 1px ${cfg.color}30` } : {}),
+        ...(isBusy && !dimmed ? { borderColor: 'rgba(249,168,37,.35)', background: 'rgba(249,168,37,.04)' } : {}),
+        ...(dimmed ? { opacity: .4 } : {}),
+        cursor: isClickable ? 'pointer' : 'default',
+      }}
+      onClick={() => isClickable && onToggleUnit?.(u.id)}
+      title={isBusy ? 'Unit is busy on active incident' : dimmed ? 'Unit is offline' : ''}
+    >
+      {/* Checkbox for available+online units */}
+      {!dimmed && !isBusy && (
+        <div style={{
+          width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+          border: `2px solid ${isSel ? cfg.color : '#30363D'}`,
+          background: isSel ? cfg.color : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          transition: 'all .15s',
+        }}>
+          {isSel && <span style={{ fontSize: 10, color: '#fff', fontWeight: 900 }}>✓</span>}
+        </div>
+      )}
+
+      {/* Lock icon for busy units */}
+      {isBusy && !dimmed && (
+        <div style={{ width: 18, height: 18, borderRadius: 5, flexShrink: 0, background: 'rgba(249,168,37,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <LockOutlined style={{ fontSize: 10, color: '#F9A825' }} />
+        </div>
+      )}
+
+      <span style={{ fontSize: 22, flexShrink: 0, display: 'flex', alignItems: 'center' }}>{cfg.icon}</span>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: '#E6EDF3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {u.name}
+          </span>
+          {u._isMock && (
+            <span style={{ fontSize: 8, background: 'rgba(249,168,37,.15)', color: '#F9A825', padding: '1px 5px', borderRadius: 4, flexShrink: 0 }}>MOCK</span>
+          )}
+        </div>
+        <div style={{ fontSize: 9, color: '#8B949E', marginTop: 1 }}>
+          {u.id}
+          {u.isOnline && u.secondsAgo != null ? ` · ${u.secondsAgo}s ago` : ''}
+          {!u.isOnline && !u._isMock ? ' · Offline' : ''}
+          {u.location?.latitude ? <><ApartmentOutlined style={{ fontSize: '10px', verticalAlign: 'middle', marginLeft: 4 }} /> GPS</> : ''}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+        {/* Status badge — always from DB */}
+        <span style={{
+          fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 6,
+          background: isBusy ? 'rgba(249,168,37,.15)' : dimmed ? 'rgba(139,148,158,.1)' : 'rgba(52,168,83,.15)',
+          color:      isBusy ? '#F9A825'              : dimmed ? '#8B949E'               : '#34A853',
+        }}>
+          {isBusy ? 'Busy' : 'Available'}
+        </span>
+        {u.distanceM != null && (
+          <span style={{ fontSize: 9, color: '#82B4FF', fontWeight: 700 }}>
+            <EnvironmentOutlined style={{ fontSize: '10px', verticalAlign: 'middle', marginRight: 4 }} />{fmtDist(u.distanceM)}
+          </span>
         )}
       </div>
     </div>
-
-  </div>
-);
+  );
 }
 
 const s = {
-  boxHeader: {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '10px 14px',
-  borderBottom: '1px solid #30363D',
-  background: '#0D1117',
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#E6EDF3',
-  fontFamily: 'Sora, sans-serif',
-},
-  wrap: {
-    background: '#161B22',
-    border: '1px solid #30363D',
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-
-  /* Tab bar */
-  tabBar: {
-    display: 'flex',
-    borderBottom: '1px solid #30363D',
-    background: '#0D1117',
-  },
-  tab: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    padding: '10px 12px',
-    fontSize: 11,
-    fontWeight: 700,
-    color: '#8B949E',
-    background: 'transparent',
-    border: 'none',
-    cursor: 'pointer',
-    fontFamily: 'Sora, sans-serif',
-    borderBottom: '2px solid transparent',
-    transition: 'all .15s',
-  },
-  tabActive: {
-    color: '#E6EDF3',
-    borderBottomColor: '#1A73E8',
-    background: 'rgba(26,115,232,.06)',
-  },
-  tabBadge: {
-    fontSize: 9, fontWeight: 800,
-    padding: '1px 6px', borderRadius: 9,
-  },
-
-  tabBody: {
-    padding: 14,
-  },
-  tabHint: {
-    fontSize: 10,
-    color: '#8B949E',
-    marginBottom: 10,
-    lineHeight: 1.5,
-  },
-
-  /* Online units */
-  nearestBtn: {
-    width: '100%', padding: 8, borderRadius: 9, border: '1px solid rgba(26,115,232,.3)',
-    background: 'rgba(26,115,232,.08)', color: '#82B4FF',
-    fontFamily: 'Sora, sans-serif', fontSize: 11, fontWeight: 700,
-    cursor: 'pointer', marginBottom: 10,
-  },
-  selBanner: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    background: 'rgba(26,115,232,.08)', border: '1px solid rgba(26,115,232,.2)',
-    borderRadius: 9, padding: '7px 11px', marginBottom: 10,
-  },
-  clearBtn: {
-    fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 7,
-    border: '1px solid #30363D', background: '#0D1117', color: '#8B949E',
-    cursor: 'pointer', fontFamily: 'Sora, sans-serif',
-  },
-  emptyMsg: {
-    textAlign: 'center', padding: '24px 18px', color: '#8B949E',
-  },
-  unitCard: {
-    display: 'flex', alignItems: 'center', gap: 10,
-    background: '#0D1117', border: '2px solid #30363D',
-    borderRadius: 11, padding: '10px 12px',
-    transition: 'all .15s', userSelect: 'none', cursor: 'pointer',
-  },
-
-  /* Mock units */
-  mockGrid: {
-    display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10,
-  },
-  mockBtn: {
-    display: 'flex', alignItems: 'center', gap: 9,
-    padding: '9px 12px', borderRadius: 10,
-    border: '1.5px solid #30363D', background: '#0D1117',
-    cursor: 'pointer', color: '#8B949E',
-    fontFamily: 'Sora, sans-serif', transition: 'all .15s',
-    textAlign: 'left', width: '100%',
-  },
-  clearAllMockBtn: {
-    width: '100%', padding: 8, borderRadius: 9,
-    border: '1px solid rgba(229,57,53,.3)',
-    background: 'rgba(229,57,53,.07)', color: '#FF8A80',
-    fontFamily: 'Sora, sans-serif', fontSize: 11, fontWeight: 700, cursor: 'pointer',
-  },
+  boxHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #30363D', background: '#0D1117', fontSize: 12, fontWeight: 700, color: '#E6EDF3', fontFamily: 'Sora, sans-serif' },
+  wrap:      { background: '#161B22', border: '1px solid #30363D', borderRadius: 14, overflow: 'hidden', marginBottom: 16 },
+  tabBody:   { padding: 14 },
+  tabHint:   { fontSize: 10, color: '#8B949E', marginBottom: 10, lineHeight: 1.5 },
+  sectionLabel: { fontSize: 9, fontWeight: 800, color: '#8B949E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 7 },
+  nearestBtn:   { width: '100%', padding: 8, borderRadius: 9, border: '1px solid rgba(26,115,232,.3)', background: 'rgba(26,115,232,.08)', color: '#82B4FF', fontFamily: 'Sora, sans-serif', fontSize: 11, fontWeight: 700, cursor: 'pointer', marginBottom: 10 },
+  selBanner:    { display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(26,115,232,.08)', border: '1px solid rgba(26,115,232,.2)', borderRadius: 9, padding: '7px 11px', marginBottom: 10 },
+  clearBtn:     { fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 7, border: '1px solid #30363D', background: '#0D1117', color: '#8B949E', cursor: 'pointer', fontFamily: 'Sora, sans-serif' },
+  emptyMsg:     { textAlign: 'center', padding: '24px 18px', color: '#8B949E' },
+  unitCard:     { display: 'flex', alignItems: 'center', gap: 10, background: '#0D1117', border: '2px solid #30363D', borderRadius: 11, padding: '10px 12px', transition: 'all .15s', userSelect: 'none' },
+  mockGrid:     { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 },
+  mockBtn:      { display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 10, border: '1.5px solid #30363D', background: '#0D1117', cursor: 'pointer', color: '#8B949E', fontFamily: 'Sora, sans-serif', transition: 'all .15s', textAlign: 'left', width: '100%' },
+  clearAllMockBtn: { width: '100%', padding: 8, borderRadius: 9, border: '1px solid rgba(229,57,53,.3)', background: 'rgba(229,57,53,.07)', color: '#FF8A80', fontFamily: 'Sora, sans-serif', fontSize: 11, fontWeight: 700, cursor: 'pointer' },
 };

@@ -129,8 +129,28 @@ const STATUS_CFG = {
     color: '#F9A825',
     bg: 'rgba(249,168,37,.12)',
   },
+  created: {
+    label: 'Pending',
+    icon: (
+      <ClockCircleOutlined
+        style={{ fontSize: '16px', verticalAlign: 'middle' }}
+      />
+    ),
+    color: '#F9A825',
+    bg: 'rgba(249,168,37,.12)',
+  },
   dispatched: {
-    label: 'Dispatched',
+    label: 'In Progress',
+    icon: (
+      <NodeIndexOutlined
+        style={{ fontSize: '16px', verticalAlign: 'middle' }}
+      />
+    ),
+    color: '#1A73E8',
+    bg: 'rgba(26,115,232,.12)',
+  },
+  on_going: {
+    label: 'In Progress',
     icon: (
       <NodeIndexOutlined
         style={{ fontSize: '16px', verticalAlign: 'middle' }}
@@ -140,7 +160,17 @@ const STATUS_CFG = {
     bg: 'rgba(26,115,232,.12)',
   },
   completed: {
-    label: 'Completed',
+    label: 'Closed',
+    icon: (
+      <CheckCircleOutlined
+        style={{ fontSize: '16px', verticalAlign: 'middle' }}
+      />
+    ),
+    color: '#34A853',
+    bg: 'rgba(52,168,83,.12)',
+  },
+  closed: {
+    label: 'Closed',
     icon: (
       <CheckCircleOutlined
         style={{ fontSize: '16px', verticalAlign: 'middle' }}
@@ -200,7 +230,10 @@ function mapDbTicket(r) {
       f2: d.phone_number || d.phone || r.ani || '',
       f3: d.address || '',
     },
-    destination: d.destination || null,
+   destination: {
+      latitude: d.latitude || null,
+      longitude: d.longitude || null,
+    },
     notes: d.notes || '',
   };
 }
@@ -684,8 +717,9 @@ function TicketDetailsBox({ ticket, dispatchedUnits }) {
       <div
         style={{
           fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 9,
-          color: '#30363D',
+          fontWeight: 500,
+          fontSize: 12,
+          color: '#e5e8eb',
           marginTop: 10,
         }}
       >
@@ -696,7 +730,7 @@ function TicketDetailsBox({ ticket, dispatchedUnits }) {
 }
 
 /* ── Ticket Switcher Strip ── */
-function TicketSwitcherStrip({ tickets, activeTicketId, onSelect }) {
+/* function TicketSwitcherStrip({ tickets, activeTicketId, onSelect }) {
   if (!tickets || tickets.length === 0) return null;
   return (
     <div style={s.stripWrap}>
@@ -767,18 +801,22 @@ function TicketSwitcherStrip({ tickets, activeTicketId, onSelect }) {
     </div>
   );
 }
-
+ */
 /* ── Ticket List Screen ── */
 function TicketListScreen({ onSelectTicket }) {
   const [agentTickets, setAgentTickets] = useState([]);
-  const [statusFilter, setStatusFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState('card'); // 'card' or 'list'
+  const [viewMode, setViewMode] = useState('list'); // 'card' or 'list'
 
+  // Dispatch screen only lists tickets that have arrived but have not yet
+  // been assigned to any units (DB status: 'pending' or 'created').
   const loadFromDb = useCallback(async () => {
     try {
       const res = await getTickets();
-      setAgentTickets((res.data?.tickets || []).map(mapDbTicket));
+      const pendingOnly = (res.data?.tickets || [])
+        .map(mapDbTicket)
+        .filter((t) => t.status === 'pending' || t.status === 'created');
+      setAgentTickets(pendingOnly);
     } catch (err) {
       console.error('[DispatchPage] failed to load tickets:', err.message);
     }
@@ -792,18 +830,17 @@ function TicketListScreen({ onSelectTicket }) {
   }, [loadFromDb]);
 
   const pendingCount = agentTickets.filter(
-    (t) => t.status === 'pending',
+    (t) => t.status === 'pending' || t.status === 'created',
   ).length;
 
   const filteredTickets = agentTickets.filter((t) => {
-    const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
     const q = searchQuery.toLowerCase();
-    const matchesSearch =
+    return (
       !searchQuery ||
       t.name.toLowerCase().includes(q) ||
       t.address.toLowerCase().includes(q) ||
-      t.id.toLowerCase().includes(q);
-    return matchesStatus && matchesSearch;
+      t.id.toLowerCase().includes(q)
+    );
   });
 
   return (
@@ -859,47 +896,13 @@ function TicketListScreen({ onSelectTicket }) {
       <div
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           alignItems: 'center',
           gap: 12,
           marginBottom: 18,
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-          <span
-            onClick={() => setStatusFilter('all')}
-            style={{
-              cursor: 'pointer',
-              padding: '3px 11px',
-              borderRadius: 8,
-              background: statusFilter === 'all' ? '#1A73E8' : '#30363D',
-              color: '#fff',
-              fontSize: 10,
-              fontWeight: 700,
-            }}
-          >
-            All
-          </span>
-          {Object.entries(STATUS_CFG).map(([key, cfg]) => (
-            <span
-              key={key}
-              onClick={() => setStatusFilter(key)}
-              style={{
-                cursor: 'pointer',
-                fontSize: 10,
-                fontWeight: 700,
-                padding: '3px 11px',
-                borderRadius: 8,
-                background: statusFilter === key ? cfg.color : cfg.bg,
-                color: statusFilter === key ? '#fff' : cfg.color,
-              }}
-            >
-              {cfg.label}
-            </span>
-          ))}
-        </div>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ position: 'relative' }}>
             <SearchOutlined
@@ -979,7 +982,8 @@ function TicketListScreen({ onSelectTicket }) {
               minute: '2-digit',
             });
             const stCfg = STATUS_CFG[ticket.status] || STATUS_CFG.pending;
-            const isPending = ticket.status === 'pending';
+            const isPending =
+              ticket.status === 'pending' || ticket.status === 'created';
             const unitCount = (ticket.assignedUnits || []).length;
             const sev = { color: SEV_COLORS[ticket.severity] || '#8B949E' };
 
@@ -1771,64 +1775,37 @@ export default function DispatchPage() {
       'warn',
     );
     const ids = [];
+    let success = false;
 
     try {
       const vehicleType = agentTicket?.vehicleType || 'ambulance';
-
-      // ── STEP 1: Build dynamic invite list from selected unit IDs ──
       const inviteUserIds = selectedUnitIds.map((id) => {
         const unit = unitList.find((u) => u.id === id);
-        return `@${unit?.name || id}:localhost`; // ← unit.name = "sushma", not "AMB-N0AIDZ"
+        return `@${unit?.name || id}:localhost`;
       });
-
-      // ── STEP 2: Kick off Matrix room creation (runs concurrently with dispatch) ──
       const roomPromise =
         dispatcher?.accessToken && agentTicket?.id
-          ? createRoom(
-              dispatcher.accessToken,
-              `Ticket-${agentTicket.id}`,
-              inviteUserIds,
-            )
-              .then((room) => {
-                addLog(`✅ Matrix room created: ${room.room_id}`, 'ok');
-                return room.room_id;
-              })
-              .catch((err) => {
-                addLog(
-                  `⚠️ Matrix room creation skipped: ${err.message}`,
-                  'warn',
-                );
-                return null;
-              })
+          ? createRoom(dispatcher.accessToken, `Ticket-${agentTicket.id}`, inviteUserIds)
+              .then((room) => { addLog(`✅ Matrix room created: ${room.room_id}`, 'ok'); return room.room_id; })
+              .catch((err) => { addLog(`⚠️ Matrix room creation skipped: ${err.message}`, 'warn'); return null; })
           : Promise.resolve(null);
-
-      // ── STEP 3: Await roomId so assignment payload carries it ──
       const roomId = await roomPromise;
-
-      // ── STEP 4: Build base payload with roomId ──
       const base = {
         patientName: answers.f1 || 'Unknown',
         patientPhone: answers.f2 || '',
-        address:
-          answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
+        address: answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
         notes: answers.f7 || '',
         destination: { latitude: pickedLat, longitude: pickedLng },
-        vehicleType,
-        severity,
-        answers,
+        vehicleType, severity, answers,
         agentTicketId: agentTicket?.id || '',
         roomId: roomId || '',
         matrixRoomId: roomId || '',
       };
 
-      // ── STEP 5: Dispatch (parallel for multi-unit) ──
       if (selectedUnitIds.length === 0) {
         const res = await sendAlert(base);
         ids.push(res.data.id);
-        addToHistory({
-          ...buildEntry(res.data.id, null, vehicleType),
-          status: 'pending',
-        });
+        addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
         addLog('📡 Broadcast to all units', 'warn');
       } else {
         const results = await Promise.all(
@@ -1840,85 +1817,50 @@ export default function DispatchPage() {
         );
         for (const { unitId, res, err } of results) {
           const unit = unitList.find((u) => u.id === unitId);
-          if (err) {
-            addLog(
-              `❌ Assign failed → ${unit?.name || unitId}: ${err.response?.data?.error || err.message}`,
-              'error',
-            );
-            continue;
-          }
+          if (err) { addLog(`❌ Assign failed → ${unit?.name || unitId}: ${err.response?.data?.error || err.message}`, 'error'); continue; }
           ids.push(res.data.id);
-          addToHistory({
-            ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
-            status: 'pending',
-          });
+          addToHistory({ ...buildEntry(res.data.id, unitId, unit?.type || vehicleType), status: 'pending' });
           addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
         }
-
-        // ── Ticket Events audit log (additive, non-blocking) ──────────────
         if (agentTicket?.id) {
-          const successfulUnitIds = results
-            .filter((r) => !r.err)
-            .map((r) => r.unitId);
+          const successfulUnitIds = results.filter((r) => !r.err).map((r) => r.unitId);
           if (successfulUnitIds.length > 0) {
             dispatchTicketEvent(agentTicket.id, {
               source_id: dispatcher?.username || 'dispatcher',
-              source_name:
-                dispatcher?.displayName || dispatcher?.username || 'dispatcher',
+              source_name: dispatcher?.displayName || dispatcher?.username || 'dispatcher',
               unit_id: successfulUnitIds,
-              unit_details: successfulUnitIds.map((uid) => {
-                const u = unitList.find((x) => x.id === uid);
-                return {
-                  unit_id: uid,
-                  name: u?.name || uid,
-                  type: u?.type || vehicleType,
-                };
-              }),
+              unit_details: successfulUnitIds.map((uid) => { const u = unitList.find((x) => x.id === uid); return { unit_id: uid, name: u?.name || uid, type: u?.type || vehicleType }; }),
               room_details: roomId ? { room_id: roomId } : null,
-            }).catch((err) =>
-              addLog(
-                `⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`,
-                'warn',
-              ),
-            );
+            }).catch((err) => addLog(`⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`, 'warn'));
           }
         }
       }
 
-      // ── STEP 6: Update local ticket ──
       if (agentTicket?.id) {
         updateAgentTicket(agentTicket.id, {
           status: 'dispatched',
-          assignedUnits: [
-            ...(agentTicket.assignedUnits || []),
-            ...selectedUnitIds,
-          ],
+          assignedUnits: [...(agentTicket.assignedUnits || []), ...selectedUnitIds],
           alertIds: [...(agentTicket.alertIds || []), ...ids],
           roomId,
         });
-        const fresh = getAgentTickets().find((t) => t.id === agentTicket.id);
-        if (fresh) {
-          setAgentTicket(fresh);
-          setSelectedTicket(fresh);
-        }
       }
 
       setLastAlertIds(ids);
-      setStatusBox({
-        type: 'pending',
-        icon: '📡',
-        text: `${ids.length} alert(s) sent — waiting for units…`,
-      });
       addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
-      setShowModal(false);
-      setSelectedUnitIds([]);
-      // Force the unit list to re-fetch immediately so status changes to Busy
-      setUnitRefreshTick((t) => t + 1);
+      success = true;
+
     } catch (e) {
       addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
+    } finally {
+      setDispatching(false);
+      setShowModal(false);
+      setSelectedUnitIds([]);
+      setUnitRefreshTick((t) => t + 1);
     }
 
-    setDispatching(false);
+    if (success) {
+      navigate('/alerts');
+    }
   };
 
   function buildEntry(id, unitId, vehicleType) {
@@ -1987,11 +1929,11 @@ export default function DispatchPage() {
 
   return (
     <div>
-      <TicketSwitcherStrip
+     {/*  <TicketSwitcherStrip
         tickets={allTickets}
         activeTicketId={selectedTicket.id}
         onSelect={loadTicket}
-      />
+      /> */}
 
       <div style={s.outerLayout}>
         {/* ══════════ LEFT COLUMN ══════════ */}

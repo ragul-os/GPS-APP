@@ -19,6 +19,36 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { API_BASE_URL } from '../config/apiConfig';
+import { getTickets } from '../api/api';
+
+/* Map a DB ticket row (public.tickets) into the alert shape this page renders. */
+function mapDbTicketToAlert(r) {
+  const d = r.ticket_details || {};
+  // `units` in DB is a JSONB object keyed by unit_id, but may also be an array.
+  const unitsField = r.units || {};
+  const unitIds = Array.isArray(unitsField)
+    ? unitsField
+        .map((u) => (typeof u === 'string' ? u : u?.unit_id))
+        .filter(Boolean)
+    : Object.keys(unitsField);
+  return {
+    id: r.ticket_id,
+    agentTicketId: r.ticket_id,
+    vehicleType: d.unit_type || 'ambulance',
+    severity: r.priority || d.priority || 'medium',
+    status: r.ticket_status || 'pending',
+    name: d.patient_name || d.caller_name || d.name || r.ani || 'Unknown',
+    address: d.address || '',
+    phone: d.phone_number || d.phone || r.ani || '',
+    createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+    destination:
+      d.latitude != null && d.longitude != null
+        ? { latitude: d.latitude, longitude: d.longitude }
+        : null,
+    assignedUnit: unitIds[0] || null,
+    assignedUnits: unitIds,
+  };
+}
 
 const UCFG = {
   ambulance: { icon: <MedicineBoxOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />, label: 'Ambulance', barColor: '#E53935' },
@@ -40,9 +70,12 @@ const FILTERS = [
 const SEV_COLORS = { critical: '#E53935', high: '#FF6D00', medium: '#F9A825', low: '#34A853' };
 const STATUS_CFG = {
   pending: { label: 'Pending', icon: <ClockCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#F9A825', bg: 'rgba(249,168,37,.12)' },
+  created: { label: 'Pending', icon: <ClockCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#F9A825', bg: 'rgba(249,168,37,.12)' },
   accepted: { label: 'Accepted', icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
-  dispatched: { label: 'Dispatched', icon: <NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
-  completed: { label: 'Completed', icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
+  dispatched: { label: 'In Progress', icon: <NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
+  on_going: { label: 'In Progress', icon: <NodeIndexOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#1A73E8', bg: 'rgba(26,115,232,.12)' },
+  completed: { label: 'Closed', icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
+  closed: { label: 'Closed', icon: <CheckCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#34A853', bg: 'rgba(52,168,83,.12)' },
   rejected: { label: 'Rejected', icon: <CloseCircleOutlined style={{ fontSize: '12px', verticalAlign: 'middle', marginRight: 4 }} />, color: '#E53935', bg: 'rgba(229,57,53,.12)' },
   en_route: {
     label: 'En Route',
@@ -64,31 +97,49 @@ const STATUS_CFG = {
   },
 };
 
+// Buckets used by the Monitoring status dropdown. Each bucket maps the user-
+// facing label onto the raw DB statuses it should match.
+const STATUS_FILTERS = [
+  { key: 'all', label: 'All Statuses', statuses: null },
+  { key: 'in_progress', label: 'In Progress', statuses: ['dispatched', 'on_going'] },
+  { key: 'closed', label: 'Closed', statuses: ['completed', 'closed'] },
+  { key: 'rejected', label: 'Rejected', statuses: ['rejected'] },
+];
+
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState([]);
   const [filter, setFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState('card'); // 'card' or 'list'
+  const [viewMode, setViewMode] = useState('list'); // 'card' or 'list'
   const [liveStatusMap, setLiveStatusMap] = useState({});
   const navigate = useNavigate();
   const alertsRef = React.useRef([]); // stable ref to avoid restarting interval on every render
 
+  // Monitoring screen lists every ticket from public.tickets EXCEPT pending ones
+  // (DB statuses 'pending' / 'created' are still awaiting unit assignment on
+  // the Dispatch screen).
   useEffect(() => {
-    const loadAlerts = () => {
-      const raw = JSON.parse(localStorage.getItem('alertHistory') || '[]');
-      // Normalise: ensure vehicleType always exists (fall back to 'ambulance' if missing)
-      const normalised = raw.map(a => ({
-        ...a,
-        vehicleType: a.vehicleType || 'ambulance',
-        status: a.status || 'pending',
-        severity: a.severity || 'medium',
-      }));
-      setAlerts(normalised);
-      alertsRef.current = normalised; // keep ref in sync for the polling interval
+    const loadAlerts = async () => {
+      try {
+        const res = await getTickets();
+        const rows = res.data?.tickets || [];
+        const normalised = rows
+          .map(mapDbTicketToAlert)
+          .filter((a) => a.status !== 'pending' && a.status !== 'created');
+        setAlerts(normalised);
+        alertsRef.current = normalised; // keep ref in sync for the polling interval
+      } catch (err) {
+        console.error('[AlertsPage] failed to load tickets:', err.message);
+      }
     };
     loadAlerts();
+    window.addEventListener('agentTicketsChange', loadAlerts);
     window.addEventListener('alertHistoryChange', loadAlerts);
-    return () => window.removeEventListener('alertHistoryChange', loadAlerts);
+    return () => {
+      window.removeEventListener('agentTicketsChange', loadAlerts);
+      window.removeEventListener('alertHistoryChange', loadAlerts);
+    };
   }, []);
 
   useEffect(() => {
@@ -130,14 +181,19 @@ export default function AlertsPage() {
     return Object.values(groups);
   }, [alerts]);
 
+  const activeStatusBucket = STATUS_FILTERS.find(f => f.key === statusFilter);
   const visibleAlerts = groupedAlerts.filter(a => {
     const matchesFilter = filter === 'all' || a.vehicleType === filter;
+    const effectiveStatus = a.status;
+    const matchesStatus =
+      !activeStatusBucket || !activeStatusBucket.statuses ||
+      activeStatusBucket.statuses.includes(effectiveStatus);
     const q = searchQuery.toLowerCase();
     const matchesSearch = !searchQuery ||
       (a.name || '').toLowerCase().includes(q) ||
       (a.address || '').toLowerCase().includes(q) ||
       (a.id || '').toLowerCase().includes(q);
-    return matchesFilter && matchesSearch;
+    return matchesFilter && matchesStatus && matchesSearch;
   });
 
   const counts = {};
@@ -189,6 +245,15 @@ export default function AlertsPage() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 8, color: '#E6EDF3', padding: '6px 10px', fontSize: 12, outline: 'none', cursor: 'pointer' }}
+          >
+            {STATUS_FILTERS.map(f => (
+              <option key={f.key} value={f.key}>{f.label}</option>
+            ))}
+          </select>
           <div style={{ position: 'relative' }}>
             <SearchOutlined style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#8B949E', fontSize: 14 }} />
             <input

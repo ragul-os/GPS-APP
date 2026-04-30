@@ -21,7 +21,6 @@ import GlobalChatPanel, {
 } from '../components/GlobalChatPanel';
 import RouteReplayPage from '../pages/RouteReplayPage';
 import TimelinePage from '../pages/TimelinePage';
-import TimelinePage from '../pages/TimelinePage';
 
 function ProtectedLayout() {
   const { dispatcher } = useAuth();
@@ -39,6 +38,7 @@ function ProtectedLayout() {
   const alertId = liveMatch ? liveMatch[1] : null;
 
   const [primaryTicketId, setPrimaryTicketId] = useState('');
+  const [primaryAlert, setPrimaryAlert] = useState(null);
 
   useEffect(() => {
     if (alertId) {
@@ -48,19 +48,41 @@ function ProtectedLayout() {
       const agentTickets = JSON.parse(
         localStorage.getItem('agentTickets') || '[]',
       );
+      const stateAlert = location.state?.alert || null;
       const ticket = agentTickets.find(
         (t) => t.id === alertId || (t.alertIds || []).includes(alertId),
       );
+      let resolvedTicketId = '';
+      let resolvedAlert = stateAlert;
       if (ticket) {
-        setPrimaryTicketId(ticket.id);
+        resolvedTicketId = ticket.id;
+        if (!resolvedAlert) {
+          resolvedAlert =
+            alertHistory.find(
+              (a) =>
+                a.agentTicketId === ticket.id ||
+                (ticket.alertIds || []).includes(a.id),
+            ) || null;
+        }
       } else {
-        const alert = alertHistory.find((a) => a.id === alertId);
-        setPrimaryTicketId(alert?.agentTicketId || '');
+        const localAlert = alertHistory.find((a) => a.id === alertId);
+        if (localAlert) {
+          resolvedAlert = resolvedAlert || localAlert;
+          resolvedTicketId = localAlert.agentTicketId || alertId;
+        } else if (stateAlert) {
+          resolvedTicketId =
+            stateAlert.agentTicketId || stateAlert.id || alertId;
+        } else {
+          resolvedTicketId = alertId;
+        }
       }
+      setPrimaryTicketId(resolvedTicketId);
+      setPrimaryAlert(resolvedAlert);
     } else {
       setPrimaryTicketId('');
+      setPrimaryAlert(null);
     }
-  }, [alertId, location.pathname]);
+  }, [alertId, location.pathname, location.state]);
 
   return (
     <div
@@ -128,8 +150,11 @@ function ProtectedLayout() {
             path='/replay/:id'
             element={<RouteReplayPage />}
           />
-           <Route path="/timeline/:id" element={<TimelinePage />} />
-        <Route
+          <Route
+            path='/timeline/:id'
+            element={<TimelinePage />}
+          />
+          <Route
             path='/timeline/:id'
             element={<TimelinePage />}
           />
@@ -152,11 +177,11 @@ function ProtectedLayout() {
           <div
             style={{
               position: 'fixed',
-              bottom: 20,
+              bottom: alertId ? 15 : 20,
               left: collapsed ? 80 : 236,
               zIndex: 500,
               pointerEvents: 'auto',
-              transition: 'left 0.25s ease',
+              transition: 'left 0.25s ease, bottom 0.25s ease',
             }}
           >
             <ChatTriggerButton
@@ -170,6 +195,7 @@ function ProtectedLayout() {
             onClose={() => setChatOpen(false)}
             onUnreadChange={setChatUnread}
             primaryTicketId={primaryTicketId}
+            primaryAlert={primaryAlert}
             onTicketClick={(aid) => navigate(`/live/${aid}`)}
           />
         </>
