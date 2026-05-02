@@ -236,7 +236,7 @@ export default function GlobalChatPanel({
         },
       });
     } catch (err) {
-      console.error('[GlobalChatPanel] Failed to fetch members:', err);
+     // console.error('[GlobalChatPanel] Failed to fetch members:', err);
     }
   };
 
@@ -256,7 +256,7 @@ export default function GlobalChatPanel({
         selectedRef.current = dmRoomId;
       }
     } catch (err) {
-      console.error('[GlobalChatPanel] DM initiation failed:', err);
+     // console.error('[GlobalChatPanel] DM initiation failed:', err);
       alert('Failed to open DM: ' + err.message);
     } finally {
       setDmLoading(false);
@@ -341,9 +341,9 @@ export default function GlobalChatPanel({
               }
             }
 
-            console.log(
+            /* console.log(
               `[GlobalChatPanel] DEBUG: Processing room ${roomId}. Found name: "${roomName}", isDirect: ${isDirect}`,
-            );
+            ); */
 
             const ticketId =
               roomName
@@ -376,9 +376,9 @@ export default function GlobalChatPanel({
                 `[GlobalChatPanel] SUCCESS: Matched ticket for room ${roomId}`,
               );
             else
-              console.log(
+              /* console.log(
                 `[GlobalChatPanel] WARN: No local ticket match for ${roomId} / ${ticketId}`,
-              );
+              ); */
 
             list.push({
               roomId,

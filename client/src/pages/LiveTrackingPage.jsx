@@ -18,7 +18,7 @@ import React, {
   useMemo,
 } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { getAmbulanceLocation, getDirections } from '../api/api';
+import { getAmbulanceLocation, getDirections, getTickets  } from '../api/api';
 import axios from 'axios';
 import InteractionsTab from '../components/InteractionsTab';
 import {
@@ -568,7 +568,7 @@ function getAgentTickets() {
 // Return the UNION of assignedUnits across every agent ticket that references
 // the given alert/ticket id. Handles the case where a second dispatch created
 // a new ticket entry instead of appending to an existing one.
-function resolveDispatchedUnits(routeId, alertObj) {
+function resolveDispatchedUnits(routeId, alertObj, dbUnits  = null) {
   const all = getAgentTickets();
   const matched = all.filter(
     (tk) =>
@@ -581,6 +581,10 @@ function resolveDispatchedUnits(routeId, alertObj) {
     (tk.assignedUnits || []).forEach((u) => u && set.add(u)),
   );
   if (alertObj?.assignedUnit) set.add(alertObj.assignedUnit);
+  // ── NEW: pull unit IDs from DB units object ──
+  if (dbUnits && typeof dbUnits === 'object') {
+    Object.keys(dbUnits).forEach((uid) => uid && set.add(uid));
+  }
   return [...set];
 }
 function saveAgentTickets(t) {
@@ -1871,6 +1875,7 @@ export default function LiveTrackingPage() {
   const tripStatusRef = useRef('idle');
   // ── KEY REF: prevents duplicate closeTicketEvent calls ──
   const dbClosedRef = useRef(false);
+  const lastTicketIdRef = useRef(null);
 
   // ── FIX: single authoritative set of which units have completed ──────────
   // This is the ONLY place we track completed units. Both the main poll
@@ -1911,15 +1916,22 @@ export default function LiveTrackingPage() {
     const t = all.find((tk) => (tk.alertIds || []).includes(id));
     return t?.status || alertObj?.status || 'dispatched';
   });
-  const [dispatchedUnits, setDispatchedUnits] = useState(() =>
-    resolveDispatchedUnits(id, alertObj),
-  );
+  const [dispatchedUnits, setDispatchedUnits] = useState(() => {
+  const units = resolveDispatchedUnits(id, alertObj);
+  console.log('[DEBUG] resolvedUnits:', units, 'id:', id, 'alertObj:', alertObj);
+  return units;
+});
   const [unitLocations, setUnitLocations] = useState({});
   const [unitStatuses, setUnitStatuses] = useState({});
   const [unitTypes, setUnitTypes] = useState({});
   const [activeUnitId, setActiveUnitId] = useState(
     () => resolveDispatchedUnits(id, alertObj)[0] || null,
   );
+
+  
+
+  // Fetch DB ticket units on mount
+
 
   // Keep refs in sync
   useEffect(() => {
@@ -1970,6 +1982,52 @@ export default function LiveTrackingPage() {
       ];
     });
   }, []);
+
+
+  useEffect(() => {
+  const fetchDbUnits = async () => {
+    try {
+      const res = await getTickets(); // already imported
+      const tickets = res.data?.tickets || [];
+      const dbTicket = tickets.find(
+        (t) =>
+          t.ticket_id === id ||
+          t.ticket_id === alertObj?.agentTicketId,
+      );
+      if (!dbTicket?.units) return;
+      const dbUnits = dbTicket.units; // e.g. { "AMB-KLNEK6": {...}, "AMB-UOG4VI": {...} }
+      const unitIds = Object.keys(dbUnits).filter(Boolean);
+      if (!unitIds.length) return;
+
+      setDispatchedUnits((prev) => {
+        const merged = new Set(prev);
+        unitIds.forEach((u) => merged.add(u));
+        if (merged.size === prev.length) return prev;
+        return [...merged];
+      });
+
+      // Set unit types from DB units data
+      setUnitTypes((prev) => {
+        const next = { ...prev };
+        Object.entries(dbUnits).forEach(([uid, info]) => {
+          if (!next[uid]) next[uid] = info.type || 'ambulance';
+        });
+        return next;
+      });
+
+      // Set active unit to first if not already set
+      if (!activeUnitIdRef.current && unitIds.length) {
+        activeUnitIdRef.current = unitIds[0];
+        setActiveUnitId(unitIds[0]);
+      }
+
+      addTLog(`DB units loaded: ${unitIds.join(', ')}`, 'ok');
+    } catch (err) {
+      console.warn('[fetchDbUnits]', err.message);
+    }
+  };
+  fetchDbUnits();
+}, [id, alertObj, addTLog]);
 
   // ── FIX: tryCloseTicket — called from BOTH poll loops ────────────────────
   // This is the single function that decides whether all units are done
@@ -2085,63 +2143,58 @@ export default function LiveTrackingPage() {
   );
 
   // ── Navigation sync ───────────────────────────────────────────────────────
-  useEffect(() => {
-    const all = getAgentTickets();
-    const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
-    const ao =
-      location.state?.alert ||
-      hist.find((a) => a.id === id || a.agentTicketId === id) ||
-      null;
-    const t = all.find(
-      (tk) => (tk.alertIds || []).includes(id) || tk.id === id,
-    );
+  // Add this ref near the other refs:
 
-    setAgentTicket(t || null);
-    setTicketStatus(t?.status || ao?.status || 'dispatched');
 
-    // Union of assignedUnits across all tickets that reference this alert id.
-    const units = resolveDispatchedUnits(id, ao);
-    setDispatchedUnits(units);
+// Then in the navigation sync useEffect, wrap the reset block:
+useEffect(() => {
+  const all = getAgentTickets();
+  const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
+  const ao = location.state?.alert ||
+    hist.find((a) => a.id === id || a.agentTicketId === id) || null;
+  const t = all.find((tk) => (tk.alertIds || []).includes(id) || tk.id === id);
 
-    const nextActive = units[0] || null;
-    activeUnitIdRef.current = nextActive;
-    setActiveUnitId(nextActive);
+  setAgentTicket(t || null);
+  setTicketStatus(t?.status || ao?.status || 'dispatched');
 
-    const alreadyTerminal =
-      t?.status === 'completed' || t?.status === 'abandoned';
-    ticketCompletedRef.current = alreadyTerminal;
-    if (alreadyTerminal) dbClosedRef.current = true;
-    lastTripStRef.current = '';
+  const units = resolveDispatchedUnits(id, ao);
+  setDispatchedUnits(units);
 
-    // Reset completed set on navigation
-    completedUnitsSetRef.current = new Set();
+  const nextActive = units[0] || null;
+  activeUnitIdRef.current = nextActive;
+  setActiveUnitId(nextActive);
 
-    if (!alreadyTerminal) {
-      setLive(false);
-      setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
-      setRouteData([]);
-      setStepInfo({ idx: 0, total: 0 });
-      Object.values(vehMkrMap.current).forEach((mkr) => {
-        try {
-          mkr?.setMap(null);
-        } catch (_) {}
-      });
-      vehMkrMap.current = {};
-      polylinesRef.current.forEach((r) => {
-        try {
-          r.out?.setMap(null);
-          r.poly?.setMap(null);
-        } catch (_) {}
-      });
-      polylinesRef.current = [];
-      routeAtRef.current = 0;
-      lastVRef.current = null;
-      setUnitStatuses({});
-      setUnitLocations({});
-    }
+  const alreadyTerminal = t?.status === 'completed' || t?.status === 'abandoned';
+  ticketCompletedRef.current = alreadyTerminal;
+  if (alreadyTerminal) dbClosedRef.current = true;
+  lastTripStRef.current = '';
+  completedUnitsSetRef.current = new Set();
 
-    addTLog(`Incident: ${ao?.name || id}`, 'info');
-  }, [id, location.key, addTLog]);
+  // ── ONLY reset map/live/stats when ticket ID actually changes ──
+  const ticketChanged = lastTicketIdRef.current !== id;
+  lastTicketIdRef.current = id;
+
+  if (!alreadyTerminal && ticketChanged) {  // ← ADD ticketChanged check
+    setLive(false);
+    setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
+    setRouteData([]);
+    setStepInfo({ idx: 0, total: 0 });
+    Object.values(vehMkrMap.current).forEach((mkr) => {
+      try { mkr?.setMap(null); } catch (_) {}
+    });
+    vehMkrMap.current = {};
+    polylinesRef.current.forEach((r) => {
+      try { r.out?.setMap(null); r.poly?.setMap(null); } catch (_) {}
+    });
+    polylinesRef.current = [];
+    routeAtRef.current = 0;
+    lastVRef.current = null;
+    setUnitStatuses({});
+    setUnitLocations({});
+  }
+
+  addTLog(`Incident: ${ao?.name || id}`, 'info');
+}, [id, location.key, addTLog]);
 
   // Init map
   useEffect(() => {
@@ -2329,7 +2382,7 @@ export default function LiveTrackingPage() {
     [alertObj, addTLog],
   );
 
-  const updateVehicle = useCallback(
+  /* const updateVehicle = useCallback(
     (lat, lng, uid) => {
       if (!mapObj.current || uid !== activeUnitIdRef.current) return;
       const pos = { lat, lng };
@@ -2370,7 +2423,99 @@ export default function LiveTrackingPage() {
     },
     [cfg, addTLog],
   );
+ */
 
+
+
+  const updateVehicle = useCallback(
+  (lat, lng, uid) => {
+
+    console.log("🚗 updateVehicle:", {
+      uid,
+      active: activeUnitIdRef.current,
+      isActive: uid === activeUnitIdRef.current
+    });
+
+    if (!mapObj.current || uid !== activeUnitIdRef.current) {
+      console.log("⛔ Skipped updateVehicle:", uid);
+      return;
+    }
+
+    const pos = { lat, lng };
+
+    // 🧹 REMOVE OLD MARKERS (CRITICAL FIX)
+    Object.keys(vehMkrMap.current).forEach((key) => {
+      if (key !== uid) {
+        console.log("🧹 Removing marker:", key);
+        vehMkrMap.current[key]?.setMap(null);
+        delete vehMkrMap.current[key];
+      }
+    });
+
+    if (!vehMkrMap.current[uid]) {
+      console.log("🆕 Creating marker for:", uid);
+
+      const mkr = new window.google.maps.Marker({
+        position: pos,
+        map: mapObj.current,
+        zIndex: 100,
+        icon: {
+          url:
+            'data:image/svg+xml;charset=UTF-8,' +
+            encodeURIComponent(
+              `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+                <circle cx="22" cy="22" r="20" fill="${cfg.color}" stroke="white" stroke-width="2.5"/>
+                <text x="22" y="28" text-anchor="middle" font-size="16" fill="white" font-family="Arial" font-weight="bold">
+                  ${alertObj.vehicleType[0].toUpperCase()}
+                </text>
+              </svg>`
+            ),
+          scaledSize: new window.google.maps.Size(44, 44),
+          anchor: new window.google.maps.Point(22, 22),
+        },
+      });
+
+      vehMkrMap.current[uid] = mkr;
+      addTLog(`Unit on map [${uid}]`, 'ok', uid);
+
+      setTimeout(() => {
+        if (uid !== activeUnitIdRef.current) return;
+
+        const b = new window.google.maps.LatLngBounds();
+        if (vehMkrMap.current[uid])
+          b.extend(vehMkrMap.current[uid].getPosition());
+        if (destMkr.current)
+          b.extend(destMkr.current.getPosition());
+
+        if (!b.isEmpty()) {
+          console.log("📦 Fit bounds for:", uid);
+          mapObj.current.fitBounds(b);
+        }
+      }, 600);
+
+    } else {
+      console.log("📍 Updating position:", uid);
+      vehMkrMap.current[uid].setPosition(pos);
+    }
+
+    // 🚫 REDUCE JUMPING (IMPORTANT FIX)
+    if (lastVRef.current) {
+      const { lat: plat, lng: plng } = lastVRef.current;
+
+      const moved =
+        Math.abs(lat - plat) > 0.0005 ||  // increased threshold
+        Math.abs(lng - plng) > 0.0005;
+
+      if (moved) {
+        console.log("🧭 Pan to:", uid);
+        mapObj.current.panTo(pos);
+      }
+    }
+
+    lastVRef.current = { lat, lng };
+  },
+  [cfg, addTLog, alertObj]
+);
   const fetchNearby = useCallback(
     async (lat, lng) => {
       if (!mapObj.current || nearbyInFlight.current) return;
@@ -3164,7 +3309,7 @@ export default function LiveTrackingPage() {
           activeUnitId={activeUnitId}
         />
 
-        <div
+        {/* <div
           ref={mapRef}
           style={{ ...s.map, visibility: live ? 'visible' : 'hidden' }}
         />
@@ -3186,7 +3331,22 @@ export default function LiveTrackingPage() {
               Live position appears once the unit is moving
             </div>
           </div>
-        )}
+        )} */}
+
+        <div ref={mapRef} style={s.map} />
+{!live && (
+  <div style={{
+    ...s.noLocMsg,
+    background: 'rgba(13,17,23,0.6)',
+    backdropFilter: 'blur(3px)',
+    pointerEvents: 'none',  // let map clicks pass through
+  }}>
+    <div style={{ fontSize: 40, opacity: 0.3 }}>{cfg.icon}</div>
+    <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>
+      Waiting for unit location…
+    </div>
+  </div>
+)}
       </div>
 
       <div style={s.side}>
