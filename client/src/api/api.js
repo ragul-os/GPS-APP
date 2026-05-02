@@ -51,6 +51,11 @@ export const assignUnit = (data) =>
     ticket_data: data,
     timestamp: Date.now(),
   });
+
+// Patch a Matrix roomId onto already-dispatched assignments after the
+// dispatcher's createRoom has resolved in the background.
+export const updateAssignmentRoom = ({ unitIds, agentTicketId, roomId }) =>
+  api.post('/assignment-room', { unitIds, agentTicketId, roomId });
 export const getStatus = () =>
   webhookApi.get('/webhook/gps', {
     params: { action: 'getStatus' },
@@ -93,7 +98,6 @@ export const getDirections = (originLat, originLng, destLat, destLng) =>
 
 export const getTicketTimeline = (ticketId) =>
   axios.get(`${API_BASE_URL}/api/timeline/${ticketId}`);
-
 
 // Fetch units from public.units (PostgreSQL) — includes real unit_status
 export const getUnitsFromDb = () => api.get('/api/units/db-status');

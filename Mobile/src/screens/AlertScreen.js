@@ -169,6 +169,7 @@ export default function AlertScreen() {
     //startLocPoll();
     startInboxPoll(); // 🌟 Start Webhook Gateway inbox polling
     startPulse();
+    recoverActiveTrip(); // Restore Resume/Complete card if a trip is in progress
     return () => {
       clearInterval(pollRef.current);
       clearInterval(locPollRef.current);
@@ -179,41 +180,123 @@ export default function AlertScreen() {
     };
   }, [isRegistered]);
 
+  // ── Recover an in-progress trip after app restart ─────────────────────────
+  // If the unit previously accepted a ticket and the app was killed/reopened
+  // before the trip was completed, the server still holds the assignment
+  // (status='accepted') and the unit's tripStatus (en_route/on_action/arrived).
+  // Pull both and re-show the active-trip card so the driver can Resume/Complete.
+  const recoverActiveTrip = async () => {
+    if (!unitId) return;
+    try {
+      // 1) Fetch the assignment first — its status is the authoritative
+      //    signal for "trip in progress" (accept-assignment sets it to
+      //    'accepted' and only complete-trip / reject-assignment clear it).
+      const alertRes = await fetch(
+        `${SERVER_URL}/my-alert?ambulanceId=${unitId}`,
+      );
+      const alertJson = await alertRes.json().catch(() => ({}));
+      const alert = alertJson?.alert;
+
+      console.log(
+        '[Alert] recoverActiveTrip /my-alert →',
+        JSON.stringify(alert).slice(0, 200),
+      );
+
+      if (!alert || !alert.id || alert.status !== 'accepted') return;
+
+      // 2) Fetch tripStatus using the ticket_no so the server resolves the
+      //    correct unitTripState key (`${ticketNo}:${unitId}`). Without
+      //    ticket_no the fallback can return the stale 'idle' record seeded
+      //    at unit registration.
+      const ticketNo = alert.agentTicketId || alert.id;
+      const locUrl = `${SERVER_URL}/unit-location/${encodeURIComponent(unitId)}?ticket_no=${encodeURIComponent(ticketNo)}`;
+      const locRes = await fetch(locUrl);
+      const locJson = await locRes.json().catch(() => ({}));
+      const rawTripStatus = locJson?.tripStatus || 'idle';
+
+      console.log('[Alert] recoverActiveTrip /unit-location →', rawTripStatus);
+
+      // 3) If the server's trip is already terminal, do nothing.
+      if (rawTripStatus === 'completed' || rawTripStatus === 'abandoned') {
+        return;
+      }
+
+      // 4) Map an unhelpful 'idle' to a non-idle value so the active-trip
+      //    card actually renders. assignment.status === 'accepted' means
+      //    the driver took the trip; treat unknown server state as en_route.
+      const restoredTripStatus =
+        rawTripStatus === 'idle' ? 'en_route' : rawTripStatus;
+
+      console.log(
+        '[Alert] Recovered active trip:',
+        ticketNo,
+        'restoredTripStatus:',
+        restoredTripStatus,
+      );
+
+      setTripStatus(restoredTripStatus);
+      setAlertData(alert);
+
+      const recoveredRoom = alert.roomId || alert.matrixRoomId;
+      if (recoveredRoom) {
+        setRoomId(recoveredRoom);
+        roomIdRef.current = recoveredRoom;
+      }
+
+      // Prevent the same alert from being re-shown by the inbox poll
+      const dedupeKey = alert.agentTicketId || alert.id;
+      lastAlertId.current = dedupeKey;
+      acceptedTicketsRef.current.add(dedupeKey);
+      AsyncStorage.setItem(
+        'ACCEPTED_TICKETS',
+        JSON.stringify([...acceptedTicketsRef.current].slice(-50)),
+      ).catch(() => {});
+    } catch (err) {
+      console.warn('[Alert] recoverActiveTrip failed:', err.message);
+    }
+  };
+
   // ── CHANGE: uses dynamic unitId and unitType ──────────────────────────────
   const registerAmbulance = async () => {
-  try {
-    await Location.requestForegroundPermissionsAsync();
-    const res = await fetch(`${SERVER_URL}/register-ambulance`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ambulanceId: unitId,
-        unitId,
-        name: session.displayname || session.username,
-        type: unitType,
-      }),
-    });
-    const json = await res.json();
-    if (json.success) {
-      setIsRegistered(true);
-      if (!heartbeatRef.current) startHeartbeat();
-
-      // Sync device_status = online back to DB on every app start/restart
-      fetch(`${SERVER_URL}/api/units/sync`, {
+    try {
+      await Location.requestForegroundPermissionsAsync();
+      const res = await fetch(`${SERVER_URL}/register-ambulance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ambulanceId: unitId,
           unitId,
-          username: session.username,
-          unitType,
-          deviceStatus: 'online',
+          name: session.displayname || session.username,
+          // Send the canonical Matrix user_id so the dispatcher can force-join
+          // this exact user (case-sensitive) without reconstructing it from the
+          // display name.
+          matrixUserId: session.userId,
+          type: unitType,
         }),
-      }).catch(err => console.warn('[AlertScreen] DB sync failed:', err.message));
+      });
+      const json = await res.json();
+      if (json.success) {
+        setIsRegistered(true);
+        if (!heartbeatRef.current) startHeartbeat();
+
+        // Sync device_status = online back to DB on every app start/restart
+        fetch(`${SERVER_URL}/api/units/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            unitId,
+            username: session.username,
+            unitType,
+            deviceStatus: 'online',
+          }),
+        }).catch((err) =>
+          console.warn('[AlertScreen] DB sync failed:', err.message),
+        );
+      }
+    } catch (err) {
+      console.warn('[Alert] Registration failed:', err.message);
     }
-  } catch (err) {
-    console.warn('[Alert] Registration failed:', err.message);
-  }
-};
+  };
 
   // ── CHANGE: uses dynamic unitId ───────────────────────────────────────────
   const startHeartbeat = () => {
@@ -390,6 +473,36 @@ export default function AlertScreen() {
                 doReject('cancelled_by_other_unit');
               }
             }
+            // Late-bound roomId: dispatcher creates the Matrix room in
+            // parallel with sendAlert/assignUnit, so the room may arrive
+            // after the unit has already received (or accepted) the alert.
+            if (payload?.type === 'ALERT_ROOM_UPDATED' && payload?.roomId) {
+              const updateKey = payload.agentTicketId || payload.alertId;
+              const fresh = payload.roomId;
+              console.log(
+                '[Inbox] 🔗 ALERT_ROOM_UPDATED:',
+                updateKey,
+                '→',
+                fresh,
+              );
+              if (!updateKey || updateKey === lastAlertId.current) {
+                roomIdRef.current = fresh;
+                setRoomId(fresh);
+                setActiveRoomId(fresh);
+                if (session?.accessToken) {
+                  joinRoom(session.accessToken, fresh)
+                    .then(() =>
+                      console.log('[Inbox] Joined late-bound room ✅'),
+                    )
+                    .catch((err) =>
+                      console.warn(
+                        '[Inbox] late joinRoom failed:',
+                        err.message,
+                      ),
+                    );
+                }
+              }
+            }
           }
 
           if (msgs.length === 0) {
@@ -539,7 +652,26 @@ export default function AlertScreen() {
     stopCountdown();
 
     const captured = alertData;
-    const capturedRoomId = roomIdRef.current;
+    let capturedRoomId = roomIdRef.current;
+
+    // The dispatcher's createRoom now runs in parallel with the alert dispatch,
+    // so the alert may have arrived before the roomId was attached. Refetch the
+    // assignment once if we don't have a roomId yet.
+    if (!capturedRoomId && unitId) {
+      try {
+        const res = await fetch(`${SERVER_URL}/my-alert?ambulanceId=${unitId}`);
+        const json = await res.json();
+        const fresh = json?.alert?.roomId || json?.alert?.matrixRoomId || null;
+        if (fresh) {
+          capturedRoomId = fresh;
+          setRoomId(fresh);
+          roomIdRef.current = fresh;
+          console.log('[Alert] Late-bound roomId from /my-alert:', fresh);
+        }
+      } catch (err) {
+        console.warn('[Alert] roomId refetch failed:', err.message);
+      }
+    }
 
     console.log('[Alert] Room ID:', capturedRoomId);
     setActiveRoomId(capturedRoomId);
@@ -566,20 +698,19 @@ export default function AlertScreen() {
       console.warn('[Alert] Accept API failed:', err.message);
     }
 
-
     try {
-  await fetch(`${SERVER_URL}/api/unit/online`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      unitId: unitId
-    }),
-  });
+      await fetch(`${SERVER_URL}/api/unit/online`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          unitId: unitId,
+        }),
+      });
 
-  console.log('[Alert] Unit status updated to online ✅');
-} catch (err) {
-  console.warn('[Alert] Unit status update failed:', err.message);
-}
+      console.log('[Alert] Unit status updated to online ✅');
+    } catch (err) {
+      console.warn('[Alert] Unit status update failed:', err.message);
+    }
 
     // ── Ticket Events audit log (ACKNOWLEDGED, additive, non-blocking) ───
     const ticketNoForEvent = captured.agentTicketId || captured.id || '';

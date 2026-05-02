@@ -122,7 +122,10 @@ let pushTokens = new Set();
 setInterval(async () => {
   const now = Date.now();
   for (const [id, unit] of units.entries()) {
-    if (now - unit.lastSeen > HEARTBEAT_TIMEOUT_MS && unit.status !== 'offline') {
+    if (
+      now - unit.lastSeen > HEARTBEAT_TIMEOUT_MS &&
+      unit.status !== 'offline'
+    ) {
       unit.status = 'offline';
       console.log(`📴 Unit offline: ${id}`);
 
@@ -134,16 +137,21 @@ setInterval(async () => {
       try {
         await pgPool.query(
           `UPDATE public.units SET device_status = 'offline', updated_at = now() WHERE unit_id = $1`,
-          [id]
+          [id],
         );
         console.log(`🔴 DB: ${id} → offline`);
       } catch (err) {
-        console.warn(`[offline-detect] DB update failed for ${id}:`, err.message);
+        console.warn(
+          `[offline-detect] DB update failed for ${id}:`,
+          err.message,
+        );
       }
 
       if (offLat && offLng) {
         trackInsert({
-          unitId: id, latitude: offLat, longitude: offLng,
+          unitId: id,
+          latitude: offLat,
+          longitude: offLng,
           speed: ts?.speed || unit.location?.speed || 0,
           tripStatus: ts?.tripStatus || 'idle',
           locationInfo: null,
@@ -358,12 +366,18 @@ setInterval(async () => {
             unit.status = 'busy';
             unit.assignedIncidentId = alertId;
 
-            pgPool.query(
-              `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
-              [targetUnit]
-            ).then(() => console.log(`[nats-dispatch] ${targetUnit} → busy in DB`))
-             .catch(err => console.warn(`[nats-dispatch] DB update failed:`, err.message));
- 
+            pgPool
+              .query(
+                `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
+                [targetUnit],
+              )
+              .then(() =>
+                console.log(`[nats-dispatch] ${targetUnit} → busy in DB`),
+              )
+              .catch((err) =>
+                console.warn(`[nats-dispatch] DB update failed:`, err.message),
+              );
+
             const key = `${alertId}:${targetUnit}`;
             unitTripState.set(
               key,
@@ -858,6 +872,10 @@ function handleRegister(req, res) {
   const name = req.body.name;
   const type = req.body.type || 'ambulance';
   const pushToken = req.body.pushToken || null;
+  // Canonical Matrix user_id (e.g. "@Amritha:localhost"). The dispatcher uses
+  // this verbatim when force-joining the unit to a ticket room — avoids any
+  // case/format mismatch from reconstructing the id out of the display name.
+  const matrixUserId = req.body.matrixUserId || null;
   if (!unitId || !name)
     return res.status(400).json({ error: 'unitId and name required' });
 
@@ -867,6 +885,7 @@ function handleRegister(req, res) {
     id: unitId,
     name,
     type,
+    matrixUserId: matrixUserId || existing?.matrixUserId || null,
     status: existing?.status === 'busy' ? 'busy' : 'available',
     lastSeen: Date.now(),
     registeredAt: existing?.registeredAt || Date.now(),
@@ -902,14 +921,18 @@ app.post('/heartbeat', (req, res) => {
   unit.lastSeen = Date.now();
 
   if (unit.status === 'offline') {
-  unit.status = unit.assignedIncidentId ? 'busy' : 'available';
-  console.log(`🔄 Unit back online: ${unit.name} (${unitId})`);
-  // Sync comeback to DB
-  pgPool.query(
-    `UPDATE public.units SET device_status = 'online', unit_status = CASE WHEN unit_status = 'busy' THEN 'busy' ELSE 'available' END, updated_at = now() WHERE unit_id = $1`,
-    [unitId]
-  ).catch(err => console.warn('[heartbeat] comeback DB update failed:', err.message));
-}
+    unit.status = unit.assignedIncidentId ? 'busy' : 'available';
+    console.log(`🔄 Unit back online: ${unit.name} (${unitId})`);
+    // Sync comeback to DB
+    pgPool
+      .query(
+        `UPDATE public.units SET device_status = 'online', unit_status = CASE WHEN unit_status = 'busy' THEN 'busy' ELSE 'available' END, updated_at = now() WHERE unit_id = $1`,
+        [unitId],
+      )
+      .catch((err) =>
+        console.warn('[heartbeat] comeback DB update failed:', err.message),
+      );
+  }
 
   const lat = parseFloat(req.body.latitude);
   const lng = parseFloat(req.body.longitude);
@@ -1242,11 +1265,13 @@ app.post('/assign', async (req, res) => {
   });
   unit.status = 'busy';
   unit.assignedIncidentId = incidentId;
-  pgPool.query(
-    `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
-    [id]
-  ).then(() => console.log(`[assign] ${id} → busy in DB`))
-   .catch(err => console.warn(`[assign] DB update failed:`, err.message));
+  pgPool
+    .query(
+      `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
+      [id],
+    )
+    .then(() => console.log(`[assign] ${id} → busy in DB`))
+    .catch((err) => console.warn(`[assign] DB update failed:`, err.message));
   currentAlert = { ...alertData };
 
   // Reset THIS unit's trip state (not all units)
@@ -1332,6 +1357,57 @@ app.get('/my-alert', (req, res) => {
   });
 });
 
+// Patch the Matrix room id onto already-dispatched assignments. Used by the
+// dispatcher to deliver the roomId after createRoom resolves in the background.
+app.post('/assignment-room', (req, res) => {
+  const { unitIds, agentTicketId, roomId } = req.body || {};
+  if (!roomId) return res.status(400).json({ error: 'roomId required' });
+  const ids =
+    Array.isArray(unitIds) && unitIds.length
+      ? unitIds
+      : [...assignments.entries()]
+          .filter(([, a]) => agentTicketId && a.agentTicketId === agentTicketId)
+          .map(([uid]) => uid);
+  let updated = 0;
+  for (const uid of ids) {
+    const a = assignments.get(uid);
+    if (!a) continue;
+    a.roomId = roomId;
+    a.matrixRoomId = roomId;
+    updated++;
+    if (a.id && incidents.has(a.id)) {
+      const inc = incidents.get(a.id);
+      inc.roomId = roomId;
+      inc.matrixRoomId = roomId;
+    }
+    if (nc) {
+      try {
+        nc.publish(
+          `unit.inbox.${uid}`,
+          sc.encode(
+            JSON.stringify({
+              type: 'ALERT_ROOM_UPDATED',
+              alertId: a.id,
+              agentTicketId: a.agentTicketId,
+              roomId,
+              timestamp: Date.now(),
+            }),
+          ),
+        );
+      } catch {}
+    }
+  }
+  if (
+    currentAlert &&
+    agentTicketId &&
+    currentAlert.agentTicketId === agentTicketId
+  ) {
+    currentAlert.roomId = roomId;
+    currentAlert.matrixRoomId = roomId;
+  }
+  res.json({ success: true, updated });
+});
+
 app.get('/status', (req, res) => res.json({ alert: currentAlert }));
 
 app.post('/accept-assignment', (req, res) => {
@@ -1342,12 +1418,16 @@ app.post('/accept-assignment', (req, res) => {
     return res.status(400).json({ error: 'Already taken by another unit' });
   assign.status = 'accepted';
   currentAlert.status = 'accepted';
-  pgPool.query(
-    `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
-    [unitId]
-  ).then(() => console.log(`[accept-assignment] ${unitId} → busy in DB`))
-   .catch(err => console.warn(`[accept-assignment] DB update failed:`, err.message));
- 
+  pgPool
+    .query(
+      `UPDATE public.units SET unit_status = 'busy', updated_at = now() WHERE unit_id = $1`,
+      [unitId],
+    )
+    .then(() => console.log(`[accept-assignment] ${unitId} → busy in DB`))
+    .catch((err) =>
+      console.warn(`[accept-assignment] DB update failed:`, err.message),
+    );
+
   // Remove this alert from ALL other units so they don't show it
   for (const [id, a] of assignments.entries()) {
     if (a.id === assign.id && id !== unitId) {
@@ -1402,10 +1482,14 @@ app.post('/reject-assignment', (req, res) => {
   if (unit) {
     unit.status = 'available';
     unit.assignedIncidentId = null;
-    pgPool.query(
-      `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
-      [unitId]
-    ).catch(err => console.warn(`[reject-assignment] DB update failed:`, err.message));
+    pgPool
+      .query(
+        `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
+        [unitId],
+      )
+      .catch((err) =>
+        console.warn(`[reject-assignment] DB update failed:`, err.message),
+      );
   }
   assignments.delete(unitId);
   currentAlert.status = 'rejected';
@@ -1425,10 +1509,14 @@ app.post('/complete-trip', (req, res) => {
   if (unit) {
     unit.status = 'available';
     unit.assignedIncidentId = null;
-    pgPool.query(
-      `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
-      [unitId]
-    ).catch(err => console.warn(`[complete-trip] DB update failed:`, err.message));
+    pgPool
+      .query(
+        `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
+        [unitId],
+      )
+      .catch((err) =>
+        console.warn(`[complete-trip] DB update failed:`, err.message),
+      );
   }
   assignments.delete(unitId);
   if (unitId && unitTripState.has(unitId))
@@ -1762,7 +1850,6 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
   }
 });
 
-
 // ══════════════════════════════════════════════════════════════════════════════
 // TICKET TIMELINE API — reads from public.ticket_events
 // GET /api/timeline/:ticketId
@@ -1771,7 +1858,9 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
   try {
     const { ticketId } = req.params;
     if (!ticketId) {
-      return res.status(400).json({ success: false, error: 'ticketId is required' });
+      return res
+        .status(400)
+        .json({ success: false, error: 'ticketId is required' });
     }
 
     console.log(`📜 TIMELINE API called for ticket: ${ticketId}`);
@@ -1794,10 +1883,12 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
        FROM public.ticket_events
        WHERE ticket_id = $1
        ORDER BY "timestamp" ASC`,
-      [ticketId]
+      [ticketId],
     );
 
-    console.log(`📦 TIMELINE rows fetched: ${rows.length} for ticket ${ticketId}`);
+    console.log(
+      `📦 TIMELINE rows fetched: ${rows.length} for ticket ${ticketId}`,
+    );
 
     // Flatten jsonb fields so the frontend gets plain objects
     const events = rows.map((row) => {
@@ -1817,38 +1908,44 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
           : row.room_details || {};
 
       // Pull unit_details and location out of ticket_details if present
-      const unit_details  = ticketDetails.unit_details  || ticketDetails.unitDetails  || null;
-      const location      = ticketDetails.location      || null;
-      const event_source  = ticketDetails.event_source  || ticketDetails.eventSource  ||
-                            teamDetails.source           || row.event_type             || 'system';
-      const remarks_obj   = ticketDetails.remarks       || (row.remarks ? { note: row.remarks } : null);
+      const unit_details =
+        ticketDetails.unit_details || ticketDetails.unitDetails || null;
+      const location = ticketDetails.location || null;
+      const event_source =
+        ticketDetails.event_source ||
+        ticketDetails.eventSource ||
+        teamDetails.source ||
+        row.event_type ||
+        'system';
+      const remarks_obj =
+        ticketDetails.remarks || (row.remarks ? { note: row.remarks } : null);
 
       return {
         // Core identity
-        id:            row.id,
-        created_at:    row.created_at,
-        ticket_id:     row.ticket_id,
+        id: row.id,
+        created_at: row.created_at,
+        ticket_id: row.ticket_id,
 
         // Event classification
-        event:         row.event,
-        event_type:    row.event_type,
+        event: row.event,
+        event_type: row.event_type,
         ticket_status: row.ticket_status,
-        priority:      row.priority,
+        priority: row.priority,
 
         // Source info (who triggered this event)
         event_source,
-        source_id:     row.source_id,
-        source_name:   row.source_name,
+        source_id: row.source_id,
+        source_name: row.source_name,
 
         // Optional enrichment
         unit_details,
         location,
-        remarks:       remarks_obj,
+        remarks: remarks_obj,
 
         // Raw jsonb blobs (available if frontend needs deeper drill-down)
         ticket_details: ticketDetails,
-        team_details:   teamDetails,
-        room_details:   roomDetails,
+        team_details: teamDetails,
+        room_details: roomDetails,
       };
     });
 
@@ -1864,12 +1961,13 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
   }
 });
 
-
 // Called at login and re-registration to upsert the unit into public.units
 app.post('/api/units/sync', async (req, res) => {
   const { unitId, username, unitType, deviceStatus = 'online' } = req.body;
   if (!unitId || !username || !unitType)
-    return res.status(400).json({ error: 'unitId, username, unitType required' });
+    return res
+      .status(400)
+      .json({ error: 'unitId, username, unitType required' });
   try {
     await pgPool.query(
       `INSERT INTO public.units (unit_id, user_name, password, unit_type, unit_status, device_status, updated_at)
@@ -1884,7 +1982,7 @@ app.post('/api/units/sync', async (req, res) => {
                            ELSE 'available'
                          END,
          updated_at    = now()`,
-      [unitId, username, unitType, deviceStatus]
+      [unitId, username, unitType, deviceStatus],
     );
     console.log(`[units/sync] ${unitId} → ${deviceStatus}`);
     res.json({ success: true });
@@ -1894,14 +1992,13 @@ app.post('/api/units/sync', async (req, res) => {
   }
 });
 
-
 app.post('/api/units/available', async (req, res) => {
   const { unitId } = req.body;
   if (!unitId) return res.status(400).json({ error: 'unitId required' });
   try {
     await pgPool.query(
       `UPDATE public.units SET unit_status = 'available', updated_at = now() WHERE unit_id = $1`,
-      [unitId]
+      [unitId],
     );
     // Also update in-memory
     const unit = units.get(unitId);
@@ -1924,7 +2021,7 @@ app.get('/api/units/db-status', async (req, res) => {
       `SELECT unit_id AS id, user_name AS name, unit_type AS type,
               unit_status AS status, device_status, updated_at
        FROM public.units
-       ORDER BY updated_at DESC`
+       ORDER BY updated_at DESC`,
     );
     res.json({ success: true, data: rows });
   } catch (err) {
@@ -1945,7 +2042,7 @@ app.post('/api/unit/online', async (req, res) => {
                          END, 
            updated_at = now() 
        WHERE unit_id = $1`,
-      [unitId]
+      [unitId],
     );
 
     res.json({ success: true, message: 'Unit status updated' });

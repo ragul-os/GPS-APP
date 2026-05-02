@@ -3,13 +3,22 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import MapView from '../components/MapView';
 import NearbyResources from '../components/NearbyResources';
 import UnitList from '../components/UnitList';
-import { sendAlert, assignUnit, getTickets } from '../api/api';
+import {
+  sendAlert,
+  assignUnit,
+  getTickets,
+  updateAssignmentRoom,
+} from '../api/api';
 import {
   dispatchTicketEvent,
   closeTicketEvent,
 } from '../services/ticketEventsApi';
 import { useAuth } from '../context/AuthContext';
-import { createRoom, inviteUser } from '../services/MatrixService';
+import {
+  createRoom,
+  forceJoinRoom,
+  inviteUser,
+} from '../services/MatrixService';
 import { matrixUserId } from '../config/apiConfig';
 import {
   AimOutlined,
@@ -230,7 +239,7 @@ function mapDbTicket(r) {
       f2: d.phone_number || d.phone || r.ani || '',
       f3: d.address || '',
     },
-   destination: {
+    destination: {
       latitude: d.latitude || null,
       longitude: d.longitude || null,
     },
@@ -1783,29 +1792,56 @@ export default function DispatchPage() {
         const unit = unitList.find((u) => u.id === id);
         return `@${unit?.name || id}:localhost`;
       });
-      const roomPromise =
-        dispatcher?.accessToken && agentTicket?.id
-          ? createRoom(dispatcher.accessToken, `Ticket-${agentTicket.id}`, inviteUserIds)
-              .then((room) => { addLog(`✅ Matrix room created: ${room.room_id}`, 'ok'); return room.room_id; })
-              .catch((err) => { addLog(`⚠️ Matrix room creation skipped: ${err.message}`, 'warn'); return null; })
-          : Promise.resolve(null);
-      const roomId = await roomPromise;
+
+      // Reuse an existing room if this ticket was already dispatched, otherwise
+      // kick createRoom off in the background — assignUnit/sendAlert do NOT wait.
+      const existingRoomId = agentTicket?.roomId || null;
+      let roomPromise;
+      if (existingRoomId) {
+        addLog(`↩️  Reusing existing Matrix room: ${existingRoomId}`, 'ok');
+        roomPromise = Promise.resolve(existingRoomId);
+      } else if (dispatcher?.accessToken && agentTicket?.id) {
+        roomPromise = createRoom(
+          dispatcher.accessToken,
+          `Ticket-${agentTicket.id}`,
+          inviteUserIds,
+        )
+          .then((room) => {
+            addLog(`✅ Matrix room created: ${room.room_id}`, 'ok');
+            return room.room_id;
+          })
+          .catch((err) => {
+            addLog(`⚠️ Matrix room creation skipped: ${err.message}`, 'warn');
+            return null;
+          });
+      } else {
+        roomPromise = Promise.resolve(null);
+      }
+
+      const initialRoomId = existingRoomId || '';
       const base = {
         patientName: answers.f1 || 'Unknown',
         patientPhone: answers.f2 || '',
-        address: answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
+        address:
+          answers.f3 || `${pickedLat?.toFixed(4)}, ${pickedLng?.toFixed(4)}`,
         notes: answers.f7 || '',
         destination: { latitude: pickedLat, longitude: pickedLng },
-        vehicleType, severity, answers,
+        vehicleType,
+        severity,
+        answers,
         agentTicketId: agentTicket?.id || '',
-        roomId: roomId || '',
-        matrixRoomId: roomId || '',
+        roomId: initialRoomId,
+        matrixRoomId: initialRoomId,
       };
 
+      let successfulUnitIds = [];
       if (selectedUnitIds.length === 0) {
         const res = await sendAlert(base);
         ids.push(res.data.id);
-        addToHistory({ ...buildEntry(res.data.id, null, vehicleType), status: 'pending' });
+        addToHistory({
+          ...buildEntry(res.data.id, null, vehicleType),
+          status: 'pending',
+        });
         addLog('📡 Broadcast to all units', 'warn');
       } else {
         const results = await Promise.all(
@@ -1817,38 +1853,138 @@ export default function DispatchPage() {
         );
         for (const { unitId, res, err } of results) {
           const unit = unitList.find((u) => u.id === unitId);
-          if (err) { addLog(`❌ Assign failed → ${unit?.name || unitId}: ${err.response?.data?.error || err.message}`, 'error'); continue; }
+          if (err) {
+            addLog(
+              `❌ Assign failed → ${unit?.name || unitId}: ${err.response?.data?.error || err.message}`,
+              'error',
+            );
+            continue;
+          }
           ids.push(res.data.id);
-          addToHistory({ ...buildEntry(res.data.id, unitId, unit?.type || vehicleType), status: 'pending' });
+          addToHistory({
+            ...buildEntry(res.data.id, unitId, unit?.type || vehicleType),
+            status: 'pending',
+          });
           addLog(`🎯 Assigned → ${unit?.name || unitId}`, 'ok');
         }
-        if (agentTicket?.id) {
-          const successfulUnitIds = results.filter((r) => !r.err).map((r) => r.unitId);
-          if (successfulUnitIds.length > 0) {
-            dispatchTicketEvent(agentTicket.id, {
-              source_id: dispatcher?.username || 'dispatcher',
-              source_name: dispatcher?.displayName || dispatcher?.username || 'dispatcher',
-              unit_id: successfulUnitIds,
-              unit_details: successfulUnitIds.map((uid) => { const u = unitList.find((x) => x.id === uid); return { unit_id: uid, name: u?.name || uid, type: u?.type || vehicleType }; }),
-              room_details: roomId ? { room_id: roomId } : null,
-            }).catch((err) => addLog(`⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`, 'warn'));
-          }
-        }
+        successfulUnitIds = results.filter((r) => !r.err).map((r) => r.unitId);
       }
 
+      // Persist what we know now. The roomId may still be null — it'll be
+      // patched below once roomPromise resolves.
       if (agentTicket?.id) {
         updateAgentTicket(agentTicket.id, {
           status: 'dispatched',
-          assignedUnits: [...(agentTicket.assignedUnits || []), ...selectedUnitIds],
+          assignedUnits: [
+            ...(agentTicket.assignedUnits || []),
+            ...selectedUnitIds,
+          ],
           alertIds: [...(agentTicket.alertIds || []), ...ids],
-          roomId,
+          roomId: initialRoomId || undefined,
         });
       }
+
+      // Background: when createRoom resolves, propagate the roomId to the
+      // server's per-unit assignments, the ticket-events log, and local state.
+      const ticketIdForRoom = agentTicket?.id || '';
+      roomPromise.then((resolvedRoomId) => {
+        if (!resolvedRoomId) {
+          if (ticketIdForRoom && successfulUnitIds.length > 0) {
+            dispatchTicketEvent(ticketIdForRoom, {
+              source_id: dispatcher?.username || 'dispatcher',
+              source_name:
+                dispatcher?.displayName || dispatcher?.username || 'dispatcher',
+              unit_id: successfulUnitIds,
+              unit_details: successfulUnitIds.map((uid) => {
+                const u = unitList.find((x) => x.id === uid);
+                return {
+                  unit_id: uid,
+                  name: u?.name || uid,
+                  type: u?.type || vehicleType,
+                };
+              }),
+              room_details: null,
+            }).catch((err) =>
+              addLog(
+                `⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`,
+                'warn',
+              ),
+            );
+          }
+          return;
+        }
+
+        // Update local agent-ticket store with the freshly created roomId.
+        if (ticketIdForRoom) {
+          updateAgentTicket(ticketIdForRoom, { roomId: resolvedRoomId });
+        }
+
+        // Force-join each dispatched unit via the Synapse admin API. createRoom
+        // no longer carries `invite: [...]` (it dominated the call latency), so
+        // membership is established here instead. Admin force-join is
+        // deterministic — the unit appears as `join` in the room state without
+        // needing the mobile app to be online or to react to NATS events.
+        //
+        // Prefer the canonical `matrixUserId` the unit reported at registration
+        // (Synapse preserves localpart casing — "@Amritha:localhost" ≠
+        // "@amritha:localhost"). Fall back to a name-based construction only if
+        // the unit hasn't re-registered after the mobile update yet.
+        for (const uid of successfulUnitIds) {
+          const u = unitList.find((x) => x.id === uid);
+          const targetUserId = u?.matrixUserId || matrixUserId(u?.name || uid);
+          forceJoinRoom(resolvedRoomId, targetUserId)
+            .then(() => addLog(`👥 Joined ${u?.name || uid} → room`, 'ok'))
+            .catch((err) =>
+              addLog(
+                `⚠️ Force-join failed for ${u?.name || uid} (${targetUserId}): ${err.message}`,
+                'warn',
+              ),
+            );
+        }
+
+        // Patch server-side assignments so the mobile picks the roomId up via
+        // /my-alert (and the NATS ALERT_ROOM_UPDATED message).
+        if (successfulUnitIds.length > 0 || ticketIdForRoom) {
+          updateAssignmentRoom({
+            unitIds: successfulUnitIds,
+            agentTicketId: ticketIdForRoom,
+            roomId: resolvedRoomId,
+          }).catch((err) =>
+            addLog(
+              `⚠️ assignment-room patch failed: ${err?.response?.data?.error || err.message}`,
+              'warn',
+            ),
+          );
+        }
+
+        // Now log the dispatch event with the real roomId.
+        if (ticketIdForRoom && successfulUnitIds.length > 0) {
+          dispatchTicketEvent(ticketIdForRoom, {
+            source_id: dispatcher?.username || 'dispatcher',
+            source_name:
+              dispatcher?.displayName || dispatcher?.username || 'dispatcher',
+            unit_id: successfulUnitIds,
+            unit_details: successfulUnitIds.map((uid) => {
+              const u = unitList.find((x) => x.id === uid);
+              return {
+                unit_id: uid,
+                name: u?.name || uid,
+                type: u?.type || vehicleType,
+              };
+            }),
+            room_details: { room_id: resolvedRoomId },
+          }).catch((err) =>
+            addLog(
+              `⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`,
+              'warn',
+            ),
+          );
+        }
+      });
 
       setLastAlertIds(ids);
       addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
       success = true;
-
     } catch (e) {
       addLog('❌ Failed: ' + (e.response?.data?.error || e.message), 'error');
     } finally {
@@ -1929,7 +2065,7 @@ export default function DispatchPage() {
 
   return (
     <div>
-     {/*  <TicketSwitcherStrip
+      {/*  <TicketSwitcherStrip
         tickets={allTickets}
         activeTicketId={selectedTicket.id}
         onSelect={loadTicket}
