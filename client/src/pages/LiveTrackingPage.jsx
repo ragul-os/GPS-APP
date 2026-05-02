@@ -1883,6 +1883,9 @@ export default function LiveTrackingPage() {
   // We never rely on unitStatusesRef for the allDone check.
   const completedUnitsSetRef = useRef(new Set());
 
+  const activePollIdRef = useRef(0);
+  const routeAtUidRef = useRef(null);
+
   const [tripStatus, setTripStatus] = useState('idle');
   const [live, setLive] = useState(false);
   const [stats, setStats] = useState({
@@ -2268,6 +2271,54 @@ useEffect(() => {
       } catch (e) {
         console.warn('[fetchRoute] Directions API error:', e);
       }
+      // ── FIX: guard again after async directions call — uid may have
+      // changed while we were awaiting getDirections()
+      if (uid !== activeUnitIdRef.current) {
+        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        return;
+      }
+      console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
+      // ── FIX: guard again after async directions call — uid may have
+      // changed while we were awaiting getDirections()
+      if (uid !== activeUnitIdRef.current) {
+        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        return;
+      }
+      console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
+      // ── FIX: guard again after async directions call — uid may have
+      // changed while we were awaiting getDirections()
+      if (uid !== activeUnitIdRef.current) {
+        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        return;
+      }
+      console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
+      // ── FIX: guard again after async directions call — uid may have
+      // changed while we were awaiting getDirections()
+      if (uid !== activeUnitIdRef.current) {
+        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        return;
+      }
+      console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
+      // ── FIX: guard again after async directions call — uid may have
+      // changed while we were awaiting getDirections()
+      if (uid !== activeUnitIdRef.current) {
+        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        return;
+      }
+      console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
+      /* polylinesRef.current.forEach((r) => {
+        r.out?.setMap(null);
+        r.poly?.setMap(null);
+      });
+      polylinesRef.current = []; */
+
+      // ── FIX: guard again after async directions call — uid may have
+      // changed while we were awaiting getDirections()
+      if (uid !== activeUnitIdRef.current) {
+        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        return;
+      }
+      console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
       polylinesRef.current.forEach((r) => {
         r.out?.setMap(null);
         r.poly?.setMap(null);
@@ -2436,10 +2487,20 @@ useEffect(() => {
       isActive: uid === activeUnitIdRef.current
     });
 
-    if (!mapObj.current || uid !== activeUnitIdRef.current) {
+    /* if (!mapObj.current || uid !== activeUnitIdRef.current) {
       console.log("⛔ Skipped updateVehicle:", uid);
       return;
+    } */
+
+      if (!mapObj.current) {
+      console.log(`[updateVehicle] ⛔ NO MAP uid=${uid}`);
+      return;
     }
+    if (uid !== activeUnitIdRef.current) {
+      console.log(`[updateVehicle] ⛔ BLOCKED non-active uid=${uid} activeUid=${activeUnitIdRef.current}`);
+      return;
+    }
+    console.log(`[updateVehicle] ✅ ALLOWED uid=${uid} lat=${lat.toFixed(5)} lng=${lng.toFixed(5)}`); 
 
     const pos = { lat, lng };
 
@@ -2625,7 +2686,7 @@ useEffect(() => {
   };
 
   // ── Main poll (active unit) ───────────────────────────────────────────────
-  useEffect(() => {
+ /*  useEffect(() => {
     const myUid = activeUnitId;
     let isMounted = true;
     let lastEventId = '0-0';
@@ -2815,7 +2876,236 @@ useEffect(() => {
     addTLog,
     tryCloseTicket,
   ]);
+ */
 
+
+  useEffect(() => {
+  if (!activeUnitId) return;
+
+  activePollIdRef.current += 1;
+  const myPollId = activePollIdRef.current;
+  const myUid = activeUnitId;
+
+  let isMounted = true;
+  let lastEventId = '0-0';
+
+  console.log(`[ActivePoll] ▶ START uid=${myUid} pollId=${myPollId}`);
+
+  const poll = async () => {
+    // ── HARD GUARD 1: stale generation ──────────────────────────────────
+    if (myPollId !== activePollIdRef.current) {
+      console.log(`[ActivePoll] ⛔ STALE POLL BLOCKED pollId=${myPollId} current=${activePollIdRef.current}`);
+      return;
+    }
+    // ── HARD GUARD 2: unmounted ──────────────────────────────────────────
+    if (!isMounted) return;
+    // ── HARD GUARD 3: unit switched mid-flight ───────────────────────────
+    if (activeUnitIdRef.current !== myUid) {
+      console.log(`[ActivePoll] ⛔ UNIT SWITCHED during poll: was=${myUid} now=${activeUnitIdRef.current}`);
+      return;
+    }
+
+    try {
+      const ticketNo =
+        id ||
+        alertObj?.agentTicketId ||
+        alertObj?.id ||
+        agentTicket?.id ||
+        myUid;
+
+      console.log(`[ActivePoll] 📡 Fetching location uid=${myUid} ticketNo=${ticketNo} lastEventId=${lastEventId} pollId=${myPollId}`);
+
+      // ── STEP 1: Fetch ────────────────────────────────────────────────────
+      const res = await getAmbulanceLocation(myUid, ticketNo, lastEventId);
+
+      // ── STEP 2: Re-check all guards after the async call returns ─────────
+      if (myPollId !== activePollIdRef.current || !isMounted || activeUnitIdRef.current !== myUid) {
+        console.log(`[ActivePoll] ⛔ GUARDS FAILED after await uid=${myUid} pollId=${myPollId}`);
+        return;
+      }
+
+      // ── STEP 3: Extract + filter payload to THIS unit only ───────────────
+      const rawPayload = res.data?.eventPayload || res.data?.channel || [];
+      const payload = Array.isArray(rawPayload) ? rawPayload : [];
+
+      console.log(`[ActivePoll] 🧪 RAW PAYLOAD total=${payload.length} units=[${[...new Set(payload.map(e => e?.unit_id).filter(Boolean))].join(',')}] pollId=${myPollId}`);
+
+      const filteredEvents = payload.filter((e) => e?.unit_id === myUid);
+
+      console.log(`[ActivePoll] 🔍 FILTER uid=${myUid} matched=${filteredEvents.length}/${payload.length}`);
+
+      if (!filteredEvents.length) {
+        console.warn(`[ActivePoll] ⚠️ No events for uid=${myUid} — retrying in 100ms`);
+        setTimeout(poll, 100);
+        return;
+      }
+
+      // ── STEP 4: Pick the latest event for THIS unit ──────────────────────
+      const d = filteredEvents[filteredEvents.length - 1];
+      lastEventId = d.eventId || d.timestamp || lastEventId;
+
+      console.log(`[ActivePoll] ✅ USING EVENT uid=${d.unit_id} lat=${d.latitude} lng=${d.longitude} tripStatus=${d.tripStatus} lastEventId=${lastEventId}`);
+
+      // ── STEP 5: Ticket number guard ──────────────────────────────────────
+      if (d.ticket_no && ticketNo && d.ticket_no !== ticketNo) {
+        console.log(`[ActivePoll] ⛔ ticket_no mismatch: event=${d.ticket_no} expected=${ticketNo}`);
+        setTimeout(poll, 100);
+        return;
+      }
+
+      // ── STEP 6: Trip status processing ──────────────────────────────────
+      const ts = d.tripStatus || 'idle';
+      console.log(`[ActivePoll] 📡 uid=${myUid} tripStatus=${ts} pollId=${myPollId}`);
+
+      const REAL_STATUSES = [
+        'accepted', 'dispatched', 'en_route', 'on_action',
+        'arrived', 'completed', 'abandoned',
+      ];
+      const isDowngradeToIdle =
+        ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
+      if (isDowngradeToIdle) {
+        console.log(`[ActivePoll] ⛔ Blocked idle downgrade from ${tripStatusRef.current}`);
+        setTimeout(poll, 100);
+        return;
+      }
+
+      setUnitStatuses((prev) => {
+        const current = prev[myUid];
+        if (TERMINAL_STATUSES.includes(current)) return prev;
+        if (current === ts) return prev;
+        console.log(`[ActivePoll] 🔄 unitStatus ${myUid}: ${current} → ${ts}`);
+        return { ...prev, [myUid]: ts };
+      });
+
+      if (myUid === activeUnitIdRef.current) {
+        setTripStatus((prev) => {
+          if (TERMINAL_STATUSES.includes(prev)) return prev;
+          if (prev === ts) return prev;
+          tripStatusRef.current = ts;
+          console.log(`[ActivePoll] 🔄 tripStatus: ${prev} → ${ts} uid=${myUid}`);
+          return ts;
+        });
+
+        setStepInfo({
+          idx: parseInt(d.stepIdx) || 0,
+          total: parseInt(d.totalSteps) || 0,
+        });
+      } else {
+        console.log(`[ActivePoll] ⛔ setTripStatus/setStepInfo BLOCKED uid=${myUid} not active`);
+      }
+
+      if (ts !== lastTripStRef.current) {
+        if (TERMINAL_STATUSES.includes(lastTripStRef.current) && ts === 'idle') {
+          // blocked — stale idle after terminal
+        } else {
+          lastTripStRef.current = ts;
+          const statusText = {
+            dispatched: '⚡', en_route: '🚑', on_action: '🔔',
+            arrived: '📍', completed: '✅', abandoned: '❌', idle: '⏱️',
+          }[ts] || '🔄';
+          addTLog(
+            `${statusText} → ${TRIP_STATUS_CFG[ts]?.t || ts} [${myUid}]`,
+            ts === 'arrived' || ts === 'completed' ? 'ok'
+              : ts === 'abandoned' ? 'error' : 'info',
+            myUid,
+          );
+
+          if (
+            (ts === 'en_route' || ts === 'on_action') &&
+            !trafficOnRef.current &&
+            trafficLayerRef.current &&
+            mapObj.current
+          ) {
+            trafficLayerRef.current.setMap(mapObj.current);
+            setTrafficOn(true);
+            addTLog('Traffic layer auto-enabled', 'ok', myUid);
+          }
+
+          if (ts === 'completed') {
+            completedUnitsSetRef.current.add(myUid);
+            console.log(`[ActivePoll] ✅ COMPLETED uid=${myUid} completedSet=[${[...completedUnitsSetRef.current].join(',')}]`);
+            addTLog(`Unit ${myUid} reported completed`, 'ok', myUid);
+            await tryCloseTicket(myUid);
+          }
+        }
+      }
+
+      // ── STEP 7: Location update ──────────────────────────────────────────
+      if (!d.latitude || !d.longitude) {
+        console.warn(`[ActivePoll] ⚠️ No lat/lng in event for uid=${myUid}`);
+        setLive(false);
+        setTimeout(poll, 100);
+        return;
+      }
+
+      const lat = parseFloat(d.latitude);
+      const lng = parseFloat(d.longitude);
+
+      console.log(`[ActivePoll] 📍 LOCATION uid=${myUid} lat=${lat.toFixed(5)} lng=${lng.toFixed(5)} pollId=${myPollId}`);
+
+      if (myUid !== activeUnitIdRef.current) {
+        console.log(`[ActivePoll] ⛔ setStats BLOCKED — uid=${myUid} is no longer active`);
+        return;
+      }
+
+      setLive(true);
+      setStats({
+        speed: parseFloat(d.speed) || 0,
+        distM: parseInt(d.remainingDistM) || 0,
+        timeS: parseInt(d.remainingTimeS) || 0,
+        lat,
+        lng,
+      });
+
+      updateVehicle(lat, lng, myUid);
+
+      const now = Date.now();
+      const routeAge = routeAtUidRef.current === myUid
+        ? now - routeAtRef.current
+        : Infinity;
+
+      if (alertObj?.destination && routeAge > 45000) {
+        routeAtRef.current = now;
+        routeAtUidRef.current = myUid;
+        console.log(`[ActivePoll] 🗺️ fetchRoute uid=${myUid} routeAge=${routeAge === Infinity ? 'FIRST' : Math.round(routeAge / 1000) + 's'}`);
+        fetchRoute(lat, lng, myUid);
+      }
+
+      fetchNearby(lat, lng);
+      setTimeout(poll, 100);
+
+    } catch (err) {
+      if (myPollId !== activePollIdRef.current || !isMounted) return;
+      const isTimeout =
+        err?.code === 'ECONNABORTED' ||
+        err?.code === 'ERR_CANCELED' ||
+        err?.message === 'canceled' ||
+        /timeout/i.test(err?.message || '');
+      if (err.response?.status === 408 || isTimeout) {
+        console.log(`[ActivePoll] ⏱️ Timeout uid=${myUid} — retrying in 100ms`);
+        setTimeout(poll, 100);
+      } else {
+        console.log(`[ActivePoll] ❌ ERROR uid=${myUid}:`, err.message);
+        setTimeout(poll, 3000);
+      }
+    }
+  };
+
+  poll();
+
+  return () => {
+    console.log(`[ActivePoll] 🔴 CLEANUP uid=${myUid} pollId=${myPollId}`);
+    isMounted = false;
+  };
+}, [
+  activeUnitId,
+  updateVehicle,
+  fetchRoute,
+  fetchNearby,
+  alertObj,
+  addTLog,
+  tryCloseTicket,
+]);
   // ── All-units location + status poll ─────────────────────────────────────
   useEffect(() => {
     const pollUnits = async () => {
@@ -2837,7 +3127,7 @@ useEffect(() => {
             newTypes[u.id] = u.type || 'ambulance';
           }
         });
-        setUnitLocations((prev) => {
+        /* setUnitLocations((prev) => {
           const moved = units.some((uid) => {
             const p = prev[uid],
               n = newLocs[uid];
@@ -2847,6 +3137,43 @@ useEffect(() => {
           });
           return moved ? { ...prev, ...newLocs } : prev;
         });
+        setUnitTypes((prev) => {
+          const ch = Object.entries(newTypes).some(([k, v]) => prev[k] !== v);
+          return ch ? { ...prev, ...newTypes } : prev;
+        }); */
+
+        // ── FIX: unitLocations update is ONLY for the mini-map overlay.
+        // We deliberately exclude the activeUnit from this update so the
+        // main poll (above) remains the sole owner of the active marker,
+        // preventing the two polls from fighting and causing flicker.
+        const activeUid = activeUnitIdRef.current;
+        const miniMapLocs = {};
+        Object.entries(newLocs).forEach(([uid, loc]) => {
+          if (uid !== activeUid) {
+            // Non-active units: update mini-map freely
+            miniMapLocs[uid] = loc;
+          }
+          // Active unit location comes ONLY from the main poll
+        });
+
+        console.log(
+          `[StatusPoll] 🗺️ mini-map locs updated for non-active units: [${Object.keys(miniMapLocs).join(',')}]`,
+          `| active uid (excluded): ${activeUid}`
+        );
+
+        setUnitLocations((prev) => {
+          // Always include active unit's existing location (from main poll)
+          // only update non-active units here
+          const next = { ...prev, ...miniMapLocs };
+          const moved = Object.keys(miniMapLocs).some((uid) => {
+            const p = prev[uid], n = miniMapLocs[uid];
+            if (!p && !n) return false;
+            if (!p || !n) return true;
+            return p.latitude !== n.latitude || p.longitude !== n.longitude;
+          });
+          return moved ? next : prev;
+        });
+
         setUnitTypes((prev) => {
           const ch = Object.entries(newTypes).some(([k, v]) => prev[k] !== v);
           return ch ? { ...prev, ...newTypes } : prev;
@@ -3029,9 +3356,19 @@ useEffect(() => {
   }, [id, addTLog, alertObj]);
 
   // ── Switch active unit ────────────────────────────────────────────────────
-  const handleSwitchUnit = useCallback(
+  /* const handleSwitchUnit = useCallback(
     (uid) => {
       if (uid === activeUnitIdRef.current) return;
+      activeUnitIdRef.current = uid;
+      lastTripStRef.current = '';
+      setActiveUnitId(uid); */
+
+      const handleSwitchUnit = useCallback(
+    (uid) => {
+      if (uid === activeUnitIdRef.current) return;
+      // Kill the current active poll immediately before switching
+      activePollIdRef.current += 1;
+      console.log(`[SwitchUnit] 🔀 Switching ${activeUnitIdRef.current} → ${uid} | new pollId=${activePollIdRef.current}`);
       activeUnitIdRef.current = uid;
       lastTripStRef.current = '';
       setActiveUnitId(uid);
@@ -3042,13 +3379,17 @@ useEffect(() => {
         vehMkrMap.current[uid].setMap(null);
         delete vehMkrMap.current[uid];
       }
+      // ── FIX: clear map immediately so old unit's route doesn't persist
+      // while we wait for the new unit's first fetchRoute response.
       polylinesRef.current.forEach((r) => {
-        r.out?.setMap(null);
-        r.poly?.setMap(null);
+        try { r.out?.setMap(null); } catch (_) {}
+        try { r.poly?.setMap(null); } catch (_) {}
       });
       polylinesRef.current = [];
       routeAtRef.current = 0;
+      routeAtUidRef.current = null; // ← ADD THIS: forces immediate fetchRoute for new unit
       lastVRef.current = null;
+      console.log(`[SwitchUnit] 🧹 Polylines cleared, routeAtUidRef reset for ${uid}`);
       setLive(false);
       setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
       setRouteData([]);
