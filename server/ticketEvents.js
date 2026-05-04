@@ -43,11 +43,15 @@ const UNIT_EVENTS = [
 ];
 const UNIT_TYPES = ['ambulance', 'fire', 'police', 'rescue', 'hazmat'];
 
+// Stage is an intrinsic property of the event type, not a high-water mark
+// over the cumulative history. priorEvents is accepted for signature stability
+// but no longer consulted, so out-of-order inserts (e.g. ACKNOWLEDGED arriving
+// before the dispatcher's ASSIGNED_* writes complete) can't poison Stage 2 rows
+// into Stage 3.
 function deriveStage(priorEvents, newEvent) {
   if (newEvent === 'CLOSED') return 'Stage 4';
-  const all = priorEvents.concat([newEvent]);
-  if (all.some((e) => EVENT_TYPE[e] === 'PROGRESS')) return 'Stage 3';
-  if (all.some((e) => e === 'ASSIGNED_DISPATCHER' || e === 'ASSIGNED_UNITS'))
+  if (EVENT_TYPE[newEvent] === 'PROGRESS') return 'Stage 3';
+  if (newEvent === 'ASSIGNED_DISPATCHER' || newEvent === 'ASSIGNED_UNITS')
     return 'Stage 2';
   return 'Stage 1';
 }
@@ -518,6 +522,23 @@ function register(app, { pgPool, getNc, sc }) {
     const msg = validateUnitPayload(body, state.unit_ids);
     if (msg)
       return natsReply(replyTo, { success: false, code: 400, error: msg });
+    // Idempotency: each unit-event is a one-shot status transition per unit.
+    // If the same (source_id, event) was already recorded for this ticket,
+    // skip the insert so dispatcher auto-complete + mobile self-report don't
+    // both write duplicate rows into ticket_events.
+    if (body.source_id) {
+      const dupe = state.source_history.find(
+        (h) => h.event === body.event && h.source_id === body.source_id,
+      );
+      if (dupe) {
+        return natsReply(replyTo, {
+          success: false,
+          code: 409,
+          error: `${body.event} already recorded for ${body.source_id}`,
+          duplicate: true,
+        });
+      }
+    }
     const inserted = await insertEvent({
       ticket_id: ticketId,
       event: body.event,
