@@ -48,6 +48,8 @@ import {
   userExists,
 } from '../services/matrixService';
 import { getOrCreateUnitId } from '../utils/unitId';
+import { SERVER_URL } from '../config'; 
+
 
 // ─── Unit type options ────────────────────────────────────────────────────────
 const UNIT_TYPES = [
@@ -150,10 +152,16 @@ await login({
 
 // ── Step 7: Sync unit to DB ──────────────────────────────────────────────────
 try {
+  console.log("🔥 SENDING TO API:", {
+  unitId,
+  username: username.trim(),
+  password,
+  unitType
+});
   await fetch(`${SERVER_URL}/api/units/sync`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ unitId, username: username.trim(), unitType, deviceStatus: 'online' }),
+    body: JSON.stringify({ unitId, username: username.trim(), password, unitType, deviceStatus: 'online' }),
   });
 } catch (err) {
   console.warn('[LoginScreen] DB sync failed (non-fatal):', err.message);

@@ -576,7 +576,7 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
   const infoWin = useRef(null);
   const [units,   setUnits]   = useState([]);
   const [loading, setLoading] = useState(false);
-  const [layers,  setLayers]  = useState({ available: true, busy: true, offline: false });
+  const [layers,  setLayers]  = useState({ available: true, busy: true}); //, offline: false 
 
   // Init map
   useEffect(() => {
@@ -631,7 +631,7 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
     const seen = new Set();
     list.forEach((u, idx) => {
       seen.add(u.id);
-      if (!u.isOnline && !layers.offline) {
+      if (!u.isOnline ) {  //&& !layers.offline
         unitMkrs.current[u.id]?.setMap(null);
         return;
       }
@@ -739,8 +739,8 @@ function UnitsMap({ pickedLat, pickedLng, onSelectUnit, selectedUnitId }) {
   const unitLayerRows = [
     { key: 'available', color: '#4CAF50', label: `Available`, count: availCount },
     { key: 'busy',      color: '#FFC107', label: `Busy`,      count: busyCount  },
-    { key: 'offline',   color: '#9E9E9E', label: 'Offline',   count: offlineCount },
-  ];
+    
+  ]; //{ key: 'offline',   color: '#9E9E9E', label: 'Offline',   count: offlineCount },
 
   return (
     <div style={s.mapPanel}>

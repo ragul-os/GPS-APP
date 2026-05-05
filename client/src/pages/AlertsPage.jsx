@@ -285,8 +285,9 @@ export default function AlertsPage() {
           {visibleAlerts.map(a => {
             const cfg = UCFG[a.vehicleType] || UCFG.ambulance;
             const t = new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const statusToUse = liveStatusMap[a.id] || a.status;
-            const stCfg = STATUS_CFG[statusToUse] || STATUS_CFG.pending;
+            const liveStatus = liveStatusMap[a.id];
+            const statusToUse = (liveStatus && STATUS_CFG[liveStatus]) ? liveStatus : a.status;
+            const stCfg = STATUS_CFG[statusToUse] || STATUS_CFG.accepted;
             const sevColor = SEV_COLORS[a.severity] || '#8B949E';
             const itemKey = a.id || a.agentTicketId || Math.random().toString();
 
@@ -312,13 +313,7 @@ export default function AlertsPage() {
                     <div style={{ width: 80, textAlign: 'right' }}>
                       <span style={{ fontSize: 9, fontWeight: 800, color: sevColor }}>{a.severity?.toUpperCase()}</span>
                     </div>
-                    <div style={{ width: 120, textAlign: 'right' }}>
-                      {a.assignedUnits && a.assignedUnits.length > 0 ? (
-                        <span style={{ fontSize: 9, fontWeight: 700, color: '#82B4FF' }}>{a.assignedUnits.length} Unit{a.assignedUnits.length > 1 ? 's' : ''}</span>
-                      ) : (
-                        <span style={{ fontSize: 9, color: '#30363D' }}>No units</span>
-                      )}
-                    </div>
+                    
                     <button style={s.listOpenBtn}>Live Tracking →</button>
                   </div>
                 </div>

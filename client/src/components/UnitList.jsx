@@ -310,14 +310,14 @@ export default function UnitList({
           ) : null}
 
           {/* Offline units — shown so dispatcher can see their last DB status */}
-          {offlineUnits.length > 0 && (
+          {/* {offlineUnits.length > 0 && (
             <div>
               <div style={{ ...s.sectionLabel, color: '#30363D' }}>Offline</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {offlineUnits.map(u => <UnitRow key={u.id} u={u} isSel={false} onToggleUnit={null} dimmed />)}
               </div>
             </div>
-          )}
+          )} */}
         </div>
       </div>
     </div>

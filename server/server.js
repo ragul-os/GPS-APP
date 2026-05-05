@@ -30,6 +30,7 @@ const { connect: connectNats, StringCodec } = require('nats');
 const { Pool: PgPool } = require('pg');
 const fs = require('fs');
 const path = require('path');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -1852,34 +1853,50 @@ app.get('/api/timeline/:ticketId', async (req, res) => {
 
 // Called at login and re-registration to upsert the unit into public.units
 app.post('/api/units/sync', async (req, res) => {
-  const { unitId, username, unitType, deviceStatus = 'online' } = req.body;
-  if (!unitId || !username || !unitType)
-    return res
-      .status(400)
-      .json({ error: 'unitId, username, unitType required' });
+  console.log('🔥 /api/units/sync HIT');
+  console.log('📦 BODY:', req.body);
+
+  const { unitId, username, password, unitType, deviceStatus } = req.body;
+
+  if (!unitId || !username) {
+    console.log('❌ Missing fields');
+    return res.status(400).json({ error: 'Missing fields' });
+  }
+
   try {
-    await pgPool.query(
-      `INSERT INTO public.units (unit_id, user_name, password, unit_type, unit_status, device_status, updated_at)
-       VALUES ($1, $2, '', $3, 'available', $4, now())
+    let hashedPassword = null;
+
+    if (password) {
+      hashedPassword = await bcrypt.hash(password, 10);
+      console.log('🔐 Password hashed');
+    } else {
+      console.log('⚠️ No password received');
+    }
+
+    const result = await pgPool.query(
+      `INSERT INTO public.units 
+       (unit_id, user_name, password, unit_type, device_status, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
        ON CONFLICT (unit_id) DO UPDATE SET
-         user_name     = EXCLUDED.user_name,
-         unit_type     = EXCLUDED.unit_type,
-         device_status = $4,
-         -- NEVER reset busy → available on reconnect. Only update if currently available.
-         unit_status   = CASE
-                           WHEN public.units.unit_status = 'busy' THEN 'busy'
-                           ELSE 'available'
-                         END,
-         updated_at    = now()`,
-      [unitId, username, unitType, deviceStatus],
+         user_name = EXCLUDED.user_name,
+         password = COALESCE(EXCLUDED.password, public.units.password),
+         unit_type = EXCLUDED.unit_type,
+         device_status = EXCLUDED.device_status,
+         updated_at = now()
+       RETURNING *`,
+      [unitId, username, hashedPassword || null, unitType, deviceStatus]
     );
-    console.log(`[units/sync] ${unitId} → ${deviceStatus}`);
+
+    console.log('✅ DB INSERT SUCCESS:', result.rows[0]);
+
     res.json({ success: true });
+
   } catch (err) {
-    console.error('[units/sync] error:', err.message);
+    console.error('❌ DB ERROR:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 app.post('/api/units/available', async (req, res) => {
   const { unitId } = req.body;

@@ -50,8 +50,20 @@ const UNIT_TYPES = ['ambulance', 'fire', 'police', 'rescue', 'hazmat'];
 // into Stage 3.
 function deriveStage(priorEvents, newEvent) {
   if (newEvent === 'CLOSED') return 'Stage 4';
-  if (EVENT_TYPE[newEvent] === 'PROGRESS') return 'Stage 3';
+
+ /*  if (EVENT_TYPE[newEvent] === 'PROGRESS') return 'Stage 3';
+  if (newEvent === 'ASSIGNED_DISPATCHER' || newEvent === 'ASSIGNED_UNITS') */
+
+  const all = priorEvents.concat([newEvent]);
+
+  // Stage 2 must be checked BEFORE Stage 3, because a re-dispatch on an
+  // already-active ticket would otherwise be misclassified as Stage 3.
   if (newEvent === 'ASSIGNED_DISPATCHER' || newEvent === 'ASSIGNED_UNITS')
+    return 'Stage 2';
+
+  if (all.some((e) => EVENT_TYPE[e] === 'PROGRESS')) return 'Stage 3';
+  if (all.some((e) => e === 'ASSIGNED_DISPATCHER' || e === 'ASSIGNED_UNITS'))
+
     return 'Stage 2';
   return 'Stage 1';
 }

@@ -391,6 +391,32 @@ function haversine(la1, lo1, la2, lo2) {
       Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+// ── Walk the road polyline to compute remaining road distance + time ──────
+// This mirrors exactly what the mobile app does in its GPS watchPosition handler.
+function calcRemainingFromPoly(currentLat, currentLng, routeFp, totalDistM, trafficS) {
+  if (!routeFp || routeFp.length < 2) return { distM: 0, timeS: 0 };
+
+  // Find the closest point on the polyline to current position
+  let minD = Infinity, bestIdx = 0;
+  for (let i = 0; i < routeFp.length; i++) {
+    const d = haversine(currentLat, currentLng, routeFp[i].lat, routeFp[i].lng);
+    if (d < minD) { minD = d; bestIdx = i; }
+  }
+
+  // Walk the remaining polyline from bestIdx to end (same as mobile's trimmed poly walk)
+  let remM = 0;
+  const tail = routeFp.slice(bestIdx);
+  for (let i = 0; i < tail.length - 1; i++) {
+    remM += haversine(tail[i].lat, tail[i].lng, tail[i+1].lat, tail[i+1].lng);
+  }
+  remM = Math.round(remM);
+
+  // Scale traffic time proportionally — identical to mobile's fracLeft formula
+  const fracLeft = totalDistM > 0 ? Math.min(1, remM / totalDistM) : 0;
+  const timeS = Math.round(trafficS * fracLeft);
+
+  return { distM: remM, timeS };
+}
 function fmtDist(m) {
   return m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
 }
@@ -642,8 +668,8 @@ function TicketDetailsOverlay({
   const ticketNo =
     agentTicket?.id || alertObj?.agentTicketId || alertObj?.id || '—';
   const completedCount = dispatchedUnits.filter(
-    (uid) => unitStatuses[uid] === 'completed',
-  ).length;
+  (uid) => unitStatuses[uid] === 'completed' || ticketStatus === 'completed',
+).length;
 
   return (
     <div style={ns.ticketOverlay}>
@@ -810,7 +836,7 @@ function TicketDetailsOverlay({
                     />
                   </div>
                   {dispatchedUnits.map((uid) => {
-                    const st = unitStatuses[uid] || 'dispatched',
+                    const st = unitStatuses[uid] || (ticketStatus === 'completed' ? 'completed' : 'dispatched'),
                       stc = UNIT_ST_COLOR[st] || '#8B949E',
                       sti = UNIT_ST_ICON[st] || <MedicineBoxOutlined />;
                     return (
@@ -1885,6 +1911,7 @@ export default function LiveTrackingPage() {
 
   const activePollIdRef = useRef(0);
   const routeAtUidRef = useRef(null);
+  const routeStatsRef = useRef({ distM: 0, timeS: 0 });
 
   const [tripStatus, setTripStatus] = useState('idle');
   const [live, setLive] = useState(false);
@@ -2267,6 +2294,13 @@ useEffect(() => {
           routeDataRef.current = parsed;
           setRouteData(parsed);
           setBestRouteIdx(0);
+          if (parsed[0]) {
+  routeStatsRef.current = {
+    distM: parsed[0].distanceM || 0,
+    timeS: parsed[0].trafficS || parsed[0].durationS || 0,
+    fp: parsed[0].fp || [],  // store polyline for road-walking calc
+  };
+}
         }
       } catch (e) {
         console.warn('[fetchRoute] Directions API error:', e);
@@ -3049,14 +3083,55 @@ useEffect(() => {
       }
 
       setLive(true);
-      setStats({
-        speed: parseFloat(d.speed) || 0,
-        distM: parseInt(d.remainingDistM) || 0,
-        timeS: parseInt(d.remainingTimeS) || 0,
-        lat,
-        lng,
-      });
+const rawDistM = parseInt(d.remainingDistM) || 0;
+const rawTimeS = parseInt(d.remainingTimeS) || 0;
 
+// ── Always recalculate from the road polyline, same as mobile app ──────────
+// The mobile walks the trimmed polyline segment-by-segment and scales traffic
+// time by fracLeft = remainingRoadDist / totalRouteDist. We do the same here
+// so dispatcher and driver see identical ETA/dist values.
+let computedLiveDistM = rawDistM;
+let computedLiveTimeS = rawTimeS;
+
+const cachedRoute = routeStatsRef.current;
+const routeFp = routeStatsRef.current.fp?.length >= 2
+  ? routeStatsRef.current.fp
+  : routeDataRef.current?.[0]?.fp; // best route polyline points
+
+if (routeFp?.length >= 2 && cachedRoute.distM > 0) {
+  // Road-polyline walk — matches mobile exactly
+  const poly = calcRemainingFromPoly(
+    lat, lng,
+    routeFp,
+    cachedRoute.distM,
+    cachedRoute.timeS,
+  );
+  // Prefer road-poly result; backend value only used if poly gives nothing
+  computedLiveDistM = poly.distM || rawDistM;
+  computedLiveTimeS = poly.timeS || rawTimeS;
+} else if (!rawDistM || !rawTimeS) {
+  // No route fetched yet — fall back to straight-line + speed estimate
+  if (alertObj?.destination?.latitude) {
+    const straightDist = Math.round(haversine(
+      lat, lng,
+      alertObj.destination.latitude,
+      alertObj.destination.longitude,
+    ));
+    computedLiveDistM = rawDistM || straightDist;
+    const speedKmh = parseFloat(d.speed) || 40;
+    computedLiveTimeS = rawTimeS || (speedKmh > 0
+      ? Math.round((straightDist / 1000) / speedKmh * 3600)
+      : 0);
+  }
+}
+
+setStats({
+  speed: parseFloat(d.speed) || 0,
+  distM: computedLiveDistM,
+  timeS: computedLiveTimeS,
+  lat,
+  lng,
+});
       updateVehicle(lat, lng, myUid);
 
       const now = Date.now();
@@ -3436,7 +3511,7 @@ useEffect(() => {
     if (!b.isEmpty()) mapObj.current.fitBounds(b);
   };
 
-  const tsCfg = TRIP_STATUS_CFG[tripStatus] || TRIP_STATUS_CFG.idle;
+  /* const tsCfg = TRIP_STATUS_CFG[tripStatus] || TRIP_STATUS_CFG.idle;
   const lcIdx = LIFECYCLE_ORDER.indexOf(tripStatus);
   const hrs = Math.floor(stats.timeS / 3600),
     mins = Math.round((stats.timeS % 3600) / 60);
@@ -3456,7 +3531,48 @@ useEffect(() => {
           ah = ah % 12 || 12;
           return ah + ':' + am.toString().padStart(2, '0') + ' ' + ap;
         })()
-      : '—';
+      : '—'; */
+      const tsCfg = TRIP_STATUS_CFG[tripStatus] || TRIP_STATUS_CFG.idle;
+const lcIdx = LIFECYCLE_ORDER.indexOf(tripStatus);
+
+// Frontend-calculated stats for completed tickets
+const isTicketDone = ticketStatus === 'completed' || tripStatus === 'completed';
+
+const computedDistM = (() => {
+  if (stats.distM > 0) return stats.distM;           // live poll (or computed above) → use it
+  // Fallback: use last fetched route distance
+  if (routeStatsRef.current.distM > 0) return routeStatsRef.current.distM;
+  // Last resort: straight-line from last known position
+  if (!stats.lat || !alertObj?.destination?.latitude) return 0;
+  return Math.round(haversine(stats.lat, stats.lng,
+    alertObj.destination.latitude, alertObj.destination.longitude));
+})();
+
+// Also add computed timeS fallback for ETA:
+const computedTimeS = (() => {
+  if (stats.timeS > 0) return stats.timeS;
+  if (routeStatsRef.current.timeS > 0) return routeStatsRef.current.timeS;
+  return 0;
+})();
+
+const hrs = Math.floor(computedTimeS / 3600),
+  mins = Math.round((computedTimeS % 3600) / 60);
+
+const etaStr = isTicketDone
+  ? 'Completed'
+  : computedTimeS <= 0 ? '—' : hrs === 0 ? mins + ' min' : hrs + ' hr ' + mins + 'm';
+
+const arrivalStr = isTicketDone
+  ? 'Done'
+  : computedTimeS > 0
+    ? (() => {
+        const ar = new Date(Date.now() + computedTimeS * 1000);
+        let ah = ar.getHours(), am = ar.getMinutes(), ap = ah >= 12 ? 'PM' : 'AM';
+        ah = ah % 12 || 12;
+        return ah + ':' + am.toString().padStart(2, '0') + ' ' + ap;
+      })()
+    : '—';
+
 
   return (
     <div style={s.root}>
@@ -3880,7 +3996,7 @@ useEffect(() => {
             },
             {
               label: 'Dist',
-              val: stats.distM > 0 ? fmtDist(stats.distM) : '—',
+              val: computedDistM > 0 ? fmtDist(computedDistM) : '—',
               icon: <NodeIndexOutlined style={{ fontSize: '10px' }} />,
               cls: 'blue',
             },
@@ -3888,13 +4004,13 @@ useEffect(() => {
               label: 'ETA',
               val: etaStr,
               icon: <ClockCircleOutlined style={{ fontSize: '10px' }} />,
-              cls: 'yellow',
+              cls: isTicketDone ? 'green' : 'yellow',
             },
             {
               label: 'Arrival',
               val: arrivalStr,
               icon: <ClockCircleOutlined style={{ fontSize: '10px' }} />,
-              cls: '',
+              cls: isTicketDone ? 'green' : ''  ,
             },
           ].map((item) => (
             <div

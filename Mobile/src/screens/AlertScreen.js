@@ -288,6 +288,7 @@ export default function AlertScreen() {
             username: session.username,
             unitType,
             deviceStatus: 'online',
+            password: null,
           }),
         }).catch((err) =>
           console.warn('[AlertScreen] DB sync failed:', err.message),
@@ -1285,7 +1286,7 @@ export default function AlertScreen() {
             </View>
           )}
 
-        <View style={styles.serverRow}>
+       {/*  <View style={styles.serverRow}>
           <View
             style={[
               styles.serverDot,
@@ -1295,7 +1296,7 @@ export default function AlertScreen() {
           <Text style={styles.serverText}>
             {serverOnline ? 'Server online' : 'Server offline'}
           </Text>
-        </View>
+        </View> */}
       </View>
 
       {status === 'incoming' && <IncomingAlert />}
