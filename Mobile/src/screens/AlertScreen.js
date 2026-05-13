@@ -97,8 +97,19 @@ export default function AlertScreen() {
   const { theme, toggleTheme } = useTheme();
   const { session, logout, setActiveRoomId } = useAuth();
 
-  const unitId = session?.unitId || session?.username;
+  // Backend identity is ALWAYS the device-stable unit id (e.g. "AMB-ZMMO6P")
+  // set at login by utils/unitId.js and hydrated in AuthContext. Never fall
+  // back to `session.username` here — that historically caused webhook
+  // payloads to carry "amrutha1" instead of "AMB-ZMMO6P", which broke the
+  // dispatcher's per-unit filter on LiveTrackingPage.
+  const unitId = session?.unitId;
   const unitType = session?.unitType || 'ambulance';
+  if (session?.username && !unitId) {
+    console.error(
+      '[Alert] CRITICAL: session.unitId missing — registration and webhook ' +
+        'pings will be skipped until the driver logs out and signs in again.',
+    );
+  }
 
   const unitDisplay = {
     ambulance: { icon: 'ambulance', color: '#DC2626' },
@@ -160,8 +171,14 @@ export default function AlertScreen() {
   useEffect(() => {
     console.log('🔥 SESSION UNIT TYPE:', session?.unitType);
     if (!session?.username || isRegistered) return;
+    if (!unitId) {
+      console.warn(
+        '[Alert] Skipping registerAmbulance — unitId is not yet available on session.',
+      );
+      return;
+    }
     registerAmbulance();
-  }, [session?.username, isRegistered]);
+  }, [session?.username, isRegistered, unitId]);
 
   useEffect(() => {
     if (!isRegistered) return;
@@ -1286,7 +1303,7 @@ export default function AlertScreen() {
             </View>
           )}
 
-       {/*  <View style={styles.serverRow}>
+        {/*  <View style={styles.serverRow}>
           <View
             style={[
               styles.serverDot,

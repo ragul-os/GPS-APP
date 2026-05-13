@@ -489,7 +489,7 @@ const ping = (
 ) => {
   console.log(`📡 GPS PING -> Sending for Ticket: ${ticketNo || 'N/A'}`);
   return postWithRetry(
-    `${WEBHOOK_URL}/webhook/abc1234`,
+    `${WEBHOOK_URL}/webhook/gps`,
     {
       channel: 'gps',
       sessionId: ambulanceId,
@@ -550,7 +550,7 @@ const notifyStatus = (unitId, status, ticketNo) => {
   }
 
   return postWithRetry(
-    `${WEBHOOK_URL}/webhook/abc1234`,
+    `${WEBHOOK_URL}/webhook/gps`,
     {
       channel: 'gps',
       unit_id: unitId,

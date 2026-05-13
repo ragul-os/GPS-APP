@@ -1785,6 +1785,11 @@ export default function DispatchPage() {
     );
     const ids = [];
     let success = false;
+    // Promise that resolves once the ticket-events `dispatch` write has landed
+    // server-side (which is what flips public.tickets.ticket_status from
+    // 'pending' to 'dispatched'). Awaited before navigating to /alerts so the
+    // Monitoring page's filter doesn't hide the just-dispatched ticket.
+    let dispatchEventPromise = Promise.resolve();
 
     try {
       const vehicleType = agentTicket?.vehicleType || 'ambulance';
@@ -1885,34 +1890,12 @@ export default function DispatchPage() {
       }
 
       // Background: when createRoom resolves, propagate the roomId to the
-      // server's per-unit assignments, the ticket-events log, and local state.
+      // server's per-unit assignments and local state. Matrix-side work
+      // (force-join, /assignment-room patch) is fire-and-forget — none of it
+      // gates the navigation to /alerts.
       const ticketIdForRoom = agentTicket?.id || '';
       roomPromise.then((resolvedRoomId) => {
-        if (!resolvedRoomId) {
-          if (ticketIdForRoom && successfulUnitIds.length > 0) {
-            dispatchTicketEvent(ticketIdForRoom, {
-              source_id: dispatcher?.username || 'dispatcher',
-              source_name:
-                dispatcher?.displayName || dispatcher?.username || 'dispatcher',
-              unit_id: successfulUnitIds,
-              unit_details: successfulUnitIds.map((uid) => {
-                const u = unitList.find((x) => x.id === uid);
-                return {
-                  unit_id: uid,
-                  name: u?.name || uid,
-                  type: u?.type || vehicleType,
-                };
-              }),
-              room_details: null,
-            }).catch((err) =>
-              addLog(
-                `⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`,
-                'warn',
-              ),
-            );
-          }
-          return;
-        }
+        if (!resolvedRoomId) return;
 
         // Update local agent-ticket store with the freshly created roomId.
         if (ticketIdForRoom) {
@@ -1956,9 +1939,20 @@ export default function DispatchPage() {
             ),
           );
         }
+      });
 
-        // Now log the dispatch event with the real roomId.
-        if (ticketIdForRoom && successfulUnitIds.length > 0) {
+      // Foreground (with cap): the ticket-events `dispatch` write flips
+      // public.tickets.ticket_status to 'dispatched' — the Monitoring page
+      // filters on that, so we await this before navigating. Wait briefly for
+      // the room so room_details can be embedded, but fall back to null if
+      // createRoom is slow.
+      if (ticketIdForRoom && successfulUnitIds.length > 0) {
+        const ROOM_WAIT_MS = 1500;
+        const roomOrTimeout = Promise.race([
+          roomPromise,
+          new Promise((r) => setTimeout(() => r(null), ROOM_WAIT_MS)),
+        ]);
+        dispatchEventPromise = roomOrTimeout.then((resolvedRoomId) =>
           dispatchTicketEvent(ticketIdForRoom, {
             source_id: dispatcher?.username || 'dispatcher',
             source_name:
@@ -1972,15 +1966,15 @@ export default function DispatchPage() {
                 type: u?.type || vehicleType,
               };
             }),
-            room_details: { room_id: resolvedRoomId },
+            room_details: resolvedRoomId ? { room_id: resolvedRoomId } : null,
           }).catch((err) =>
             addLog(
               `⚠️ ticket-events dispatch failed: ${err?.response?.data?.error || err.message}`,
               'warn',
             ),
-          );
-        }
-      });
+          ),
+        );
+      }
 
       setLastAlertIds(ids);
       addLog(`✅ Done — ${ids.length} alert(s) sent`, 'ok');
@@ -1995,6 +1989,18 @@ export default function DispatchPage() {
     }
 
     if (success) {
+      // Wait (with a 3s cap) for the dispatch-event write so /alerts sees
+      // `ticket_status='dispatched'` on its first fetch instead of needing a
+      // manual refresh. Then nudge any already-mounted listener to reload.
+      try {
+        await Promise.race([
+          dispatchEventPromise,
+          new Promise((r) => setTimeout(r, 3000)),
+        ]);
+      } catch {
+        /* ignore — navigation should not be blocked on logging errors */
+      }
+      window.dispatchEvent(new Event('agentTicketsChange'));
       navigate('/alerts');
     }
   };

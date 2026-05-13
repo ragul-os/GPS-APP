@@ -185,6 +185,12 @@ export default function GlobalChatPanel({
   const dragStartW = useRef(250);
   const roomsRef = useRef([]); // stable ref for sync closure
   const prevPrimaryTicketIdRef = useRef(undefined);
+  // Stable handle to loadRooms so the long-running sync closure can request a
+  // refresh when it observes an unknown roomId without depending on the
+  // (recreated-every-callback) loadRooms identity.
+  const loadRoomsRef = useRef(null);
+  // Coalesce bursts of new-room notifications into one loadRooms() call.
+  const pendingReloadRef = useRef(null);
 
   useEffect(() => {
     const handleOutside = () => setIsMembersOpen(false);
@@ -236,7 +242,7 @@ export default function GlobalChatPanel({
         },
       });
     } catch (err) {
-     // console.error('[GlobalChatPanel] Failed to fetch members:', err);
+      // console.error('[GlobalChatPanel] Failed to fetch members:', err);
     }
   };
 
@@ -256,7 +262,7 @@ export default function GlobalChatPanel({
         selectedRef.current = dmRoomId;
       }
     } catch (err) {
-     // console.error('[GlobalChatPanel] DM initiation failed:', err);
+      // console.error('[GlobalChatPanel] DM initiation failed:', err);
       alert('Failed to open DM: ' + err.message);
     } finally {
       setDmLoading(false);
@@ -290,114 +296,112 @@ export default function GlobalChatPanel({
           joined_rooms.length,
         );
 
-        for (const roomId of joined_rooms) {
-          try {
-            const stRes = await fetch(
-              `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`,
-              { headers: { Authorization: `Bearer ${accessToken}` } },
-            );
-
-            let roomName = '';
-            let members = [];
-            let isDirect = false;
-            if (stRes.ok) {
-              const stateEvents = await stRes.json();
-              const nameEv = stateEvents.find((e) => e.type === 'm.room.name');
-              const aliasEv = stateEvents.find(
-                (e) => e.type === 'm.room.canonical_alias',
+        // Fetch every room's /state in parallel — previously serial which
+        // dominated first-paint latency once the dispatcher had a handful of
+        // joined ticket rooms.
+        const roomResults = await Promise.all(
+          joined_rooms.map(async (roomId) => {
+            try {
+              const stRes = await fetch(
+                `${SYNAPSE_BASE}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`,
+                { headers: { Authorization: `Bearer ${accessToken}` } },
               );
-              const createEv = stateEvents.find(
-                (e) => e.type === 'm.room.create',
-              );
-              roomName = nameEv?.content?.name || aliasEv?.content?.alias || '';
 
-              members = stateEvents
-                .filter(
-                  (e) =>
-                    e.type === 'm.room.member' &&
-                    e.content?.membership === 'join',
-                )
-                .map((e) => ({
-                  userId: e.state_key,
-                  displayName:
-                    e.content?.displayname ||
-                    e.state_key.replace(/^@/, '').split(':')[0],
-                  membership: e.content?.membership,
-                  isMe:
-                    e.state_key === session.userId ||
-                    e.state_key === session.user_id,
-                  online: true, // Mock as online for UI, presence not tracked in state
-                }));
+              let roomName = '';
+              let members = [];
+              let isDirect = false;
+              if (stRes.ok) {
+                const stateEvents = await stRes.json();
+                const nameEv = stateEvents.find(
+                  (e) => e.type === 'm.room.name',
+                );
+                const aliasEv = stateEvents.find(
+                  (e) => e.type === 'm.room.canonical_alias',
+                );
+                const createEv = stateEvents.find(
+                  (e) => e.type === 'm.room.create',
+                );
+                roomName =
+                  nameEv?.content?.name || aliasEv?.content?.alias || '';
 
-              // Robust DM detection: explicit flag OR exactly 2 members and not a named Ticket room
-              isDirect =
-                createEv?.content?.is_direct === true ||
-                (members.length === 2 && !roomName.startsWith('Ticket-'));
+                members = stateEvents
+                  .filter(
+                    (e) =>
+                      e.type === 'm.room.member' &&
+                      e.content?.membership === 'join',
+                  )
+                  .map((e) => ({
+                    userId: e.state_key,
+                    displayName:
+                      e.content?.displayname ||
+                      e.state_key.replace(/^@/, '').split(':')[0],
+                    membership: e.content?.membership,
+                    isMe:
+                      e.state_key === session.userId ||
+                      e.state_key === session.user_id,
+                    online: true,
+                  }));
 
-              // If it's a DM and no name is set, use the other member's name
-              if (isDirect && !roomName) {
-                const other = members.find((m) => m.userId !== myUserId);
-                if (other) roomName = other.displayName;
+                isDirect =
+                  createEv?.content?.is_direct === true ||
+                  (members.length === 2 && !roomName.startsWith('Ticket-'));
+
+                if (isDirect && !roomName) {
+                  const other = members.find((m) => m.userId !== myUserId);
+                  if (other) roomName = other.displayName;
+                }
               }
+
+              const ticketId =
+                roomName
+                  .replace(/^Ticket-/, '')
+                  .replace(/#/, '')
+                  .split(':')[0] || roomId;
+
+              const alertObj =
+                alertHistory.find(
+                  (a) => a.id === ticketId || a.id === roomId,
+                ) || null;
+              const ticketObj =
+                agentTickets.find(
+                  (t) =>
+                    t.id === ticketId ||
+                    t.id === roomId ||
+                    (t.alertIds || []).includes(ticketId) ||
+                    (t.alertIds || []).includes(roomId),
+                ) || null;
+
+              const resolvedAlert =
+                alertObj ||
+                (ticketObj
+                  ? pickAlertForTicket(ticketObj, alertHistory)
+                  : null);
+
+              return {
+                roomId,
+                name: roomName || roomId,
+                ticketId,
+                alertObj: resolvedAlert,
+                ticketObj,
+                virtual: false,
+                members,
+                isDirect,
+              };
+            } catch (e) {
+              console.warn(
+                '[GlobalChatPanel] Failed to load room details:',
+                roomId,
+                e.message,
+              );
+              return null;
             }
+          }),
+        );
 
-            /* console.log(
-              `[GlobalChatPanel] DEBUG: Processing room ${roomId}. Found name: "${roomName}", isDirect: ${isDirect}`,
-            ); */
-
-            const ticketId =
-              roomName
-                .replace(/^Ticket-/, '')
-                .replace(/#/, '')
-                .split(':')[0] || roomId;
-
-            const alertObj =
-              alertHistory.find((a) => a.id === ticketId || a.id === roomId) ||
-              null;
-            const ticketObj =
-              agentTickets.find(
-                (t) =>
-                  t.id === ticketId ||
-                  t.id === roomId ||
-                  (t.alertIds || []).includes(ticketId) ||
-                  (t.alertIds || []).includes(roomId),
-              ) || null;
-
-            const resolvedAlert =
-              alertObj ||
-              (ticketObj ? pickAlertForTicket(ticketObj, alertHistory) : null);
-
-            if (resolvedAlert)
-              console.log(
-                `[GlobalChatPanel] SUCCESS: Matched alert ${resolvedAlert.name} for ticket ${ticketId}`,
-              );
-            else if (ticketObj)
-              console.log(
-                `[GlobalChatPanel] SUCCESS: Matched ticket for room ${roomId}`,
-              );
-            else
-              /* console.log(
-                `[GlobalChatPanel] WARN: No local ticket match for ${roomId} / ${ticketId}`,
-              ); */
-
-            list.push({
-              roomId,
-              name: roomName || roomId,
-              ticketId,
-              alertObj: resolvedAlert,
-              ticketObj,
-              virtual: false,
-              members,
-              isDirect,
-            });
-            ticketIdsSeen.add(ticketId);
-          } catch (e) {
-            console.warn(
-              '[GlobalChatPanel] Failed to load room details:',
-              roomId,
-              e.message,
-            );
-          }
+        for (const row of roomResults) {
+          if (!row) continue;
+          list.push(row);
+          ticketIdsSeen.add(row.ticketId);
         }
       } else {
         console.warn(
@@ -549,13 +553,22 @@ export default function GlobalChatPanel({
           if (data.next_batch) sinceRef.current = data.next_batch;
 
           const joinedRooms = data.rooms?.join || {};
+          const invitedRooms = data.rooms?.invite || {};
           const delta = {};
+          let sawUnknownRoom = false;
 
           for (const [roomId, roomData] of Object.entries(joinedRooms)) {
             const trackedRoom = roomsRef.current.find(
               (r) => r.roomId === roomId && !r.virtual,
             );
-            if (!trackedRoom) continue;
+            if (!trackedRoom) {
+              // Newly-joined room (e.g. a ticket room created/invited after
+              // the panel mounted). Flag so we trigger one loadRooms() after
+              // this batch — don't drop the timeline events yet, they'll be
+              // re-fetched by InteractionsTab once the room appears.
+              sawUnknownRoom = true;
+              continue;
+            }
 
             const events = roomData.timeline?.events || [];
             const incoming = events.filter(
@@ -574,6 +587,10 @@ export default function GlobalChatPanel({
             }
           }
 
+          // Any invite implies a brand-new room the dispatcher hasn't joined
+          // yet, which loadRooms() will pick up after auto-join completes.
+          if (Object.keys(invitedRooms).length > 0) sawUnknownRoom = true;
+
           if (Object.keys(delta).length > 0) {
             setUnreadMap((prev) => {
               const next = { ...prev };
@@ -582,6 +599,19 @@ export default function GlobalChatPanel({
               }
               return next;
             });
+          }
+
+          // Refresh the room list when sync surfaces a roomId we don't know
+          // about. Coalesce bursts (e.g. two new rooms in the same poll) so
+          // we only call loadRooms once per ~250ms window.
+          if (sawUnknownRoom && loadRoomsRef.current) {
+            if (pendingReloadRef.current) {
+              clearTimeout(pendingReloadRef.current);
+            }
+            pendingReloadRef.current = setTimeout(() => {
+              pendingReloadRef.current = null;
+              loadRoomsRef.current?.();
+            }, 250);
           }
         } catch (e) {
           if (e.name === 'AbortError' || ctrl.signal.aborted) break;
@@ -594,12 +624,24 @@ export default function GlobalChatPanel({
     return () => ctrl.abort();
   }, [accessToken, myUserId, open]);
 
+  // Keep the stable ref pointing at the latest loadRooms so the sync closure
+  // can fire it without re-subscribing on every loadRooms identity change.
+  useEffect(() => {
+    loadRoomsRef.current = loadRooms;
+  }, [loadRooms]);
+
   // ── Mount: load rooms + start sync ───────────────────────────────────────
   useEffect(() => {
     if (!accessToken) return;
     loadRooms();
     const cleanup = startSync();
-    return () => cleanup?.();
+    return () => {
+      cleanup?.();
+      if (pendingReloadRef.current) {
+        clearTimeout(pendingReloadRef.current);
+        pendingReloadRef.current = null;
+      }
+    };
   }, [loadRooms, startSync]);
 
   // ── Listen for alertHistory/agentTickets changes ──────────────────────────

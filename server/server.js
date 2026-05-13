@@ -166,7 +166,7 @@ setInterval(async () => {
 // Initialize NATS Subscriber
 (async () => {
   try {
-    const natsUrl = process.env.NATS_URL || 'nats://192.168.9.56:4222';
+    const natsUrl = process.env.NATS_URL || 'nats://192.168.9.82:4222';
     const natsOptions = { servers: natsUrl };
 
     let tlsEnabled = false;
@@ -263,18 +263,35 @@ setInterval(async () => {
             ],
           );
 
-          // Update In-Memory State
-          const unit = units.get(unitId);
-          if (unit) {
-            unit.lastSeen = Date.now();
-            unit.location = {
-              latitude: lat,
-              longitude: lng,
-              heading,
-              speed,
-              updatedAt: Date.now(),
+          // Update In-Memory State — auto-create the unit entry if a GPS
+          // event arrives for a unit we haven't seen before (e.g. a second
+          // unit assigned to the same ticket whose /register-ambulance NATS
+          // dispatch alert raced this first ping). Without this, /all-locations
+          // would silently drop the unit and the dispatcher's All Units
+          // mini-map wouldn't show its marker.
+          let unit = units.get(unitId);
+          if (!unit) {
+            unit = {
+              id: unitId,
+              name: data.user_name || unitId,
+              status: 'online',
+              type: data.unit_type || 'ambulance',
+              lastSeen: Date.now(),
             };
+            units.set(unitId, unit);
+            console.log(
+              `🆕 [gps.stream.req] auto-created units entry for ${unitId} (${unit.type})`,
+            );
           }
+          unit.lastSeen = Date.now();
+          unit.status = 'online';
+          unit.location = {
+            latitude: lat,
+            longitude: lng,
+            heading,
+            speed,
+            updatedAt: Date.now(),
+          };
 
           const key = `${ticketNo}:${unitId}`;
 
@@ -1884,19 +1901,17 @@ app.post('/api/units/sync', async (req, res) => {
          device_status = EXCLUDED.device_status,
          updated_at = now()
        RETURNING *`,
-      [unitId, username, hashedPassword || null, unitType, deviceStatus]
+      [unitId, username, hashedPassword || null, unitType, deviceStatus],
     );
 
     console.log('✅ DB INSERT SUCCESS:', result.rows[0]);
 
     res.json({ success: true });
-
   } catch (err) {
     console.error('❌ DB ERROR:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
-
 
 app.post('/api/units/available', async (req, res) => {
   const { unitId } = req.body;

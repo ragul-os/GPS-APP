@@ -18,7 +18,7 @@ import React, {
   useMemo,
 } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { getAmbulanceLocation, getDirections, getTickets  } from '../api/api';
+import { getAmbulanceLocation, getDirections, getTickets } from '../api/api';
 import axios from 'axios';
 import InteractionsTab from '../components/InteractionsTab';
 import {
@@ -393,21 +393,36 @@ function haversine(la1, lo1, la2, lo2) {
 }
 // ── Walk the road polyline to compute remaining road distance + time ──────
 // This mirrors exactly what the mobile app does in its GPS watchPosition handler.
-function calcRemainingFromPoly(currentLat, currentLng, routeFp, totalDistM, trafficS) {
+function calcRemainingFromPoly(
+  currentLat,
+  currentLng,
+  routeFp,
+  totalDistM,
+  trafficS,
+) {
   if (!routeFp || routeFp.length < 2) return { distM: 0, timeS: 0 };
 
   // Find the closest point on the polyline to current position
-  let minD = Infinity, bestIdx = 0;
+  let minD = Infinity,
+    bestIdx = 0;
   for (let i = 0; i < routeFp.length; i++) {
     const d = haversine(currentLat, currentLng, routeFp[i].lat, routeFp[i].lng);
-    if (d < minD) { minD = d; bestIdx = i; }
+    if (d < minD) {
+      minD = d;
+      bestIdx = i;
+    }
   }
 
   // Walk the remaining polyline from bestIdx to end (same as mobile's trimmed poly walk)
   let remM = 0;
   const tail = routeFp.slice(bestIdx);
   for (let i = 0; i < tail.length - 1; i++) {
-    remM += haversine(tail[i].lat, tail[i].lng, tail[i+1].lat, tail[i+1].lng);
+    remM += haversine(
+      tail[i].lat,
+      tail[i].lng,
+      tail[i + 1].lat,
+      tail[i + 1].lng,
+    );
   }
   remM = Math.round(remM);
 
@@ -594,7 +609,7 @@ function getAgentTickets() {
 // Return the UNION of assignedUnits across every agent ticket that references
 // the given alert/ticket id. Handles the case where a second dispatch created
 // a new ticket entry instead of appending to an existing one.
-function resolveDispatchedUnits(routeId, alertObj, dbUnits  = null) {
+function resolveDispatchedUnits(routeId, alertObj, dbUnits = null) {
   const all = getAgentTickets();
   const matched = all.filter(
     (tk) =>
@@ -668,8 +683,8 @@ function TicketDetailsOverlay({
   const ticketNo =
     agentTicket?.id || alertObj?.agentTicketId || alertObj?.id || '—';
   const completedCount = dispatchedUnits.filter(
-  (uid) => unitStatuses[uid] === 'completed' || ticketStatus === 'completed',
-).length;
+    (uid) => unitStatuses[uid] === 'completed' || ticketStatus === 'completed',
+  ).length;
 
   return (
     <div style={ns.ticketOverlay}>
@@ -836,7 +851,11 @@ function TicketDetailsOverlay({
                     />
                   </div>
                   {dispatchedUnits.map((uid) => {
-                    const st = unitStatuses[uid] || (ticketStatus === 'completed' ? 'completed' : 'dispatched'),
+                    const st =
+                        unitStatuses[uid] ||
+                        (ticketStatus === 'completed'
+                          ? 'completed'
+                          : 'dispatched'),
                       stc = UNIT_ST_COLOR[st] || '#8B949E',
                       sti = UNIT_ST_ICON[st] || <MedicineBoxOutlined />;
                     return (
@@ -1947,10 +1966,17 @@ export default function LiveTrackingPage() {
     return t?.status || alertObj?.status || 'dispatched';
   });
   const [dispatchedUnits, setDispatchedUnits] = useState(() => {
-  const units = resolveDispatchedUnits(id, alertObj);
-  console.log('[DEBUG] resolvedUnits:', units, 'id:', id, 'alertObj:', alertObj);
-  return units;
-});
+    const units = resolveDispatchedUnits(id, alertObj);
+    console.log(
+      '[DEBUG] resolvedUnits:',
+      units,
+      'id:',
+      id,
+      'alertObj:',
+      alertObj,
+    );
+    return units;
+  });
   const [unitLocations, setUnitLocations] = useState({});
   const [unitStatuses, setUnitStatuses] = useState({});
   const [unitTypes, setUnitTypes] = useState({});
@@ -1958,10 +1984,7 @@ export default function LiveTrackingPage() {
     () => resolveDispatchedUnits(id, alertObj)[0] || null,
   );
 
-  
-
   // Fetch DB ticket units on mount
-
 
   // Keep refs in sync
   useEffect(() => {
@@ -2013,51 +2036,48 @@ export default function LiveTrackingPage() {
     });
   }, []);
 
-
   useEffect(() => {
-  const fetchDbUnits = async () => {
-    try {
-      const res = await getTickets(); // already imported
-      const tickets = res.data?.tickets || [];
-      const dbTicket = tickets.find(
-        (t) =>
-          t.ticket_id === id ||
-          t.ticket_id === alertObj?.agentTicketId,
-      );
-      if (!dbTicket?.units) return;
-      const dbUnits = dbTicket.units; // e.g. { "AMB-KLNEK6": {...}, "AMB-UOG4VI": {...} }
-      const unitIds = Object.keys(dbUnits).filter(Boolean);
-      if (!unitIds.length) return;
+    const fetchDbUnits = async () => {
+      try {
+        const res = await getTickets(); // already imported
+        const tickets = res.data?.tickets || [];
+        const dbTicket = tickets.find(
+          (t) => t.ticket_id === id || t.ticket_id === alertObj?.agentTicketId,
+        );
+        if (!dbTicket?.units) return;
+        const dbUnits = dbTicket.units; // e.g. { "AMB-KLNEK6": {...}, "AMB-UOG4VI": {...} }
+        const unitIds = Object.keys(dbUnits).filter(Boolean);
+        if (!unitIds.length) return;
 
-      setDispatchedUnits((prev) => {
-        const merged = new Set(prev);
-        unitIds.forEach((u) => merged.add(u));
-        if (merged.size === prev.length) return prev;
-        return [...merged];
-      });
-
-      // Set unit types from DB units data
-      setUnitTypes((prev) => {
-        const next = { ...prev };
-        Object.entries(dbUnits).forEach(([uid, info]) => {
-          if (!next[uid]) next[uid] = info.type || 'ambulance';
+        setDispatchedUnits((prev) => {
+          const merged = new Set(prev);
+          unitIds.forEach((u) => merged.add(u));
+          if (merged.size === prev.length) return prev;
+          return [...merged];
         });
-        return next;
-      });
 
-      // Set active unit to first if not already set
-      if (!activeUnitIdRef.current && unitIds.length) {
-        activeUnitIdRef.current = unitIds[0];
-        setActiveUnitId(unitIds[0]);
+        // Set unit types from DB units data
+        setUnitTypes((prev) => {
+          const next = { ...prev };
+          Object.entries(dbUnits).forEach(([uid, info]) => {
+            if (!next[uid]) next[uid] = info.type || 'ambulance';
+          });
+          return next;
+        });
+
+        // Set active unit to first if not already set
+        if (!activeUnitIdRef.current && unitIds.length) {
+          activeUnitIdRef.current = unitIds[0];
+          setActiveUnitId(unitIds[0]);
+        }
+
+        addTLog(`DB units loaded: ${unitIds.join(', ')}`, 'ok');
+      } catch (err) {
+        console.warn('[fetchDbUnits]', err.message);
       }
-
-      addTLog(`DB units loaded: ${unitIds.join(', ')}`, 'ok');
-    } catch (err) {
-      console.warn('[fetchDbUnits]', err.message);
-    }
-  };
-  fetchDbUnits();
-}, [id, alertObj, addTLog]);
+    };
+    fetchDbUnits();
+  }, [id, alertObj, addTLog]);
 
   // ── FIX: tryCloseTicket — called from BOTH poll loops ────────────────────
   // This is the single function that decides whether all units are done
@@ -2175,56 +2195,66 @@ export default function LiveTrackingPage() {
   // ── Navigation sync ───────────────────────────────────────────────────────
   // Add this ref near the other refs:
 
+  // Then in the navigation sync useEffect, wrap the reset block:
+  useEffect(() => {
+    const all = getAgentTickets();
+    const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
+    const ao =
+      location.state?.alert ||
+      hist.find((a) => a.id === id || a.agentTicketId === id) ||
+      null;
+    const t = all.find(
+      (tk) => (tk.alertIds || []).includes(id) || tk.id === id,
+    );
 
-// Then in the navigation sync useEffect, wrap the reset block:
-useEffect(() => {
-  const all = getAgentTickets();
-  const hist = JSON.parse(localStorage.getItem('alertHistory') || '[]');
-  const ao = location.state?.alert ||
-    hist.find((a) => a.id === id || a.agentTicketId === id) || null;
-  const t = all.find((tk) => (tk.alertIds || []).includes(id) || tk.id === id);
+    setAgentTicket(t || null);
+    setTicketStatus(t?.status || ao?.status || 'dispatched');
 
-  setAgentTicket(t || null);
-  setTicketStatus(t?.status || ao?.status || 'dispatched');
+    const units = resolveDispatchedUnits(id, ao);
+    setDispatchedUnits(units);
 
-  const units = resolveDispatchedUnits(id, ao);
-  setDispatchedUnits(units);
+    const nextActive = units[0] || null;
+    activeUnitIdRef.current = nextActive;
+    setActiveUnitId(nextActive);
 
-  const nextActive = units[0] || null;
-  activeUnitIdRef.current = nextActive;
-  setActiveUnitId(nextActive);
+    const alreadyTerminal =
+      t?.status === 'completed' || t?.status === 'abandoned';
+    ticketCompletedRef.current = alreadyTerminal;
+    if (alreadyTerminal) dbClosedRef.current = true;
+    lastTripStRef.current = '';
+    completedUnitsSetRef.current = new Set();
 
-  const alreadyTerminal = t?.status === 'completed' || t?.status === 'abandoned';
-  ticketCompletedRef.current = alreadyTerminal;
-  if (alreadyTerminal) dbClosedRef.current = true;
-  lastTripStRef.current = '';
-  completedUnitsSetRef.current = new Set();
+    // ── ONLY reset map/live/stats when ticket ID actually changes ──
+    const ticketChanged = lastTicketIdRef.current !== id;
+    lastTicketIdRef.current = id;
 
-  // ── ONLY reset map/live/stats when ticket ID actually changes ──
-  const ticketChanged = lastTicketIdRef.current !== id;
-  lastTicketIdRef.current = id;
+    if (!alreadyTerminal && ticketChanged) {
+      // ← ADD ticketChanged check
+      setLive(false);
+      setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
+      setRouteData([]);
+      setStepInfo({ idx: 0, total: 0 });
+      Object.values(vehMkrMap.current).forEach((mkr) => {
+        try {
+          mkr?.setMap(null);
+        } catch (_) {}
+      });
+      vehMkrMap.current = {};
+      polylinesRef.current.forEach((r) => {
+        try {
+          r.out?.setMap(null);
+          r.poly?.setMap(null);
+        } catch (_) {}
+      });
+      polylinesRef.current = [];
+      routeAtRef.current = 0;
+      lastVRef.current = null;
+      setUnitStatuses({});
+      setUnitLocations({});
+    }
 
-  if (!alreadyTerminal && ticketChanged) {  // ← ADD ticketChanged check
-    setLive(false);
-    setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
-    setRouteData([]);
-    setStepInfo({ idx: 0, total: 0 });
-    Object.values(vehMkrMap.current).forEach((mkr) => {
-      try { mkr?.setMap(null); } catch (_) {}
-    });
-    vehMkrMap.current = {};
-    polylinesRef.current.forEach((r) => {
-      try { r.out?.setMap(null); r.poly?.setMap(null); } catch (_) {}
-    });
-    polylinesRef.current = [];
-    routeAtRef.current = 0;
-    lastVRef.current = null;
-    setUnitStatuses({});
-    setUnitLocations({});
-  }
-
-  addTLog(`Incident: ${ao?.name || id}`, 'info');
-}, [id, location.key, addTLog]);
+    addTLog(`Incident: ${ao?.name || id}`, 'info');
+  }, [id, location.key, addTLog]);
 
   // Init map
   useEffect(() => {
@@ -2295,12 +2325,12 @@ useEffect(() => {
           setRouteData(parsed);
           setBestRouteIdx(0);
           if (parsed[0]) {
-  routeStatsRef.current = {
-    distM: parsed[0].distanceM || 0,
-    timeS: parsed[0].trafficS || parsed[0].durationS || 0,
-    fp: parsed[0].fp || [],  // store polyline for road-walking calc
-  };
-}
+            routeStatsRef.current = {
+              distM: parsed[0].distanceM || 0,
+              timeS: parsed[0].trafficS || parsed[0].durationS || 0,
+              fp: parsed[0].fp || [], // store polyline for road-walking calc
+            };
+          }
         }
       } catch (e) {
         console.warn('[fetchRoute] Directions API error:', e);
@@ -2308,35 +2338,45 @@ useEffect(() => {
       // ── FIX: guard again after async directions call — uid may have
       // changed while we were awaiting getDirections()
       if (uid !== activeUnitIdRef.current) {
-        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        console.log(
+          `[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`,
+        );
         return;
       }
       console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
       // ── FIX: guard again after async directions call — uid may have
       // changed while we were awaiting getDirections()
       if (uid !== activeUnitIdRef.current) {
-        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        console.log(
+          `[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`,
+        );
         return;
       }
       console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
       // ── FIX: guard again after async directions call — uid may have
       // changed while we were awaiting getDirections()
       if (uid !== activeUnitIdRef.current) {
-        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        console.log(
+          `[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`,
+        );
         return;
       }
       console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
       // ── FIX: guard again after async directions call — uid may have
       // changed while we were awaiting getDirections()
       if (uid !== activeUnitIdRef.current) {
-        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        console.log(
+          `[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`,
+        );
         return;
       }
       console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
       // ── FIX: guard again after async directions call — uid may have
       // changed while we were awaiting getDirections()
       if (uid !== activeUnitIdRef.current) {
-        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        console.log(
+          `[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`,
+        );
         return;
       }
       console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
@@ -2349,7 +2389,9 @@ useEffect(() => {
       // ── FIX: guard again after async directions call — uid may have
       // changed while we were awaiting getDirections()
       if (uid !== activeUnitIdRef.current) {
-        console.log(`[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`);
+        console.log(
+          `[fetchRoute] ⛔ uid changed after directions fetch: was=${uid} now=${activeUnitIdRef.current} — aborting polyline draw`,
+        );
         return;
       }
       console.log(`[fetchRoute] ✅ Drawing polylines for uid=${uid}`);
@@ -2510,107 +2552,106 @@ useEffect(() => {
   );
  */
 
-
-
   const updateVehicle = useCallback(
-  (lat, lng, uid) => {
+    (lat, lng, uid) => {
+      console.log('🚗 updateVehicle:', {
+        uid,
+        active: activeUnitIdRef.current,
+        isActive: uid === activeUnitIdRef.current,
+      });
 
-    console.log("🚗 updateVehicle:", {
-      uid,
-      active: activeUnitIdRef.current,
-      isActive: uid === activeUnitIdRef.current
-    });
-
-    /* if (!mapObj.current || uid !== activeUnitIdRef.current) {
+      /* if (!mapObj.current || uid !== activeUnitIdRef.current) {
       console.log("⛔ Skipped updateVehicle:", uid);
       return;
     } */
 
       if (!mapObj.current) {
-      console.log(`[updateVehicle] ⛔ NO MAP uid=${uid}`);
-      return;
-    }
-    if (uid !== activeUnitIdRef.current) {
-      console.log(`[updateVehicle] ⛔ BLOCKED non-active uid=${uid} activeUid=${activeUnitIdRef.current}`);
-      return;
-    }
-    console.log(`[updateVehicle] ✅ ALLOWED uid=${uid} lat=${lat.toFixed(5)} lng=${lng.toFixed(5)}`); 
-
-    const pos = { lat, lng };
-
-    // 🧹 REMOVE OLD MARKERS (CRITICAL FIX)
-    Object.keys(vehMkrMap.current).forEach((key) => {
-      if (key !== uid) {
-        console.log("🧹 Removing marker:", key);
-        vehMkrMap.current[key]?.setMap(null);
-        delete vehMkrMap.current[key];
+        console.log(`[updateVehicle] ⛔ NO MAP uid=${uid}`);
+        return;
       }
-    });
+      if (uid !== activeUnitIdRef.current) {
+        console.log(
+          `[updateVehicle] ⛔ BLOCKED non-active uid=${uid} activeUid=${activeUnitIdRef.current}`,
+        );
+        return;
+      }
+      console.log(
+        `[updateVehicle] ✅ ALLOWED uid=${uid} lat=${lat.toFixed(5)} lng=${lng.toFixed(5)}`,
+      );
 
-    if (!vehMkrMap.current[uid]) {
-      console.log("🆕 Creating marker for:", uid);
+      const pos = { lat, lng };
 
-      const mkr = new window.google.maps.Marker({
-        position: pos,
-        map: mapObj.current,
-        zIndex: 100,
-        icon: {
-          url:
-            'data:image/svg+xml;charset=UTF-8,' +
-            encodeURIComponent(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+      // 🧹 REMOVE OLD MARKERS (CRITICAL FIX)
+      Object.keys(vehMkrMap.current).forEach((key) => {
+        if (key !== uid) {
+          console.log('🧹 Removing marker:', key);
+          vehMkrMap.current[key]?.setMap(null);
+          delete vehMkrMap.current[key];
+        }
+      });
+
+      if (!vehMkrMap.current[uid]) {
+        console.log('🆕 Creating marker for:', uid);
+
+        const mkr = new window.google.maps.Marker({
+          position: pos,
+          map: mapObj.current,
+          zIndex: 100,
+          icon: {
+            url:
+              'data:image/svg+xml;charset=UTF-8,' +
+              encodeURIComponent(
+                `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
                 <circle cx="22" cy="22" r="20" fill="${cfg.color}" stroke="white" stroke-width="2.5"/>
                 <text x="22" y="28" text-anchor="middle" font-size="16" fill="white" font-family="Arial" font-weight="bold">
                   ${alertObj.vehicleType[0].toUpperCase()}
                 </text>
-              </svg>`
-            ),
-          scaledSize: new window.google.maps.Size(44, 44),
-          anchor: new window.google.maps.Point(22, 22),
-        },
-      });
+              </svg>`,
+              ),
+            scaledSize: new window.google.maps.Size(44, 44),
+            anchor: new window.google.maps.Point(22, 22),
+          },
+        });
 
-      vehMkrMap.current[uid] = mkr;
-      addTLog(`Unit on map [${uid}]`, 'ok', uid);
+        vehMkrMap.current[uid] = mkr;
+        addTLog(`Unit on map [${uid}]`, 'ok', uid);
 
-      setTimeout(() => {
-        if (uid !== activeUnitIdRef.current) return;
+        setTimeout(() => {
+          if (uid !== activeUnitIdRef.current) return;
 
-        const b = new window.google.maps.LatLngBounds();
-        if (vehMkrMap.current[uid])
-          b.extend(vehMkrMap.current[uid].getPosition());
-        if (destMkr.current)
-          b.extend(destMkr.current.getPosition());
+          const b = new window.google.maps.LatLngBounds();
+          if (vehMkrMap.current[uid])
+            b.extend(vehMkrMap.current[uid].getPosition());
+          if (destMkr.current) b.extend(destMkr.current.getPosition());
 
-        if (!b.isEmpty()) {
-          console.log("📦 Fit bounds for:", uid);
-          mapObj.current.fitBounds(b);
-        }
-      }, 600);
-
-    } else {
-      console.log("📍 Updating position:", uid);
-      vehMkrMap.current[uid].setPosition(pos);
-    }
-
-    // 🚫 REDUCE JUMPING (IMPORTANT FIX)
-    if (lastVRef.current) {
-      const { lat: plat, lng: plng } = lastVRef.current;
-
-      const moved =
-        Math.abs(lat - plat) > 0.0005 ||  // increased threshold
-        Math.abs(lng - plng) > 0.0005;
-
-      if (moved) {
-        console.log("🧭 Pan to:", uid);
-        mapObj.current.panTo(pos);
+          if (!b.isEmpty()) {
+            console.log('📦 Fit bounds for:', uid);
+            mapObj.current.fitBounds(b);
+          }
+        }, 600);
+      } else {
+        console.log('📍 Updating position:', uid);
+        vehMkrMap.current[uid].setPosition(pos);
       }
-    }
 
-    lastVRef.current = { lat, lng };
-  },
-  [cfg, addTLog, alertObj]
-);
+      // 🚫 REDUCE JUMPING (IMPORTANT FIX)
+      if (lastVRef.current) {
+        const { lat: plat, lng: plng } = lastVRef.current;
+
+        const moved =
+          Math.abs(lat - plat) > 0.0005 || // increased threshold
+          Math.abs(lng - plng) > 0.0005;
+
+        if (moved) {
+          console.log('🧭 Pan to:', uid);
+          mapObj.current.panTo(pos);
+        }
+      }
+
+      lastVRef.current = { lat, lng };
+    },
+    [cfg, addTLog, alertObj],
+  );
   const fetchNearby = useCallback(
     async (lat, lng) => {
       if (!mapObj.current || nearbyInFlight.current) return;
@@ -2720,7 +2761,7 @@ useEffect(() => {
   };
 
   // ── Main poll (active unit) ───────────────────────────────────────────────
- /*  useEffect(() => {
+  /*  useEffect(() => {
     const myUid = activeUnitId;
     let isMounted = true;
     let lastEventId = '0-0';
@@ -2912,275 +2953,379 @@ useEffect(() => {
   ]);
  */
 
-
   useEffect(() => {
-  if (!activeUnitId) return;
+    if (!activeUnitId) return;
 
-  activePollIdRef.current += 1;
-  const myPollId = activePollIdRef.current;
-  const myUid = activeUnitId;
+    activePollIdRef.current += 1;
+    const myPollId = activePollIdRef.current;
+    const myUid = activeUnitId;
 
-  let isMounted = true;
-  let lastEventId = '0-0';
+    let isMounted = true;
+    let lastEventId = '0-0';
+    // Fires at most once per poll generation when the webhook stream carries
+    // events under a single unit_id that doesn't match this dispatcher's
+    // selected unit — a classic mobile↔dispatcher identifier-drift symptom.
+    let identityMismatchLogged = false;
 
-  console.log(`[ActivePoll] ▶ START uid=${myUid} pollId=${myPollId}`);
+    console.log(`[ActivePoll] ▶ START uid=${myUid} pollId=${myPollId}`);
 
-  const poll = async () => {
-    // ── HARD GUARD 1: stale generation ──────────────────────────────────
-    if (myPollId !== activePollIdRef.current) {
-      console.log(`[ActivePoll] ⛔ STALE POLL BLOCKED pollId=${myPollId} current=${activePollIdRef.current}`);
-      return;
-    }
-    // ── HARD GUARD 2: unmounted ──────────────────────────────────────────
-    if (!isMounted) return;
-    // ── HARD GUARD 3: unit switched mid-flight ───────────────────────────
-    if (activeUnitIdRef.current !== myUid) {
-      console.log(`[ActivePoll] ⛔ UNIT SWITCHED during poll: was=${myUid} now=${activeUnitIdRef.current}`);
-      return;
-    }
-
-    try {
-      const ticketNo =
-        id ||
-        alertObj?.agentTicketId ||
-        alertObj?.id ||
-        agentTicket?.id ||
-        myUid;
-
-      console.log(`[ActivePoll] 📡 Fetching location uid=${myUid} ticketNo=${ticketNo} lastEventId=${lastEventId} pollId=${myPollId}`);
-
-      // ── STEP 1: Fetch ────────────────────────────────────────────────────
-      const res = await getAmbulanceLocation(myUid, ticketNo, lastEventId);
-
-      // ── STEP 2: Re-check all guards after the async call returns ─────────
-      if (myPollId !== activePollIdRef.current || !isMounted || activeUnitIdRef.current !== myUid) {
-        console.log(`[ActivePoll] ⛔ GUARDS FAILED after await uid=${myUid} pollId=${myPollId}`);
+    const poll = async () => {
+      // ── HARD GUARD 1: stale generation ──────────────────────────────────
+      if (myPollId !== activePollIdRef.current) {
+        console.log(
+          `[ActivePoll] ⛔ STALE POLL BLOCKED pollId=${myPollId} current=${activePollIdRef.current}`,
+        );
+        return;
+      }
+      // ── HARD GUARD 2: unmounted ──────────────────────────────────────────
+      if (!isMounted) return;
+      // ── HARD GUARD 3: unit switched mid-flight ───────────────────────────
+      if (activeUnitIdRef.current !== myUid) {
+        console.log(
+          `[ActivePoll] ⛔ UNIT SWITCHED during poll: was=${myUid} now=${activeUnitIdRef.current}`,
+        );
         return;
       }
 
-      // ── STEP 3: Extract + filter payload to THIS unit only ───────────────
-      const rawPayload = res.data?.eventPayload || res.data?.channel || [];
-      const payload = Array.isArray(rawPayload) ? rawPayload : [];
+      try {
+        const ticketNo =
+          id ||
+          alertObj?.agentTicketId ||
+          alertObj?.id ||
+          agentTicket?.id ||
+          myUid;
 
-      console.log(`[ActivePoll] 🧪 RAW PAYLOAD total=${payload.length} units=[${[...new Set(payload.map(e => e?.unit_id).filter(Boolean))].join(',')}] pollId=${myPollId}`);
+        console.log(
+          `[ActivePoll] 📡 Fetching location uid=${myUid} ticketNo=${ticketNo} lastEventId=${lastEventId} pollId=${myPollId}`,
+        );
 
-      const filteredEvents = payload.filter((e) => e?.unit_id === myUid);
+        // ── STEP 1: Fetch ────────────────────────────────────────────────────
+        const res = await getAmbulanceLocation(myUid, ticketNo, lastEventId);
 
-      console.log(`[ActivePoll] 🔍 FILTER uid=${myUid} matched=${filteredEvents.length}/${payload.length}`);
-
-      if (!filteredEvents.length) {
-        console.warn(`[ActivePoll] ⚠️ No events for uid=${myUid} — retrying in 100ms`);
-        setTimeout(poll, 100);
-        return;
-      }
-
-      // ── STEP 4: Pick the latest event for THIS unit ──────────────────────
-      const d = filteredEvents[filteredEvents.length - 1];
-      lastEventId = d.eventId || d.timestamp || lastEventId;
-
-      console.log(`[ActivePoll] ✅ USING EVENT uid=${d.unit_id} lat=${d.latitude} lng=${d.longitude} tripStatus=${d.tripStatus} lastEventId=${lastEventId}`);
-
-      // ── STEP 5: Ticket number guard ──────────────────────────────────────
-      if (d.ticket_no && ticketNo && d.ticket_no !== ticketNo) {
-        console.log(`[ActivePoll] ⛔ ticket_no mismatch: event=${d.ticket_no} expected=${ticketNo}`);
-        setTimeout(poll, 100);
-        return;
-      }
-
-      // ── STEP 6: Trip status processing ──────────────────────────────────
-      const ts = d.tripStatus || 'idle';
-      console.log(`[ActivePoll] 📡 uid=${myUid} tripStatus=${ts} pollId=${myPollId}`);
-
-      const REAL_STATUSES = [
-        'accepted', 'dispatched', 'en_route', 'on_action',
-        'arrived', 'completed', 'abandoned',
-      ];
-      const isDowngradeToIdle =
-        ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
-      if (isDowngradeToIdle) {
-        console.log(`[ActivePoll] ⛔ Blocked idle downgrade from ${tripStatusRef.current}`);
-        setTimeout(poll, 100);
-        return;
-      }
-
-      setUnitStatuses((prev) => {
-        const current = prev[myUid];
-        if (TERMINAL_STATUSES.includes(current)) return prev;
-        if (current === ts) return prev;
-        console.log(`[ActivePoll] 🔄 unitStatus ${myUid}: ${current} → ${ts}`);
-        return { ...prev, [myUid]: ts };
-      });
-
-      if (myUid === activeUnitIdRef.current) {
-        setTripStatus((prev) => {
-          if (TERMINAL_STATUSES.includes(prev)) return prev;
-          if (prev === ts) return prev;
-          tripStatusRef.current = ts;
-          console.log(`[ActivePoll] 🔄 tripStatus: ${prev} → ${ts} uid=${myUid}`);
-          return ts;
-        });
-
-        setStepInfo({
-          idx: parseInt(d.stepIdx) || 0,
-          total: parseInt(d.totalSteps) || 0,
-        });
-      } else {
-        console.log(`[ActivePoll] ⛔ setTripStatus/setStepInfo BLOCKED uid=${myUid} not active`);
-      }
-
-      if (ts !== lastTripStRef.current) {
-        if (TERMINAL_STATUSES.includes(lastTripStRef.current) && ts === 'idle') {
-          // blocked — stale idle after terminal
-        } else {
-          lastTripStRef.current = ts;
-          const statusText = {
-            dispatched: '⚡', en_route: '🚑', on_action: '🔔',
-            arrived: '📍', completed: '✅', abandoned: '❌', idle: '⏱️',
-          }[ts] || '🔄';
-          addTLog(
-            `${statusText} → ${TRIP_STATUS_CFG[ts]?.t || ts} [${myUid}]`,
-            ts === 'arrived' || ts === 'completed' ? 'ok'
-              : ts === 'abandoned' ? 'error' : 'info',
-            myUid,
+        // ── STEP 2: Re-check all guards after the async call returns ─────────
+        if (
+          myPollId !== activePollIdRef.current ||
+          !isMounted ||
+          activeUnitIdRef.current !== myUid
+        ) {
+          console.log(
+            `[ActivePoll] ⛔ GUARDS FAILED after await uid=${myUid} pollId=${myPollId}`,
           );
+          return;
+        }
 
-          if (
-            (ts === 'en_route' || ts === 'on_action') &&
-            !trafficOnRef.current &&
-            trafficLayerRef.current &&
-            mapObj.current
-          ) {
-            trafficLayerRef.current.setMap(mapObj.current);
-            setTrafficOn(true);
-            addTLog('Traffic layer auto-enabled', 'ok', myUid);
+        // ── STEP 3: Extract + filter payload to THIS unit only ───────────────
+        const rawPayload = res.data?.eventPayload || res.data?.channel || [];
+        const payload = Array.isArray(rawPayload) ? rawPayload : [];
+
+        console.log(
+          `[ActivePoll] 🧪 RAW PAYLOAD total=${payload.length} units=[${[...new Set(payload.map((e) => e?.unit_id).filter(Boolean))].join(',')}] pollId=${myPollId}`,
+        );
+
+        const filteredEvents = payload.filter((e) => e?.unit_id === myUid);
+
+        console.log(
+          `[ActivePoll] 🔍 FILTER uid=${myUid} matched=${filteredEvents.length}/${payload.length}`,
+        );
+
+        if (!filteredEvents.length) {
+          if (!identityMismatchLogged && payload.length > 0) {
+            const distinctUids = [
+              ...new Set(payload.map((e) => e?.unit_id).filter(Boolean)),
+            ];
+            if (distinctUids.length === 1 && distinctUids[0] !== myUid) {
+              identityMismatchLogged = true;
+              console.error(
+                `[ActivePoll] 🆘 IDENTITY MISMATCH on ticket=${ticketNo}: ` +
+                  `dispatcher polling for "${myUid}" but mobile is posting as "${distinctUids[0]}". ` +
+                  `Driver must log out and sign in again so session.unitId is restored from DEVICE_UNIT_ID.`,
+              );
+            }
           }
+          console.warn(
+            `[ActivePoll] ⚠️ No events for uid=${myUid} — retrying in 100ms`,
+          );
+          setTimeout(poll, 100);
+          return;
+        }
 
-          if (ts === 'completed') {
-            completedUnitsSetRef.current.add(myUid);
-            console.log(`[ActivePoll] ✅ COMPLETED uid=${myUid} completedSet=[${[...completedUnitsSetRef.current].join(',')}]`);
-            addTLog(`Unit ${myUid} reported completed`, 'ok', myUid);
-            await tryCloseTicket(myUid);
+        // ── STEP 4: Pick the latest event for THIS unit ──────────────────────
+        const d = filteredEvents[filteredEvents.length - 1];
+        lastEventId = d.eventId || d.timestamp || lastEventId;
+
+        console.log(
+          `[ActivePoll] ✅ USING EVENT uid=${d.unit_id} lat=${d.latitude} lng=${d.longitude} tripStatus=${d.trip_status || d.tripStatus} lastEventId=${lastEventId}`,
+        );
+
+        // ── STEP 5: Ticket number guard ──────────────────────────────────────
+        if (d.ticket_no && ticketNo && d.ticket_no !== ticketNo) {
+          console.log(
+            `[ActivePoll] ⛔ ticket_no mismatch: event=${d.ticket_no} expected=${ticketNo}`,
+          );
+          setTimeout(poll, 100);
+          return;
+        }
+
+        // ── STEP 6: Trip status processing ──────────────────────────────────
+        // Webhook payload uses snake_case `trip_status` (as sent by Mobile).
+        // Keep camelCase fallback for any legacy server-shaped responses.
+        const ts = d.trip_status || d.tripStatus || 'idle';
+        console.log(
+          `[ActivePoll] 📡 uid=${myUid} tripStatus=${ts} pollId=${myPollId}`,
+        );
+
+        const REAL_STATUSES = [
+          'accepted',
+          'dispatched',
+          'en_route',
+          'on_action',
+          'arrived',
+          'completed',
+          'abandoned',
+        ];
+        const isDowngradeToIdle =
+          ts === 'idle' && REAL_STATUSES.includes(tripStatusRef.current);
+        if (isDowngradeToIdle) {
+          console.log(
+            `[ActivePoll] ⛔ Blocked idle downgrade from ${tripStatusRef.current}`,
+          );
+          setTimeout(poll, 100);
+          return;
+        }
+
+        setUnitStatuses((prev) => {
+          const current = prev[myUid];
+          if (TERMINAL_STATUSES.includes(current)) return prev;
+          if (current === ts) return prev;
+          console.log(
+            `[ActivePoll] 🔄 unitStatus ${myUid}: ${current} → ${ts}`,
+          );
+          return { ...prev, [myUid]: ts };
+        });
+
+        if (myUid === activeUnitIdRef.current) {
+          setTripStatus((prev) => {
+            if (TERMINAL_STATUSES.includes(prev)) return prev;
+            if (prev === ts) return prev;
+            tripStatusRef.current = ts;
+            console.log(
+              `[ActivePoll] 🔄 tripStatus: ${prev} → ${ts} uid=${myUid}`,
+            );
+            return ts;
+          });
+
+          setStepInfo({
+            idx: parseInt(d.stepIdx) || 0,
+            total: parseInt(d.totalSteps) || 0,
+          });
+        } else {
+          console.log(
+            `[ActivePoll] ⛔ setTripStatus/setStepInfo BLOCKED uid=${myUid} not active`,
+          );
+        }
+
+        if (ts !== lastTripStRef.current) {
+          if (
+            TERMINAL_STATUSES.includes(lastTripStRef.current) &&
+            ts === 'idle'
+          ) {
+            // blocked — stale idle after terminal
+          } else {
+            lastTripStRef.current = ts;
+            const statusText =
+              {
+                dispatched: '⚡',
+                en_route: '🚑',
+                on_action: '🔔',
+                arrived: '📍',
+                completed: '✅',
+                abandoned: '❌',
+                idle: '⏱️',
+              }[ts] || '🔄';
+            addTLog(
+              `${statusText} → ${TRIP_STATUS_CFG[ts]?.t || ts} [${myUid}]`,
+              ts === 'arrived' || ts === 'completed'
+                ? 'ok'
+                : ts === 'abandoned'
+                  ? 'error'
+                  : 'info',
+              myUid,
+            );
+
+            if (
+              (ts === 'en_route' || ts === 'on_action') &&
+              !trafficOnRef.current &&
+              trafficLayerRef.current &&
+              mapObj.current
+            ) {
+              trafficLayerRef.current.setMap(mapObj.current);
+              setTrafficOn(true);
+              addTLog('Traffic layer auto-enabled', 'ok', myUid);
+            }
+
+            if (ts === 'completed') {
+              completedUnitsSetRef.current.add(myUid);
+              console.log(
+                `[ActivePoll] ✅ COMPLETED uid=${myUid} completedSet=[${[...completedUnitsSetRef.current].join(',')}]`,
+              );
+              addTLog(`Unit ${myUid} reported completed`, 'ok', myUid);
+              await tryCloseTicket(myUid);
+            }
           }
         }
-      }
 
-      // ── STEP 7: Location update ──────────────────────────────────────────
-      if (!d.latitude || !d.longitude) {
-        console.warn(`[ActivePoll] ⚠️ No lat/lng in event for uid=${myUid}`);
-        setLive(false);
+        // ── STEP 7: Location update ──────────────────────────────────────────
+        if (!d.latitude || !d.longitude) {
+          console.warn(`[ActivePoll] ⚠️ No lat/lng in event for uid=${myUid}`);
+          setLive(false);
+          setTimeout(poll, 100);
+          return;
+        }
+
+        const lat = parseFloat(d.latitude);
+        const lng = parseFloat(d.longitude);
+
+        console.log(
+          `[ActivePoll] 📍 LOCATION uid=${myUid} lat=${lat.toFixed(5)} lng=${lng.toFixed(5)} pollId=${myPollId}`,
+        );
+
+        if (myUid !== activeUnitIdRef.current) {
+          console.log(
+            `[ActivePoll] ⛔ setStats BLOCKED — uid=${myUid} is no longer active`,
+          );
+          return;
+        }
+
+        setLive(true);
+        const rawDistM = parseInt(d.remainingDistM) || 0;
+        const rawTimeS = parseInt(d.remainingTimeS) || 0;
+
+        // ── Always recalculate from the road polyline, same as mobile app ──────────
+        // The mobile walks the trimmed polyline segment-by-segment and scales traffic
+        // time by fracLeft = remainingRoadDist / totalRouteDist. We do the same here
+        // so dispatcher and driver see identical ETA/dist values.
+        let computedLiveDistM = rawDistM;
+        let computedLiveTimeS = rawTimeS;
+
+        const cachedRoute = routeStatsRef.current;
+        const routeFp =
+          routeStatsRef.current.fp?.length >= 2
+            ? routeStatsRef.current.fp
+            : routeDataRef.current?.[0]?.fp; // best route polyline points
+
+        if (routeFp?.length >= 2 && cachedRoute.distM > 0) {
+          // Road-polyline walk — matches mobile exactly
+          const poly = calcRemainingFromPoly(
+            lat,
+            lng,
+            routeFp,
+            cachedRoute.distM,
+            cachedRoute.timeS,
+          );
+          // Prefer road-poly result; backend value only used if poly gives nothing
+          computedLiveDistM = poly.distM || rawDistM;
+          computedLiveTimeS = poly.timeS || rawTimeS;
+        } else if (!rawDistM || !rawTimeS) {
+          // No route fetched yet — fall back to straight-line + speed estimate
+          if (alertObj?.destination?.latitude) {
+            const straightDist = Math.round(
+              haversine(
+                lat,
+                lng,
+                alertObj.destination.latitude,
+                alertObj.destination.longitude,
+              ),
+            );
+            computedLiveDistM = rawDistM || straightDist;
+            const speedKmh = parseFloat(d.speed) || 40;
+            computedLiveTimeS =
+              rawTimeS ||
+              (speedKmh > 0
+                ? Math.round((straightDist / 1000 / speedKmh) * 3600)
+                : 0);
+          }
+        }
+
+        setStats({
+          speed: parseFloat(d.speed) || 0,
+          distM: computedLiveDistM,
+          timeS: computedLiveTimeS,
+          lat,
+          lng,
+        });
+        updateVehicle(lat, lng, myUid);
+
+        // Mirror the active unit's coords into unitLocations so the
+        // MiniMapOverlay can render its marker. The /all-locations status
+        // poll deliberately skips the active unit (it doesn't write here)
+        // because the webhook stream — not the server's units map — is the
+        // freshest source of truth for the active unit.
+        const activeUnitLoc = {
+          latitude: lat,
+          longitude: lng,
+          speed: parseFloat(d.speed) || 0,
+        };
+        setUnitLocations((prev) => {
+          const p = prev[myUid];
+          if (
+            p &&
+            p.latitude === activeUnitLoc.latitude &&
+            p.longitude === activeUnitLoc.longitude
+          ) {
+            return prev;
+          }
+          return { ...prev, [myUid]: activeUnitLoc };
+        });
+
+        const now = Date.now();
+        const routeAge =
+          routeAtUidRef.current === myUid ? now - routeAtRef.current : Infinity;
+
+        if (alertObj?.destination && routeAge > 45000) {
+          routeAtRef.current = now;
+          routeAtUidRef.current = myUid;
+          console.log(
+            `[ActivePoll] 🗺️ fetchRoute uid=${myUid} routeAge=${routeAge === Infinity ? 'FIRST' : Math.round(routeAge / 1000) + 's'}`,
+          );
+          fetchRoute(lat, lng, myUid);
+        }
+
+        fetchNearby(lat, lng);
         setTimeout(poll, 100);
-        return;
+      } catch (err) {
+        if (myPollId !== activePollIdRef.current || !isMounted) return;
+        const isTimeout =
+          err?.code === 'ECONNABORTED' ||
+          err?.code === 'ERR_CANCELED' ||
+          err?.message === 'canceled' ||
+          /timeout/i.test(err?.message || '');
+        if (err.response?.status === 408 || isTimeout) {
+          console.log(
+            `[ActivePoll] ⏱️ Timeout uid=${myUid} — retrying in 100ms`,
+          );
+          setTimeout(poll, 100);
+        } else {
+          console.log(`[ActivePoll] ❌ ERROR uid=${myUid}:`, err.message);
+          setTimeout(poll, 3000);
+        }
       }
+    };
 
-      const lat = parseFloat(d.latitude);
-      const lng = parseFloat(d.longitude);
+    poll();
 
-      console.log(`[ActivePoll] 📍 LOCATION uid=${myUid} lat=${lat.toFixed(5)} lng=${lng.toFixed(5)} pollId=${myPollId}`);
-
-      if (myUid !== activeUnitIdRef.current) {
-        console.log(`[ActivePoll] ⛔ setStats BLOCKED — uid=${myUid} is no longer active`);
-        return;
-      }
-
-      setLive(true);
-const rawDistM = parseInt(d.remainingDistM) || 0;
-const rawTimeS = parseInt(d.remainingTimeS) || 0;
-
-// ── Always recalculate from the road polyline, same as mobile app ──────────
-// The mobile walks the trimmed polyline segment-by-segment and scales traffic
-// time by fracLeft = remainingRoadDist / totalRouteDist. We do the same here
-// so dispatcher and driver see identical ETA/dist values.
-let computedLiveDistM = rawDistM;
-let computedLiveTimeS = rawTimeS;
-
-const cachedRoute = routeStatsRef.current;
-const routeFp = routeStatsRef.current.fp?.length >= 2
-  ? routeStatsRef.current.fp
-  : routeDataRef.current?.[0]?.fp; // best route polyline points
-
-if (routeFp?.length >= 2 && cachedRoute.distM > 0) {
-  // Road-polyline walk — matches mobile exactly
-  const poly = calcRemainingFromPoly(
-    lat, lng,
-    routeFp,
-    cachedRoute.distM,
-    cachedRoute.timeS,
-  );
-  // Prefer road-poly result; backend value only used if poly gives nothing
-  computedLiveDistM = poly.distM || rawDistM;
-  computedLiveTimeS = poly.timeS || rawTimeS;
-} else if (!rawDistM || !rawTimeS) {
-  // No route fetched yet — fall back to straight-line + speed estimate
-  if (alertObj?.destination?.latitude) {
-    const straightDist = Math.round(haversine(
-      lat, lng,
-      alertObj.destination.latitude,
-      alertObj.destination.longitude,
-    ));
-    computedLiveDistM = rawDistM || straightDist;
-    const speedKmh = parseFloat(d.speed) || 40;
-    computedLiveTimeS = rawTimeS || (speedKmh > 0
-      ? Math.round((straightDist / 1000) / speedKmh * 3600)
-      : 0);
-  }
-}
-
-setStats({
-  speed: parseFloat(d.speed) || 0,
-  distM: computedLiveDistM,
-  timeS: computedLiveTimeS,
-  lat,
-  lng,
-});
-      updateVehicle(lat, lng, myUid);
-
-      const now = Date.now();
-      const routeAge = routeAtUidRef.current === myUid
-        ? now - routeAtRef.current
-        : Infinity;
-
-      if (alertObj?.destination && routeAge > 45000) {
-        routeAtRef.current = now;
-        routeAtUidRef.current = myUid;
-        console.log(`[ActivePoll] 🗺️ fetchRoute uid=${myUid} routeAge=${routeAge === Infinity ? 'FIRST' : Math.round(routeAge / 1000) + 's'}`);
-        fetchRoute(lat, lng, myUid);
-      }
-
-      fetchNearby(lat, lng);
-      setTimeout(poll, 100);
-
-    } catch (err) {
-      if (myPollId !== activePollIdRef.current || !isMounted) return;
-      const isTimeout =
-        err?.code === 'ECONNABORTED' ||
-        err?.code === 'ERR_CANCELED' ||
-        err?.message === 'canceled' ||
-        /timeout/i.test(err?.message || '');
-      if (err.response?.status === 408 || isTimeout) {
-        console.log(`[ActivePoll] ⏱️ Timeout uid=${myUid} — retrying in 100ms`);
-        setTimeout(poll, 100);
-      } else {
-        console.log(`[ActivePoll] ❌ ERROR uid=${myUid}:`, err.message);
-        setTimeout(poll, 3000);
-      }
-    }
-  };
-
-  poll();
-
-  return () => {
-    console.log(`[ActivePoll] 🔴 CLEANUP uid=${myUid} pollId=${myPollId}`);
-    isMounted = false;
-  };
-}, [
-  activeUnitId,
-  updateVehicle,
-  fetchRoute,
-  fetchNearby,
-  alertObj,
-  addTLog,
-  tryCloseTicket,
-]);
+    return () => {
+      console.log(`[ActivePoll] 🔴 CLEANUP uid=${myUid} pollId=${myPollId}`);
+      isMounted = false;
+    };
+  }, [
+    activeUnitId,
+    updateVehicle,
+    fetchRoute,
+    fetchNearby,
+    alertObj,
+    addTLog,
+    tryCloseTicket,
+  ]);
   // ── All-units location + status poll ─────────────────────────────────────
   useEffect(() => {
     const pollUnits = async () => {
@@ -3233,7 +3378,7 @@ setStats({
 
         console.log(
           `[StatusPoll] 🗺️ mini-map locs updated for non-active units: [${Object.keys(miniMapLocs).join(',')}]`,
-          `| active uid (excluded): ${activeUid}`
+          `| active uid (excluded): ${activeUid}`,
         );
 
         setUnitLocations((prev) => {
@@ -3241,7 +3386,8 @@ setStats({
           // only update non-active units here
           const next = { ...prev, ...miniMapLocs };
           const moved = Object.keys(miniMapLocs).some((uid) => {
-            const p = prev[uid], n = miniMapLocs[uid];
+            const p = prev[uid],
+              n = miniMapLocs[uid];
             if (!p && !n) return false;
             if (!p || !n) return true;
             return p.latitude !== n.latitude || p.longitude !== n.longitude;
@@ -3438,12 +3584,14 @@ setStats({
       lastTripStRef.current = '';
       setActiveUnitId(uid); */
 
-      const handleSwitchUnit = useCallback(
+  const handleSwitchUnit = useCallback(
     (uid) => {
       if (uid === activeUnitIdRef.current) return;
       // Kill the current active poll immediately before switching
       activePollIdRef.current += 1;
-      console.log(`[SwitchUnit] 🔀 Switching ${activeUnitIdRef.current} → ${uid} | new pollId=${activePollIdRef.current}`);
+      console.log(
+        `[SwitchUnit] 🔀 Switching ${activeUnitIdRef.current} → ${uid} | new pollId=${activePollIdRef.current}`,
+      );
       activeUnitIdRef.current = uid;
       lastTripStRef.current = '';
       setActiveUnitId(uid);
@@ -3457,14 +3605,20 @@ setStats({
       // ── FIX: clear map immediately so old unit's route doesn't persist
       // while we wait for the new unit's first fetchRoute response.
       polylinesRef.current.forEach((r) => {
-        try { r.out?.setMap(null); } catch (_) {}
-        try { r.poly?.setMap(null); } catch (_) {}
+        try {
+          r.out?.setMap(null);
+        } catch (_) {}
+        try {
+          r.poly?.setMap(null);
+        } catch (_) {}
       });
       polylinesRef.current = [];
       routeAtRef.current = 0;
       routeAtUidRef.current = null; // ← ADD THIS: forces immediate fetchRoute for new unit
       lastVRef.current = null;
-      console.log(`[SwitchUnit] 🧹 Polylines cleared, routeAtUidRef reset for ${uid}`);
+      console.log(
+        `[SwitchUnit] 🧹 Polylines cleared, routeAtUidRef reset for ${uid}`,
+      );
       setLive(false);
       setStats({ speed: 0, distM: 0, timeS: 0, lat: null, lng: null });
       setRouteData([]);
@@ -3532,47 +3686,59 @@ setStats({
           return ah + ':' + am.toString().padStart(2, '0') + ' ' + ap;
         })()
       : '—'; */
-      const tsCfg = TRIP_STATUS_CFG[tripStatus] || TRIP_STATUS_CFG.idle;
-const lcIdx = LIFECYCLE_ORDER.indexOf(tripStatus);
+  const tsCfg = TRIP_STATUS_CFG[tripStatus] || TRIP_STATUS_CFG.idle;
+  const lcIdx = LIFECYCLE_ORDER.indexOf(tripStatus);
 
-// Frontend-calculated stats for completed tickets
-const isTicketDone = ticketStatus === 'completed' || tripStatus === 'completed';
+  // Frontend-calculated stats for completed tickets
+  const isTicketDone =
+    ticketStatus === 'completed' || tripStatus === 'completed';
 
-const computedDistM = (() => {
-  if (stats.distM > 0) return stats.distM;           // live poll (or computed above) → use it
-  // Fallback: use last fetched route distance
-  if (routeStatsRef.current.distM > 0) return routeStatsRef.current.distM;
-  // Last resort: straight-line from last known position
-  if (!stats.lat || !alertObj?.destination?.latitude) return 0;
-  return Math.round(haversine(stats.lat, stats.lng,
-    alertObj.destination.latitude, alertObj.destination.longitude));
-})();
+  const computedDistM = (() => {
+    if (stats.distM > 0) return stats.distM; // live poll (or computed above) → use it
+    // Fallback: use last fetched route distance
+    if (routeStatsRef.current.distM > 0) return routeStatsRef.current.distM;
+    // Last resort: straight-line from last known position
+    if (!stats.lat || !alertObj?.destination?.latitude) return 0;
+    return Math.round(
+      haversine(
+        stats.lat,
+        stats.lng,
+        alertObj.destination.latitude,
+        alertObj.destination.longitude,
+      ),
+    );
+  })();
 
-// Also add computed timeS fallback for ETA:
-const computedTimeS = (() => {
-  if (stats.timeS > 0) return stats.timeS;
-  if (routeStatsRef.current.timeS > 0) return routeStatsRef.current.timeS;
-  return 0;
-})();
+  // Also add computed timeS fallback for ETA:
+  const computedTimeS = (() => {
+    if (stats.timeS > 0) return stats.timeS;
+    if (routeStatsRef.current.timeS > 0) return routeStatsRef.current.timeS;
+    return 0;
+  })();
 
-const hrs = Math.floor(computedTimeS / 3600),
-  mins = Math.round((computedTimeS % 3600) / 60);
+  const hrs = Math.floor(computedTimeS / 3600),
+    mins = Math.round((computedTimeS % 3600) / 60);
 
-const etaStr = isTicketDone
-  ? 'Completed'
-  : computedTimeS <= 0 ? '—' : hrs === 0 ? mins + ' min' : hrs + ' hr ' + mins + 'm';
+  const etaStr = isTicketDone
+    ? 'Completed'
+    : computedTimeS <= 0
+      ? '—'
+      : hrs === 0
+        ? mins + ' min'
+        : hrs + ' hr ' + mins + 'm';
 
-const arrivalStr = isTicketDone
-  ? 'Done'
-  : computedTimeS > 0
-    ? (() => {
-        const ar = new Date(Date.now() + computedTimeS * 1000);
-        let ah = ar.getHours(), am = ar.getMinutes(), ap = ah >= 12 ? 'PM' : 'AM';
-        ah = ah % 12 || 12;
-        return ah + ':' + am.toString().padStart(2, '0') + ' ' + ap;
-      })()
-    : '—';
-
+  const arrivalStr = isTicketDone
+    ? 'Done'
+    : computedTimeS > 0
+      ? (() => {
+          const ar = new Date(Date.now() + computedTimeS * 1000);
+          let ah = ar.getHours(),
+            am = ar.getMinutes(),
+            ap = ah >= 12 ? 'PM' : 'AM';
+          ah = ah % 12 || 12;
+          return ah + ':' + am.toString().padStart(2, '0') + ' ' + ap;
+        })()
+      : '—';
 
   return (
     <div style={s.root}>
@@ -3790,20 +3956,25 @@ const arrivalStr = isTicketDone
           </div>
         )} */}
 
-        <div ref={mapRef} style={s.map} />
-{!live && (
-  <div style={{
-    ...s.noLocMsg,
-    background: 'rgba(13,17,23,0.6)',
-    backdropFilter: 'blur(3px)',
-    pointerEvents: 'none',  // let map clicks pass through
-  }}>
-    <div style={{ fontSize: 40, opacity: 0.3 }}>{cfg.icon}</div>
-    <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>
-      Waiting for unit location…
-    </div>
-  </div>
-)}
+        <div
+          ref={mapRef}
+          style={s.map}
+        />
+        {!live && (
+          <div
+            style={{
+              ...s.noLocMsg,
+              background: 'rgba(13,17,23,0.6)',
+              backdropFilter: 'blur(3px)',
+              pointerEvents: 'none', // let map clicks pass through
+            }}
+          >
+            <div style={{ fontSize: 40, opacity: 0.3 }}>{cfg.icon}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>
+              Waiting for unit location…
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={s.side}>
@@ -4010,7 +4181,7 @@ const arrivalStr = isTicketDone
               label: 'Arrival',
               val: arrivalStr,
               icon: <ClockCircleOutlined style={{ fontSize: '10px' }} />,
-              cls: isTicketDone ? 'green' : ''  ,
+              cls: isTicketDone ? 'green' : '',
             },
           ].map((item) => (
             <div

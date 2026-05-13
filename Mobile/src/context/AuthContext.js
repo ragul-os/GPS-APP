@@ -5,13 +5,14 @@
  */
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   clearSession,
   createSynapseUser,
   loadSession,
   matrixLogin,
   saveSession,
-  userExists
+  userExists,
 } from '../services/matrixService';
 
 // ── The default dispatch room — fallback when no alert-specific room exists ──
@@ -28,18 +29,44 @@ const AuthContext = createContext({
 });
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);   // { userId, accessToken, deviceId, username }
-  const [loading, setLoading] = useState(true);   // true while checking stored session
+  const [session, setSession] = useState(null); // { userId, accessToken, deviceId, username }
+  const [loading, setLoading] = useState(true); // true while checking stored session
   const [activeRoomId, setActiveRoomId] = useState(null);
 
   // ── Restore session from storage on app start ────────────────────────────
+  // Legacy sessions saved before LoginScreen passed `unitId` will be missing
+  // it; hydrate from the device-stable `DEVICE_UNIT_ID` AsyncStorage key set
+  // by utils/unitId.js so backend identifiers stay AMB-XXX (never username).
   useEffect(() => {
     (async () => {
       try {
         const stored = await loadSession();
         if (stored) {
-          console.log('[Auth] Restored session for:', stored.username);
-          setSession(stored);
+          let upgraded = stored;
+          if (!stored.unitId || !stored.unitType) {
+            const deviceUnitId = await AsyncStorage.getItem('DEVICE_UNIT_ID');
+            const deviceUnitType = await AsyncStorage.getItem('UNIT_TYPE');
+            if (deviceUnitId || deviceUnitType) {
+              upgraded = {
+                ...stored,
+                unitId: stored.unitId || deviceUnitId || undefined,
+                unitType: stored.unitType || deviceUnitType || undefined,
+              };
+              await saveSession(upgraded);
+              console.log(
+                '[Auth] Session hydrated with unitId:',
+                upgraded.unitId,
+                'unitType:',
+                upgraded.unitType,
+              );
+            } else {
+              console.warn(
+                '[Auth] Stored session missing unitId AND no DEVICE_UNIT_ID found — driver must re-login to register a unit id.',
+              );
+            }
+          }
+          console.log('[Auth] Restored session for:', upgraded.username);
+          setSession(upgraded);
         }
       } catch (e) {
         console.warn('[Auth] Session restore failed:', e.message);
@@ -67,7 +94,8 @@ export function AuthProvider({ children }) {
 
     // 1. Check if already exists
     const exists = await userExists(username);
-    if (exists) throw new Error('Username already taken. Please choose another.');
+    if (exists)
+      throw new Error('Username already taken. Please choose another.');
 
     // 2. Create the user
     onCreating?.();
@@ -87,9 +115,9 @@ export function AuthProvider({ children }) {
     // 5. Persist and return session
     const newSession = {
       username,
-      userId:      loginData.user_id,
+      userId: loginData.user_id,
       accessToken: loginData.access_token,
-      deviceId:    loginData.device_id,
+      deviceId: loginData.device_id,
       displayname: displayname || username,
     };
     await saveSession(newSession);
@@ -101,24 +129,24 @@ export function AuthProvider({ children }) {
 
   // ── LOGIN ─────────────────────────────────────────────────────────────────
   async function login(sessionData, callbacks = {}) {
-  console.log('[Auth] login() for:', sessionData);
+    console.log('[Auth] login() for:', sessionData);
 
-  // ✅ DIRECTLY USE SESSION (NO matrixLogin again)
-  const newSession = {
-    username: sessionData.username,
-    userId: sessionData.userId,
-    accessToken: sessionData.accessToken,
-    deviceId: sessionData.deviceId,
-    displayname: sessionData.displayname,
-    unitType: sessionData.unitType,
-    unitId: sessionData.unitId,
-  };
+    // ✅ DIRECTLY USE SESSION (NO matrixLogin again)
+    const newSession = {
+      username: sessionData.username,
+      userId: sessionData.userId,
+      accessToken: sessionData.accessToken,
+      deviceId: sessionData.deviceId,
+      displayname: sessionData.displayname,
+      unitType: sessionData.unitType,
+      unitId: sessionData.unitId,
+    };
 
-  await saveSession(newSession);
-  setSession(newSession);
+    await saveSession(newSession);
+    setSession(newSession);
 
-  return newSession;
-}
+    return newSession;
+  }
 
   // ── LOGOUT ────────────────────────────────────────────────────────────────
   async function logout() {
@@ -128,8 +156,17 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, loading, login, signup, logout,activeRoomId,
-  setActiveRoomId }}>
+    <AuthContext.Provider
+      value={{
+        session,
+        loading,
+        login,
+        signup,
+        logout,
+        activeRoomId,
+        setActiveRoomId,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
