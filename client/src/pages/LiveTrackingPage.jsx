@@ -246,6 +246,7 @@ const TRIP_STATUS_CFG = {
     t: 'Idle',
     s: 'No active trip',
   },
+  
   dispatched: {
     bg: 'rgba(249,168,37,.15)',
     brd: 'rgba(249,168,37,.3)',
@@ -257,6 +258,14 @@ const TRIP_STATUS_CFG = {
     ),
     t: 'Alert Dispatched',
     s: 'Unit notified — preparing',
+  },
+  accepted: {
+    bg: 'rgba(52,168,83,.15)',
+    brd: 'rgba(52,168,83,.3)',
+    c: '#34A853',
+    i: <CheckCircleOutlined style={{ fontSize: '16px', verticalAlign: 'middle' }} />,
+    t: 'Accepted',
+    s: 'Unit has accepted the alert',
   },
   en_route: {
     bg: 'rgba(26,115,232,.15)',
@@ -661,6 +670,7 @@ function TicketDetailsOverlay({
   unitStatuses,
   unitTypes,
   activeUnitId,
+  activeTripStatus,
   onSwitchUnit,
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -852,7 +862,11 @@ function TicketDetailsOverlay({
                   </div>
                   {dispatchedUnits.map((uid) => {
                     const st =
-                        unitStatuses[uid] ||
+                        (uid === activeUnitId &&
+                          activeTripStatus &&
+                          activeTripStatus !== 'idle'
+                          ? activeTripStatus
+                          : unitStatuses[uid]) ||
                         (ticketStatus === 'completed'
                           ? 'completed'
                           : 'dispatched'),
@@ -952,7 +966,10 @@ function TicketDetailsOverlay({
                       const type = unitTypes[uid] || 'ambulance',
                         ucfg = UCFG[type] || UCFG.ambulance;
                       const isActive = uid === activeUnitId,
-                        st = unitStatuses[uid] || 'dispatched',
+                        st =
+                          (isActive && activeTripStatus && activeTripStatus !== 'idle'
+                            ? activeTripStatus
+                            : unitStatuses[uid]) || 'dispatched',
                         stc = UNIT_ST_COLOR[st] || '#8B949E';
                       return (
                         <button
@@ -1297,34 +1314,27 @@ function MiniMapOverlay({
   const activeType = unitTypes[activeUnitId] || 'ambulance';
   const activeColor = (UCFG[activeType] || UCFG.ambulance).color;
 
+  // Cleanup on collapse
   useEffect(() => {
-    if (collapsed) {
-      Object.values(miniMkrsRef.current).forEach((mkr) => {
-        try {
-          mkr.setMap(null);
-        } catch (_) {}
-      });
-      miniMkrsRef.current = {};
-      miniMapObj.current = null;
-      hasFitOnce.current = false;
+    if (!collapsed && miniMapObj.current) {
+      // Trigger resize when expanding so map fills container correctly
+      setTimeout(() => {
+        window.google?.maps?.event.trigger(miniMapObj.current, 'resize');
+      }, 50);
     }
   }, [collapsed]);
 
-  useEffect(() => {
-    if (
-      collapsed ||
-      !miniMapRef.current ||
-      miniMapObj.current ||
-      !window.google?.maps
-    )
-      return;
+  // Init mini map — fires when ref is attached (after collapse=false paint)
+  const initMiniMap = useCallback(() => {
+    if (collapsed || miniMapObj.current || !window.google?.maps) return;
+    const el = miniMapRef.current;
+    if (!el || el.offsetWidth === 0) return;
+
     const center = alertObj?.destination?.latitude
-      ? {
-          lat: alertObj.destination.latitude,
-          lng: alertObj.destination.longitude,
-        }
+      ? { lat: alertObj.destination.latitude, lng: alertObj.destination.longitude }
       : { lat: 11.0168, lng: 76.9558 };
-    miniMapObj.current = new window.google.maps.Map(miniMapRef.current, {
+
+    miniMapObj.current = new window.google.maps.Map(el, {
       center,
       zoom: 13,
       styles: DARK_MAP_STYLES,
@@ -1334,6 +1344,7 @@ function MiniMapOverlay({
       zoomControl: true,
       gestureHandling: 'greedy',
     });
+
     if (alertObj?.destination?.latitude) {
       const { latitude: dlat, longitude: dlng } = alertObj.destination;
       new window.google.maps.Marker({
@@ -1341,17 +1352,29 @@ function MiniMapOverlay({
         map: miniMapObj.current,
         zIndex: 90,
         icon: {
-          url:
-            'data:image/svg+xml;charset=UTF-8,' +
-            encodeURIComponent(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M14 0C6 0 0 6 0 14C0 25 14 36 14 36C14 36 28 25 28 14C28 6 22 0 14 0Z" fill="#E53935" stroke="white" stroke-width="2"/><circle cx="14" cy="14" r="5" fill="white"/></svg>`,
-            ),
+          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M14 0C6 0 0 6 0 14C0 25 14 36 14 36C14 36 28 25 28 14C28 6 22 0 14 0Z" fill="#E53935" stroke="white" stroke-width="2"/><circle cx="14" cy="14" r="5" fill="white"/></svg>`
+          ),
           scaledSize: new window.google.maps.Size(28, 36),
           anchor: new window.google.maps.Point(14, 36),
         },
       });
     }
+
+    window.google.maps.event.trigger(miniMapObj.current, 'resize');
   }, [collapsed, alertObj]);
+
+  useEffect(() => {
+    if (collapsed || miniMapObj.current) return;
+    // Retry until the div is painted and has dimensions
+    const interval = setInterval(() => {
+      if (miniMapRef.current && miniMapRef.current.offsetWidth > 0) {
+        clearInterval(interval);
+        initMiniMap();
+      }
+    }, 50);
+    return () => clearInterval(interval);
+  }, [collapsed, initMiniMap]);
 
   useEffect(() => {
     if (!miniMapObj.current || collapsed) return;
@@ -1472,12 +1495,13 @@ function MiniMapOverlay({
           )}
         </button>
       </div>
-      {!collapsed && (
-        <div
-          ref={miniMapRef}
-          style={ns.miniCanvas}
-        />
-      )}
+      <div
+        ref={miniMapRef}
+        style={{
+          ...ns.miniCanvas,
+          display: collapsed ? 'none' : 'block',
+        }}
+      />
     </div>
   );
 }
@@ -2071,6 +2095,27 @@ export default function LiveTrackingPage() {
           setActiveUnitId(unitIds[0]);
         }
 
+        // ── Seed initial statuses from DB so non-active units don't stay
+        // stuck on 'dispatched' if the DB already knows their real status
+        setUnitStatuses((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          Object.entries(dbUnits).forEach(([uid, info]) => {
+            const dbStatus = info.status || info.tripStatus || info.trip_status;
+            if (
+              dbStatus &&
+              dbStatus !== 'idle' &&
+              !TERMINAL_STATUSES.includes(next[uid]) &&
+              next[uid] !== dbStatus
+            ) {
+              next[uid] = dbStatus;
+              unitStatusesRef.current = { ...unitStatusesRef.current, [uid]: dbStatus };
+              changed = true;
+            }
+          });
+          return changed ? next : prev;
+        });
+
         addTLog(`DB units loaded: ${unitIds.join(', ')}`, 'ok');
       } catch (err) {
         console.warn('[fetchDbUnits]', err.message);
@@ -2258,39 +2303,93 @@ export default function LiveTrackingPage() {
 
   // Init map
   useEffect(() => {
-    if (!mapRef.current || mapObj.current || !window.google?.maps) return;
+  const initMap = () => {
+    if (!mapRef.current || !window.google?.maps) return;
+    if (mapObj.current) return;
+
+    console.log('[MAP CREATE] Creating map now...');
+
     mapObj.current = new window.google.maps.Map(mapRef.current, {
-      center: { lat: 11.0168, lng: 76.9558 },
-      zoom: 13,
+      center: {
+        lat: alertObj?.destination?.latitude || 11.0168,
+        lng: alertObj?.destination?.longitude || 76.9558,
+      },
+      zoom: 14,
       styles: DARK_MAP_STYLES,
       mapTypeControl: false,
       streetViewControl: false,
     });
+
     trafficLayerRef.current = new window.google.maps.TrafficLayer();
     infoWinRef.current = new window.google.maps.InfoWindow();
-    addTLog(`Tracking: ${alertObj?.name || 'unknown'}`, 'ok');
-  }, []);
 
-  // Destination marker
-  useEffect(() => {
-    if (!mapObj.current || !alertObj?.destination?.latitude) return;
-    const { latitude: dlat, longitude: dlng } = alertObj.destination;
-    if (destMkr.current) destMkr.current.setMap(null);
-    destMkr.current = new window.google.maps.Marker({
-      position: { lat: dlat, lng: dlng },
-      map: mapObj.current,
-      zIndex: 90,
-      icon: {
-        url:
-          'data:image/svg+xml;charset=UTF-8,' +
-          encodeURIComponent(
-            `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40"><path d="M16 0C7 0 0 7 0 16C0 28 16 40 16 40C16 40 32 28 32 16C32 7 25 0 16 0Z" fill="${cfg.color}" stroke="white" stroke-width="2"/><circle cx="16" cy="16" r="6" fill="white"/></svg>`,
-          ),
-        scaledSize: new window.google.maps.Size(32, 40),
-        anchor: new window.google.maps.Point(16, 40),
-      },
-    });
-  }, []);
+    if (alertObj?.destination?.latitude) {
+      const { latitude: dlat, longitude: dlng } = alertObj.destination;
+      destMkr.current = new window.google.maps.Marker({
+        position: { lat: dlat, lng: dlng },
+        map: mapObj.current,
+        zIndex: 90,
+        icon: {
+          url:
+            'data:image/svg+xml;charset=UTF-8,' +
+            encodeURIComponent(
+              `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M14 0C6 0 0 6 0 14C0 25 14 36 14 36C14 36 28 25 28 14C28 6 22 0 14 0Z" fill="#E53935" stroke="white" stroke-width="2"/><circle cx="14" cy="14" r="5" fill="white"/></svg>`,
+            ),
+          scaledSize: new window.google.maps.Size(28, 36),
+          anchor: new window.google.maps.Point(14, 36),
+        },
+      });
+    }
+
+    console.log('[MAP SUCCESS] Map created successfully');
+    // If poll already received a location before map was ready, draw route now
+    setTimeout(() => {
+      if (lastVRef.current && activeUnitIdRef.current) {
+        const { lat, lng } = lastVRef.current;
+        const uid = activeUnitIdRef.current;
+        console.log('[MAP SUCCESS] Triggering deferred fetchRoute after map ready');
+        routeAtRef.current = Date.now();
+        routeAtUidRef.current = uid;
+        fetchRoute(lat, lng, uid);
+      }
+    }, 500);
+
+    // Fire any callback registered by the poll before map was ready
+    window.__mapReadyCallback?.();
+    window.__mapReadyCallback = null;
+  };
+
+  // Already loaded — init immediately
+  if (window.google?.maps) {
+    initMap();
+    return;
+  }
+
+  // Script tag already exists but hasn't finished loading yet
+  const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
+  if (existingScript) {
+    const interval = setInterval(() => {
+      if (window.google?.maps) {
+        clearInterval(interval);
+        initMap();
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }
+
+  // No script at all — inject it now
+  window.__onGoogleMapsLoaded = initMap;
+  const script = document.createElement('script');
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&callback=__onGoogleMapsLoaded`;
+  script.async = true;
+  script.defer = true;
+  script.onerror = () => console.error('[MAP] Failed to load Google Maps script');
+  document.head.appendChild(script);
+
+  return () => {
+    window.__onGoogleMapsLoaded = null;
+  };
+}, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchRoute = useCallback(
     async (lat, lng, uid) => {
@@ -2565,8 +2664,19 @@ export default function LiveTrackingPage() {
       return;
     } */
 
-      if (!mapObj.current) {
-        console.log(`[updateVehicle] ⛔ NO MAP uid=${uid}`);
+       if (!mapObj.current) {
+        console.log(`[updateVehicle] ⛔ NO MAP uid=${uid} — will retry`);
+        let retries = 0;
+        const waitForMap = setInterval(() => {
+          retries++;
+          if (mapObj.current) {
+            clearInterval(waitForMap);
+            updateVehicle(lat, lng, uid);
+          } else if (retries > 20) {
+            clearInterval(waitForMap);
+            console.warn(`[updateVehicle] ⛔ Map never loaded after retries uid=${uid}`);
+          }
+        }, 300);
         return;
       }
       if (uid !== activeUnitIdRef.current) {
@@ -3255,6 +3365,12 @@ export default function LiveTrackingPage() {
         });
         updateVehicle(lat, lng, myUid);
 
+        if (!mapObj.current) {
+          window.__mapReadyCallback = () => {
+            fetchRoute(lat, lng, myUid);
+          };
+        }
+
         // Mirror the active unit's coords into unitLocations so the
         // MiniMapOverlay can render its marker. The /all-locations status
         // poll deliberately skips the active unit (it doesn't write here)
@@ -3424,8 +3540,14 @@ export default function LiveTrackingPage() {
         statusResults.forEach((r, i) => {
           if (r.status !== 'fulfilled') return;
           const uid = nonActive[i];
-          const ts = r.value.data?.tripStatus;
-          if (!ts || ts === 'idle') return;
+          const ts = r.value.data?.tripStatus || r.value.data?.trip_status;
+          if (!ts) return;
+          // Block idle only if we already have a real status for this unit
+          if (
+            ts === 'idle' &&
+            unitStatusesRef.current[uid] &&
+            unitStatusesRef.current[uid] !== 'idle'
+          ) return;
           if (
             TERMINAL_STATUSES.includes(unitStatusesRef.current[uid]) &&
             ts !== 'completed'
@@ -3859,6 +3981,7 @@ export default function LiveTrackingPage() {
           unitStatuses={unitStatuses}
           unitTypes={unitTypes}
           activeUnitId={activeUnitId}
+          activeTripStatus={tripStatus}
           onSwitchUnit={handleSwitchUnit}
         />
 
